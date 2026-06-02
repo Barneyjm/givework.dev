@@ -1,4 +1,11 @@
+// Ensure a signing secret exists before anything in src/auth touches it.
+process.env.JWT_SECRET ??= 'test-secret-do-not-use-in-prod';
+
 import { pool } from '../src/db.js';
+import { signDevToken, signAdminToken } from '../src/auth.js';
+
+export const mintDevToken = (devId: string) => signDevToken(devId);
+export const mintAdminToken = () => signAdminToken();
 
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
@@ -52,6 +59,47 @@ export async function createTask(
     ],
   );
   return rows[0].id;
+}
+
+/** Set a dev_budgets row for an arbitrary period (e.g. last month) — for cross-month tests. */
+export async function setBudgetForPeriod(
+  devId: string,
+  period: string,
+  budgetCents: number,
+  reservedCents = 0,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO dev_budgets (dev_id, period, budget_cents, reserved_cents)
+     VALUES ($1, $2::date, $3, $4)
+     ON CONFLICT (dev_id, period)
+     DO UPDATE SET budget_cents = EXCLUDED.budget_cents, reserved_cents = EXCLUDED.reserved_cents`,
+    [devId, period, budgetCents, reservedCents],
+  );
+}
+
+/** Force a task into a locked state assigned to a dev, reserved against a given period. */
+export async function forceLocked(
+  taskId: string,
+  devId: string,
+  period: string,
+  lockExpiresSql = `now() + interval '10 minutes'`,
+): Promise<void> {
+  await pool.query(
+    `UPDATE tasks
+        SET status='locked', assigned_dev_id=$2, reserved_period=$3::date,
+            lock_expires_at=${lockExpiresSql}
+      WHERE id=$1`,
+    [taskId, devId, period],
+  );
+}
+
+export async function getBudgetRowFor(devId: string, period: string) {
+  const { rows } = await pool.query(
+    `SELECT budget_cents, reserved_cents, spent_cents FROM dev_budgets
+     WHERE dev_id=$1 AND period=$2::date`,
+    [devId, period],
+  );
+  return rows[0];
 }
 
 export async function getBudgetRow(devId: string) {

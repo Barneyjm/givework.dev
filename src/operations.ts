@@ -47,23 +47,41 @@ interface TaskRow {
 }
 
 /**
- * Lock the dev's current-period budget row FOR UPDATE. This is the
+ * Lock a dev's budget row for a given period FOR UPDATE. This is the
  * serialization point: concurrent operations by the same dev block here so two
  * checkouts can't both pass the budget check on stale reads. Returns null if no
- * budget row exists for the current period (we never auto-create one).
+ * budget row exists for that period (we never auto-create one).
+ *
+ * `period` defaults to the current month. submit/release/expire pass the task's
+ * original `reserved_period` so a lock that straddles a month boundary frees the
+ * reservation from the period it was made in, not from "now".
  */
 async function lockDevBudget(
   client: Client,
   devId: string,
+  period?: string | null,
 ): Promise<DevBudgetRow | null> {
   const { rows } = await client.query<DevBudgetRow>(
     `SELECT dev_id, period, budget_cents, reserved_cents, spent_cents
        FROM dev_budgets
-      WHERE dev_id = $1 AND period = ${CURRENT_PERIOD}
+      WHERE dev_id = $1 AND period = COALESCE($2::date, ${CURRENT_PERIOD})
       FOR UPDATE`,
-    [devId],
+    [devId, period ?? null],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * The accounting period a task's reservation was made in (set at checkout).
+ * NULL for never-checked-out tasks or rows predating the column — callers treat
+ * NULL as "the current period".
+ */
+async function reservedPeriodOf(client: Client, taskId: string): Promise<string | null> {
+  const { rows } = await client.query<{ reserved_period: string | null }>(
+    `SELECT reserved_period FROM tasks WHERE id = $1`,
+    [taskId],
+  );
+  return rows[0]?.reserved_period ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +145,8 @@ export async function checkoutTask(
       `UPDATE tasks
           SET status = 'locked',
               assigned_dev_id = $2,
-              lock_expires_at = now() + interval '10 minutes'
+              lock_expires_at = now() + interval '10 minutes',
+              reserved_period = ${CURRENT_PERIOD}
         WHERE id = $1 AND status = 'open'
         RETURNING id, nonprofit_id, title, spec, model, max_cost_cents, lock_expires_at`,
       [taskId, devId],
@@ -200,11 +219,17 @@ export async function submitResult(
   rawUsage: unknown,
 ): Promise<SubmitResult> {
   return withTransaction(async (client) => {
-    // 1. Lock the dev's budget row.
-    const budget = await lockDevBudget(client, devId);
+    // The reservation was made in the task's reserved_period (which may be a
+    // prior month if the lock straddled a boundary). Read it first — a plain
+    // read is safe: the guarded UPDATE below rejects (409) before any budget
+    // mutation if the task isn't actually locked to us, so a stale period only
+    // ever causes a no-op budget lock.
+    const period = await reservedPeriodOf(client, taskId);
+
+    // 1. Lock the dev's budget row for that period (budget-first order, matching
+    //    checkout, to avoid deadlocks).
+    const budget = await lockDevBudget(client, devId, period);
     if (!budget) {
-      // The reservation was made against a budget row; its absence means the
-      // task isn't legitimately locked to this dev in this period.
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
@@ -236,13 +261,13 @@ export async function submitResult(
       overageClamped = true;
     }
 
-    // 3. Release the reservation, apply the spend.
+    // 3. Release the reservation, apply the spend — in the reservation's period.
     await client.query(
       `UPDATE dev_budgets
           SET reserved_cents = reserved_cents - $2,
               spent_cents = spent_cents + $3
-        WHERE dev_id = $1 AND period = ${CURRENT_PERIOD}`,
-      [devId, reserved, spendApplied],
+        WHERE dev_id = $1 AND period = COALESCE($4::date, ${CURRENT_PERIOD})`,
+      [devId, reserved, spendApplied, period],
     );
 
     // 4. Ledger: net delta of this event is (spend applied) - (reservation released).
@@ -288,14 +313,15 @@ export async function releaseTask(
   taskId: string,
 ): Promise<ReleaseResult> {
   return withTransaction(async (client) => {
-    const budget = await lockDevBudget(client, devId);
+    const period = await reservedPeriodOf(client, taskId);
+    const budget = await lockDevBudget(client, devId, period);
     if (!budget) {
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
     const upd = await client.query<{ max_cost_cents: number; nonprofit_id: string }>(
       `UPDATE tasks
-          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
         WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
         RETURNING max_cost_cents, nonprofit_id`,
       [taskId, devId],
@@ -308,8 +334,8 @@ export async function releaseTask(
     await client.query(
       `UPDATE dev_budgets
           SET reserved_cents = reserved_cents - $2
-        WHERE dev_id = $1 AND period = ${CURRENT_PERIOD}`,
-      [devId, reserved],
+        WHERE dev_id = $1 AND period = COALESCE($3::date, ${CURRENT_PERIOD})`,
+      [devId, reserved, period],
     );
 
     await client.query(
@@ -333,24 +359,24 @@ export interface ExpireResult {
 
 /**
  * Return all expired locked tasks to the pool and free their reservations in one
- * transaction. STAGE 2: a reservation is freed from the *current* period; if a
- * lock straddles a month boundary (checked out in one month, expires in the
- * next) the reservation should be released from the period it was made in. Stage
- * 1 assumes lock and expiry fall in the same month.
+ * transaction. Each reservation is freed from the period it was made in
+ * (`reserved_period`), so a lock that straddles a month boundary — checked out
+ * in one month, expired the next — refunds the right month's budget row.
  */
 export async function expire(): Promise<ExpireResult> {
   return withTransaction(async (client) => {
-    // Capture which tasks to expire (and their dev + cost) BEFORE clearing the
-    // assignment — an UPDATE ... RETURNING would hand back the post-update
-    // (NULL) assigned_dev_id, so we can't free the reservation from it. Lock the
-    // rows FOR UPDATE so a concurrent checkout/submit can't race us.
+    // Capture which tasks to expire (dev + cost + reservation period) BEFORE
+    // clearing the assignment — an UPDATE ... RETURNING would hand back the
+    // post-update (NULL) values. Lock the rows FOR UPDATE so a concurrent
+    // checkout/submit can't race us.
     const toExpire = await client.query<{
       id: string;
       assigned_dev_id: string;
       nonprofit_id: string;
       max_cost_cents: number;
+      reserved_period: string | null;
     }>(
-      `SELECT id, assigned_dev_id, nonprofit_id, max_cost_cents
+      `SELECT id, assigned_dev_id, nonprofit_id, max_cost_cents, reserved_period
          FROM tasks
         WHERE status = 'locked' AND lock_expires_at < now()
         FOR UPDATE`,
@@ -363,22 +389,20 @@ export async function expire(): Promise<ExpireResult> {
     const ids = toExpire.rows.map((r) => r.id);
     const expired = await client.query<{ id: string }>(
       `UPDATE tasks
-          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
         WHERE id = ANY($1::uuid[])
         RETURNING id`,
       [ids],
     );
 
-    // Free each reservation from the current period's budget row and write one
-    // expire ledger row (-max_cost_cents) per task.
-    // STAGE 2: handle cross-month locks (see note above) — free from the period
-    // the reservation was made in, not necessarily the current one.
+    // Free each reservation from its own reserved_period and write one expire
+    // ledger row (-max_cost_cents) per task.
     for (const r of toExpire.rows) {
       await client.query(
         `UPDATE dev_budgets
             SET reserved_cents = reserved_cents - $2
-          WHERE dev_id = $1 AND period = ${CURRENT_PERIOD}`,
-        [r.assigned_dev_id, r.max_cost_cents],
+          WHERE dev_id = $1 AND period = COALESCE($3::date, ${CURRENT_PERIOD})`,
+        [r.assigned_dev_id, r.max_cost_cents, r.reserved_period],
       );
       await client.query(
         `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)

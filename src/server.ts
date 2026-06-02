@@ -9,9 +9,22 @@ import {
   listOpenTasks,
   OpError,
 } from './operations.js';
+import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
 
-export const app = new Hono();
+type Env = { Variables: { principal: Principal } };
+
+export const app = new Hono<Env>();
+
+// OpError thrown anywhere (including auth middleware, which runs before the
+// per-route handlers) maps to its HTTP status; everything else is a real 500.
+app.onError((err, c) => {
+  if (err instanceof OpError) {
+    return c.json({ error: err.code, message: err.message }, err.status as any);
+  }
+  console.error(err);
+  return c.json({ error: 'internal_error' }, 500);
+});
 
 /** Wrap a handler so OpError -> its HTTP status, anything else -> 500. */
 function handle<T>(fn: () => Promise<T>) {
@@ -36,20 +49,25 @@ function requireFields(body: any, fields: string[]): void {
   }
 }
 
-app.post('/checkout', async (c) => {
+// --- Dev-authenticated endpoints. dev_id always comes from the token (sub),
+//     never the request body, so a token can only act as its own dev. ---
+
+app.post('/checkout', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
+  const dev = c.get('principal').dev_id!;
   return handle(() => {
-    requireFields(body, ['dev_id', 'task_id']);
-    return checkoutTask(body.dev_id, body.task_id);
+    requireFields(body, ['task_id']);
+    return checkoutTask(dev, body.task_id);
   })(c);
 });
 
-app.post('/submit', async (c) => {
+app.post('/submit', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
+  const dev = c.get('principal').dev_id!;
   return handle(() => {
-    requireFields(body, ['dev_id', 'task_id', 'actual_cost_cents']);
+    requireFields(body, ['task_id', 'actual_cost_cents']);
     return submitResult(
-      body.dev_id,
+      dev,
       body.task_id,
       body.result ?? null,
       Number(body.actual_cost_cents),
@@ -58,25 +76,25 @@ app.post('/submit', async (c) => {
   })(c);
 });
 
-app.post('/release', async (c) => {
+app.post('/release', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
+  const dev = c.get('principal').dev_id!;
   return handle(() => {
-    requireFields(body, ['dev_id', 'task_id']);
-    return releaseTask(body.dev_id, body.task_id);
+    requireFields(body, ['task_id']);
+    return releaseTask(dev, body.task_id);
   })(c);
 });
 
-app.get('/budget', async (c) => {
-  const devId = c.req.query('dev_id');
+app.get('/budget', requireDev, async (c) => {
+  const dev = c.get('principal').dev_id!;
   return handle(async () => {
-    if (!devId) throw new OpError(400, 'bad_input', 'Missing dev_id');
-    const b = await getBudget(devId);
+    const b = await getBudget(dev);
     if (!b) throw new OpError(404, 'no_budget', 'No budget for current period');
     return b;
   })(c);
 });
 
-app.get('/tasks/open', async (c) => {
+app.get('/tasks/open', requireDev, async (c) => {
   const maxCost = c.req.query('max_cost_cents');
   const sensitivity = c.req.query('sensitivity');
   const limit = c.req.query('limit');
@@ -89,7 +107,9 @@ app.get('/tasks/open', async (c) => {
   )(c);
 });
 
-app.post('/admin/expire', handle(() => expire()));
+// --- Admin (requires an admin token) ---
+
+app.post('/admin/expire', requireAdmin, handle(() => expire()));
 
 app.route('/admin', adminRoutes);
 

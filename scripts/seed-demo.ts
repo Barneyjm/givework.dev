@@ -1,4 +1,5 @@
 import { pool, closePool } from '../src/db.js';
+import { signDevToken, signAdminToken } from '../src/auth.js';
 
 // Creates a dev, a nonprofit, and a few open tasks for manual curl-ing.
 // Mirrors acceptance criterion 1 (a $5-max task against a $20 budget).
@@ -41,14 +42,20 @@ async function main() {
     tasks.push(t.id);
   }
 
+  // Tokens so the authenticated endpoints are immediately curl-able.
+  const devToken = await signDevToken(dev.id);
+  const adminToken = await signAdminToken();
+
   console.log('Seeded demo fixtures:');
   console.log('  dev_id      =', dev.id);
   console.log('  nonprofit_id=', np.id);
   console.log('  task_ids    =', tasks.join(', '));
-  console.log('\nTry:');
-  console.log(`  curl "http://localhost:3000/budget?dev_id=${dev.id}"`);
+  console.log('\n  DEV_TOKEN  =', devToken);
+  console.log('  ADMIN_TOKEN=', adminToken);
+  console.log('\nTry (identity comes from the token, not the body):');
+  console.log(`  curl -H "authorization: Bearer ${devToken}" http://localhost:3000/budget`);
   console.log(
-    `  curl -X POST http://localhost:3000/checkout -H 'content-type: application/json' \\\n    -d '{"dev_id":"${dev.id}","task_id":"${tasks[0]}"}'`,
+    `  curl -X POST http://localhost:3000/checkout \\\n    -H "authorization: Bearer ${devToken}" -H 'content-type: application/json' \\\n    -d '{"task_id":"${tasks[0]}"}'`,
   );
 }
 

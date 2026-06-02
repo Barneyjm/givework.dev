@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import { query } from './db.js';
 import { acceptTask, rejectTask, OpError } from './operations.js';
+import { requireAdmin, signDevToken } from './auth.js';
 
-// Unauthenticated seed/admin helpers for testing. STAGE 2: these would move
-// behind auth (or out of the public surface entirely).
+// Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
+// tokens so a nonprofit can review its own tasks without an admin credential —
+// the intake/decomposition layer reworks the nonprofit side anyway.
 export const adminRoutes = new Hono();
+adminRoutes.use('*', requireAdmin);
 
 function adminHandle<T>(fn: () => Promise<T>) {
   return async (c: any) => {
@@ -27,7 +30,9 @@ adminRoutes.post('/devs', async (c) => {
       `INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id, github_handle, email`,
       [body.github_handle, body.email ?? null],
     );
-    return rows[0];
+    // Hand back a dev token so the new dev (or their runner) can authenticate.
+    const token = await signDevToken(rows[0].id);
+    return { ...rows[0], token };
   })(c);
 });
 
