@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { resetDb, createDev, setBudget } from './helpers.js';
 import { pool, closePool } from '../src/db.js';
 import { receiveIntake, publishIntake, getIntake, listIntake } from '../src/intake/operations.js';
-import { StubDecomposer } from '../src/intake/decompose.js';
+import { StubDecomposer, LocalLLMDecomposer } from '../src/intake/decompose.js';
 import { checkoutTask } from '../src/operations.js';
 
 afterAll(closePool);
@@ -97,5 +97,49 @@ describe('StubDecomposer sizing', () => {
   it('caps the number of tasks for huge quantities', async () => {
     const tasks = await d.decompose({ from_email: 'x', body: 'process 100000 records', attachment_count: 0 });
     expect(tasks.length).toBeLessThanOrEqual(20);
+  });
+});
+
+describe('LocalLLMDecomposer', () => {
+  const input = { from_email: 'x@y.org', body: 'summarize a report', attachment_count: 0 };
+  // Build a fake OpenAI-compatible response whose message.content is `json`.
+  const reply = (json: string): any => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: json } }] }),
+  });
+
+  it('parses a well-formed model response and enforces every invariant', async () => {
+    const fetchFn = (async () =>
+      reply(
+        JSON.stringify({
+          tasks: [
+            // deliberately messy: max < est, bad model, bad sensitivity, float cents
+            { title: 'T', spec: { prompt: 'do it', unit_count: 3.7 }, est_cost_cents: 200.5, max_cost_cents: 50, model: 'gpt-4', sensitivity: 'spicy' },
+          ],
+        }),
+      )) as unknown as typeof fetch;
+
+    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    expect(tasks).toHaveLength(1);
+    const t = tasks[0];
+    expect(t.max_cost_cents).toBeGreaterThanOrEqual(t.est_cost_cents); // clamped
+    expect(t.est_cost_cents).toBe(201); // rounded int
+    expect(['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']).toContain(t.model);
+    expect(t.sensitivity).toBe('sensitive'); // invalid -> safe default
+    expect(t.spec.unit_count).toBe(4); // rounded int
+  });
+
+  it('falls back to the stub when the endpoint is unreachable', async () => {
+    const fetchFn = (async () => {
+      throw new Error('ECONNREFUSED');
+    }) as unknown as typeof fetch;
+    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    expect(tasks.length).toBeGreaterThan(0); // stub still produced a task
+  });
+
+  it('falls back when the model returns no usable tasks', async () => {
+    const fetchFn = (async () => reply(JSON.stringify({ tasks: [] }))) as unknown as typeof fetch;
+    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    expect(tasks.length).toBeGreaterThan(0);
   });
 });

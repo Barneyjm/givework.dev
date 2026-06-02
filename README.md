@@ -152,10 +152,38 @@ curl -s -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' \
 # 3. From here it's the normal loop — a funded dev's runner checks them out.
 ```
 
-The decomposer is a deterministic **stub** (`src/intake/decompose.ts`) behind a
-`Decomposer` interface; `// STAGE 5:` marks the drop-in for a real Claude call.
 Inbound requests default to `sensitive` and find-or-create a provisional
 (unverified) nonprofit keyed by sender, so repeat emails map to one org.
+
+### Decomposer (`src/intake/decompose.ts`)
+
+Two implementations behind one `Decomposer` interface, chosen by env:
+
+- **`StubDecomposer`** (default) — deterministic, no model. Splits a detected
+  quantity into batches. Used by the test suite (hermetic, no model needed).
+- **`LocalLLMDecomposer`** (`DECOMPOSER=local`) — a real LLM running **locally and
+  free** via any OpenAI-compatible endpoint (Ollama by default). It reads the
+  request and proposes tasks — and, unlike the stub, understands intent (e.g. it
+  splits "summarize each form *and* give me one aggregate report" into the
+  per-form batches **plus** a separate report task). The model is advisory: every
+  task is re-normalized on our side so `max_cost >= est_cost > 0`, sensitivity and
+  model are clamped to valid values, and cents are integers. **Falls back to the
+  stub** on any failure (endpoint down, timeout, bad JSON), so intake never
+  hard-fails.
+
+```bash
+# e.g. with Ollama
+ollama pull glm-4.7-flash       # any small instruct model that does JSON
+export DECOMPOSER=local
+export DECOMPOSER_MODEL=glm-4.7-flash:latest   # default
+# DECOMPOSER_BASE_URL=http://localhost:11434/v1 (default; point at LM Studio etc.)
+```
+
+Decomposition runs on the *platform*, so it's deliberately a small/free/local
+model. Task *execution* is separate — it runs on the volunteer's donated Claude
+credit (the task's `model` is the Claude model the runner will use). A local call
+can take a minute; `// STAGE 6:` marks moving it off the request path (ack
+`/intake` immediately, decompose async).
 
 ## HTTP surface
 

@@ -1,6 +1,6 @@
 import { withTransaction, query, type Client } from '../db.js';
 import { OpError } from '../operations.js';
-import { decomposer, type ProposedTask } from './decompose.js';
+import { getDecomposer, type ProposedTask } from './decompose.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -39,16 +39,17 @@ export async function receiveIntake(input: ReceiveInput) {
   if (!input.from_email || !input.body) {
     throw new OpError(400, 'bad_input', 'from_email and body are required');
   }
-  return withTransaction(async (client) => {
-    const nonprofitId = await findOrCreateProvisionalNonprofit(client, input.from_email);
 
+  // Txn 1: persist the inbound request (status 'received'). Kept short — no model
+  // call inside an open transaction.
+  const { intakeId, nonprofitId } = await withTransaction(async (client) => {
+    const nonprofitId = await findOrCreateProvisionalNonprofit(client, input.from_email);
     const ins = await client.query<{ id: string }>(
       `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
        VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
       [input.from_email, input.subject ?? null, input.body, nonprofitId],
     );
     const intakeId = ins.rows[0].id;
-
     for (const a of input.attachments ?? []) {
       await client.query(
         `INSERT INTO intake_attachments (intake_request_id, uri, filename, content_type)
@@ -56,54 +57,62 @@ export async function receiveIntake(input: ReceiveInput) {
         [intakeId, a.uri, a.filename ?? null, a.content_type ?? null],
       );
     }
-
-    // Auto-draft a decomposition so the caller gets proposed tasks immediately.
-    const proposed = await decomposer.decompose({
-      from_email: input.from_email,
-      subject: input.subject,
-      body: input.body,
-      attachment_count: input.attachments?.length ?? 0,
-    });
-
-    await client.query(
-      `UPDATE intake_requests
-          SET proposed = $2, status = 'decomposed', triaged_by = 'ai', updated_at = now()
-        WHERE id = $1`,
-      [intakeId, JSON.stringify(proposed)],
-    );
-
-    return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
+    return { intakeId, nonprofitId };
   });
+
+  // Decompose OUTSIDE any transaction — a real local model can take seconds, and
+  // we must not hold DB locks/connection while it runs.
+  const proposed = await getDecomposer().decompose({
+    from_email: input.from_email,
+    subject: input.subject,
+    body: input.body,
+    attachment_count: input.attachments?.length ?? 0,
+  });
+
+  await query(
+    `UPDATE intake_requests
+        SET proposed = $2, status = 'decomposed', triaged_by = 'ai', updated_at = now()
+      WHERE id = $1 AND status = 'received'`,
+    [intakeId, JSON.stringify(proposed)],
+  );
+
+  return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
 }
 
 /** Re-run the decomposer on a request, replacing the draft. */
 export async function redecompose(intakeId: string) {
-  return withTransaction(async (client) => {
-    const r = await client.query(
-      `SELECT from_email, subject, raw_body, status FROM intake_requests WHERE id = $1 FOR UPDATE`,
-      [intakeId],
-    );
-    const row = r.rows[0];
-    if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
-    if (row.status === 'published') {
-      throw new OpError(409, 'already_published', 'Cannot re-decompose a published request');
-    }
-    const { rows: att } = await client.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM intake_attachments WHERE intake_request_id = $1`,
-      [intakeId],
-    );
-    const proposed = await decomposer.decompose({
-      from_email: row.from_email,
-      subject: row.subject ?? undefined,
-      body: row.raw_body,
-      attachment_count: Number(att[0].n),
-    });
-    await client.query(
-      `UPDATE intake_requests SET proposed = $2, status = 'decomposed', updated_at = now() WHERE id = $1`,
-      [intakeId, JSON.stringify(proposed)],
-    );
-    return { intake_id: intakeId, status: 'decomposed', proposed };
+  const r = await query<{ from_email: string; subject: string | null; raw_body: string; status: string }>(
+    `SELECT from_email, subject, raw_body, status FROM intake_requests WHERE id = $1`,
+    [intakeId],
+  );
+  const row = r.rows[0];
+  if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
+  if (row.status === 'published') {
+    throw new OpError(409, 'already_published', 'Cannot re-decompose a published request');
+  }
+  const att = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM intake_attachments WHERE intake_request_id = $1`,
+    [intakeId],
+  );
+
+  // Model call outside any transaction.
+  const proposed = await getDecomposer().decompose({
+    from_email: row.from_email,
+    subject: row.subject ?? undefined,
+    body: row.raw_body,
+    attachment_count: Number(att.rows[0].n),
   });
+
+  // Guard on status so we don't clobber a request that got published mid-call.
+  const upd = await query(
+    `UPDATE intake_requests SET proposed = $2, status = 'decomposed', updated_at = now()
+      WHERE id = $1 AND status <> 'published' RETURNING id`,
+    [intakeId, JSON.stringify(proposed)],
+  );
+  if (upd.rowCount === 0) {
+    throw new OpError(409, 'already_published', 'Request was published during decomposition');
+  }
+  return { intake_id: intakeId, status: 'decomposed', proposed };
 }
 
 /**
