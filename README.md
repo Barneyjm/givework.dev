@@ -1,4 +1,4 @@
-# Givework — budget ledger core (Stages 1–2)
+# Givework — budget ledger core (Stages 1–4)
 
 A budget-and-task state machine you can drive with `curl` or over MCP. See
 `BUILD.md` for the original Stage 1 spec.
@@ -12,6 +12,8 @@ truth for receipts: the sum of a dev's ledger deltas always equals their live
 **Stage 1** — the ledger core: atomic checkout / submit / release / expire.
 **Stage 2** — JWT auth (identity from the token, not the body), cross-month
 reservation accounting, and an MCP server wrapping the same core for the runner.
+**Stage 3** — the dev runner: an MCP-client loop (checkout → work → submit).
+**Stage 4** — intake & decomposition: plain-language need → structured tasks.
 
 ## Stack
 
@@ -118,11 +120,56 @@ npm run mcp        # exposes: list_open_tasks, get_budget, checkout_task, submit
 Tools take the dev from `GIVEWORK_TOKEN`; only `task_id` (and result/cost on
 submit) are arguments. This is the rail the Stage 3 dev runner rides.
 
-## HTTP surface
+## Intake & decomposition
 
-`Authorization: Bearer <token>` required on every route. `D` = dev token, `A` = admin token.
+The top of the funnel. A nonprofit emails a plain-language need to
+`intake@givework.dev`; the platform decomposes it into right-sized, structured
+tasks that feed the same checkout/runner loop. Nonprofits never see cents or
+model names — the decomposer and an admin reviewer set those.
 
 ```
+received → decompose (AI-drafted) → admin review → published → normal tasks
+```
+
+`POST /intake` is unauthenticated (it stands in for an inbound-email webhook).
+Decomposition runs automatically and the draft comes back in the response:
+
+```bash
+# 1. The "email" arrives (no auth). A quantity in the body gets sized into batches.
+curl -s -X POST http://localhost:3000/intake -H 'content-type: application/json' -d '{
+  "from_email":"director@hopehouse.org",
+  "subject":"Overwhelmed with paperwork",
+  "body":"We have 30 client intake forms and need each summarized into the family'\''s top needs."
+}'
+# -> { intake_id, status:"decomposed", proposed:[ 3 tasks, sensitivity "sensitive" ] }
+
+# 2. Admin reviews and publishes (turns the draft into real, open tasks).
+curl -s -H "authorization: Bearer $ADMIN" http://localhost:3000/admin/intake/$INTAKE_ID
+curl -s -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' \
+  -X POST http://localhost:3000/admin/intake/$INTAKE_ID/publish -d '{}'
+# -> { status:"published", task_ids:[...] }
+
+# 3. From here it's the normal loop — a funded dev's runner checks them out.
+```
+
+The decomposer is a deterministic **stub** (`src/intake/decompose.ts`) behind a
+`Decomposer` interface; `// STAGE 5:` marks the drop-in for a real Claude call.
+Inbound requests default to `sensitive` and find-or-create a provisional
+(unverified) nonprofit keyed by sender, so repeat emails map to one org.
+
+## HTTP surface
+
+`Authorization: Bearer <token>` required on every route except `POST /intake`.
+`D` = dev token, `A` = admin token, `—` = public.
+
+```
+—  POST /intake               { from_email, subject?, body, attachments? }
+A  GET  /admin/intake?status=
+A  GET  /admin/intake/:id
+A  POST /admin/intake/:id/decompose
+A  POST /admin/intake/:id/publish   { tasks? }   -- defaults to the AI draft
+A  POST /admin/intake/:id/reject
+
 D  POST /checkout            { task_id }
 D  POST /submit              { task_id, result, actual_cost_cents, raw_usage }
 D  POST /release             { task_id }
@@ -145,12 +192,17 @@ insufficient/no budget, `409` task-state conflict, `404` unknown id, `400` bad i
 ```
 migrations/001_init.sql              schema (devs, nonprofits, budgets, tasks, ledger)
 migrations/002_auth_and_periods.sql  tasks.reserved_period (cross-month accounting)
+migrations/003_intake.sql            intake_requests, intake_attachments, tasks provenance
 src/db.ts                 pg pool + withTransaction() helper
 src/operations.ts         checkout / submit / release / expire / reads — core logic, HTTP-free
 src/auth.ts               JWT sign/verify + requireDev / requireAdmin middleware
 src/server.ts             HTTP routes -> operations (dev_id from the token)
 src/admin.ts              admin-only seed routes
 src/mcp.ts                MCP server wrapping operations.ts (stdio)
+src/runner.ts             dev runner — MCP client loop (checkout -> work -> submit)
+src/intake/decompose.ts   Decomposer interface + deterministic StubDecomposer
+src/intake/operations.ts  receive / decompose / publish — HTTP-free
+src/intake/routes.ts      public POST /intake + admin review/publish routes
 test/operations.test.ts   happy path, budget gate, expiry, release, clamp, 404
 test/concurrency.test.ts  double-checkout race + same-dev concurrent spend (the FOR UPDATE tests)
 test/invariant.test.ts    100-op randomized fuzz: ledger vs budgets never disagree

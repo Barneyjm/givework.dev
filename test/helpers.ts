@@ -10,7 +10,8 @@ export const mintAdminToken = () => signAdminToken();
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
-    `TRUNCATE ledger, tasks, dev_budgets, nonprofit_budgets, nonprofits, devs RESTART IDENTITY CASCADE`,
+    `TRUNCATE ledger, tasks, intake_attachments, intake_requests,
+              dev_budgets, nonprofit_budgets, nonprofits, devs RESTART IDENTITY CASCADE`,
   );
 }
 

@@ -11,6 +11,7 @@ import {
 } from './operations.js';
 import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
+import { publicIntakeRoutes, adminIntakeRoutes } from './intake/routes.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -112,6 +113,10 @@ app.get('/tasks/open', requireDev, async (c) => {
 app.post('/admin/expire', requireAdmin, handle(() => expire()));
 
 app.route('/admin', adminRoutes);
+app.route('/admin', adminIntakeRoutes);
+
+// Public inbound intake (unauthenticated — simulates an email webhook).
+app.route('/', publicIntakeRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 
