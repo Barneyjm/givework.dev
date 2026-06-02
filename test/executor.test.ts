@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   StubExecutor,
   ClaudeExecutor,
+  ClaudeCliExecutor,
   getExecutor,
   usageToCents,
   type ExecTask,
@@ -89,6 +90,48 @@ describe('ClaudeExecutor', () => {
       messages: { create: async () => { throw new Error('401 no credit'); } },
     };
     await expect(new ClaudeExecutor({ client }).execute(task)).rejects.toThrow('401 no credit');
+  });
+});
+
+describe('ClaudeCliExecutor', () => {
+  // Inject a fake `claude -p` runner — no subprocess, no real credit spent.
+  const cliReply = (obj: any) => async () => JSON.stringify(obj);
+
+  it('parses the CLI JSON result and takes cost from total_cost_usd', async () => {
+    const run = cliReply({ result: '{"summary":"done"}', total_cost_usd: 0.0123, usage: { output_tokens: 50 }, duration_ms: 900 });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.result).toEqual({ summary: 'done' });
+    expect(r.actual_cost_cents).toBe(2); // ceil(0.0123 * 100)
+    expect((r.raw_usage as any).total_cost_usd).toBe(0.0123);
+  });
+
+  it('passes -p/--output-format json/--model to the CLI and feeds the prompt on stdin', async () => {
+    let seenArgs: string[] = [];
+    let seenInput = '';
+    const run = async (args: string[], input: string) => {
+      seenArgs = args;
+      seenInput = input;
+      return JSON.stringify({ result: '{}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute(task);
+    expect(seenArgs).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+    expect(seenInput).toContain('summarize this'); // the task prompt reached the CLI
+  });
+
+  it('falls back to token metering when total_cost_usd is absent', async () => {
+    const run = cliReply({ result: '{}', usage: { input_tokens: 100_000, output_tokens: 5_000 } });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.actual_cost_cents).toBe(38); // same as the API metering path
+  });
+
+  it('throws on an error result (no fabricated output)', async () => {
+    const run = cliReply({ is_error: true, result: 'usage limit reached' });
+    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('usage limit reached');
+  });
+
+  it('throws on non-JSON CLI output', async () => {
+    const run = async () => 'not json at all';
+    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('non-JSON');
   });
 });
 

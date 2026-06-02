@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
 
 // Task execution — the actual donated work. This runs on the VOLUNTEER's own
@@ -6,16 +7,13 @@ import Anthropic from '@anthropic-ai/sdk';
 // the platform; see src/intake/decompose.ts).
 //
 // Swappable behind the Executor interface:
-//   - StubExecutor   — no model, deterministic. Default + used in tests.
-//   - ClaudeExecutor — a real Messages API call (EXECUTOR=claude).
-//
-// PRODUCTION MECHANISM (// STAGE 7:): the donated capacity is each volunteer's
-// `claude -p` (Claude Code CLI) subscriber usage credit — NOT an Anthropic API
-// key. There is no ANTHROPIC_API_KEY in this system. The real executor should be
-// a ClaudeCliExecutor that shells out to `claude -p "<prompt>"` and captures its
-// output; the ClaudeExecutor below (API SDK) is a reference implementation of the
-// same interface, useful for testing the metering/parse path but not the path we
-// ship. Cost is subscription usage, not metered cents — revisit actual_cost_cents.
+//   - StubExecutor      — no model, deterministic. Default + used in tests.
+//   - ClaudeCliExecutor — PRODUCTION. Shells out to `claude -p --output-format json`,
+//     running on the volunteer's Claude Code CLI subscriber credit. There is NO
+//     ANTHROPIC_API_KEY in this system — the donated capacity is each subscriber's
+//     `claude -p` usage. The CLI's own `total_cost_usd` is the metered cost.
+//   - ClaudeExecutor    — reference Anthropic SDK impl (EXECUTOR=claude-api). Useful
+//     for unit-testing the parse/metering path; not the path we ship.
 //
 // Unlike the decomposer, execution NEVER silently falls back to a stub on
 // failure: submitting fabricated output as if it were real work would corrupt
@@ -174,11 +172,109 @@ export class ClaudeExecutor implements Executor {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ClaudeCliExecutor — the production path. Runs the task on the volunteer's
+// `claude -p` (Claude Code CLI) subscriber credit. No API key; the CLI uses the
+// machine's logged-in Claude session. `--output-format json` returns the result
+// plus `total_cost_usd` — the honest, already-metered cost of the run.
+// ---------------------------------------------------------------------------
+
+/** Spawn `claude` with args, feed `input` on stdin, resolve stdout. Throws on non-zero exit / spawn error / timeout. */
+function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('claude -p timed out'));
+    }, timeoutMs);
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new Error(`failed to spawn claude (is the CLI installed and logged in?): ${e.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(new Error(`claude -p exited ${code}: ${err.slice(0, 300)}`));
+    });
+    child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+type CliRunner = (args: string[], input: string) => Promise<string>;
+
+export class ClaudeCliExecutor implements Executor {
+  private run: CliRunner;
+  private timeoutMs: number;
+
+  constructor(opts: { run?: CliRunner; timeoutMs?: number } = {}) {
+    this.timeoutMs = opts.timeoutMs ?? 180_000;
+    this.run = opts.run ?? ((args, input) => spawnClaude(args, input, this.timeoutMs));
+  }
+
+  async execute(task: ExecTask): Promise<ExecResult> {
+    const model = task.model || DEFAULT_MODEL;
+    const prompt =
+      `${SYSTEM_PROMPT}\n\n` +
+      `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
+      (task.spec?.output_schema
+        ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
+        : '') +
+      (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '');
+
+    // STAGE 8: pass --json-schema (built from output_schema) for guaranteed-shaped
+    // output, and cap usage so a task can't exceed its reserved budget.
+    const raw = await this.run(['-p', '--output-format', 'json', '--model', model], prompt);
+
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`claude -p returned non-JSON output: ${raw.slice(0, 200)}`);
+    }
+    if (data.is_error) {
+      throw new Error(`claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`);
+    }
+
+    let result: unknown;
+    try {
+      result = JSON.parse(data.result);
+    } catch {
+      result = { output: data.result };
+    }
+
+    // Prefer the CLI's own cost figure; fall back to token metering if absent.
+    const cents =
+      typeof data.total_cost_usd === 'number'
+        ? Math.ceil(data.total_cost_usd * 100)
+        : usageToCents(model, data.usage ?? {});
+
+    return {
+      result,
+      actual_cost_cents: cents,
+      raw_usage: {
+        model,
+        total_cost_usd: data.total_cost_usd,
+        usage: data.usage,
+        duration_ms: data.duration_ms,
+        num_turns: data.num_turns,
+      },
+    };
+  }
+}
+
 /**
  * The executor the runner uses, chosen by env:
- *   EXECUTOR=claude → ClaudeExecutor (real, on the volunteer's ANTHROPIC_API_KEY)
- *   otherwise       → StubExecutor (deterministic; default, used by tests)
+ *   EXECUTOR=claude     → ClaudeCliExecutor (production — the volunteer's `claude -p` credit)
+ *   EXECUTOR=claude-api → ClaudeExecutor (reference Anthropic SDK impl)
+ *   otherwise           → StubExecutor (deterministic; default, used by tests)
  */
 export function getExecutor(): Executor {
-  return process.env.EXECUTOR === 'claude' ? new ClaudeExecutor() : new StubExecutor();
+  if (process.env.EXECUTOR === 'claude') return new ClaudeCliExecutor();
+  if (process.env.EXECUTOR === 'claude-api') return new ClaudeExecutor();
+  return new StubExecutor();
 }
