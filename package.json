@@ -1,0 +1,26 @@
+{
+  "name": "givework",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Givework Stage 1 — budget ledger core",
+  "scripts": {
+    "migrate": "tsx scripts/migrate.ts",
+    "seed": "tsx scripts/seed-demo.ts",
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hono": "^4.6.14",
+    "@hono/node-server": "^1.13.7",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
