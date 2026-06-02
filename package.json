@@ -10,6 +10,7 @@
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
     "mcp": "tsx src/mcp.ts",
+    "runner": "tsx src/runner.ts",
     "mint-token": "tsx scripts/mint-token.ts",
     "test": "vitest run"
   },
