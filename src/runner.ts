@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getExecutor } from './executor.js';
 
 // The dev runner — Stage 3. A volunteer's local loop: connect to the givework
 // MCP server (which acts as this dev via GIVEWORK_TOKEN), find an affordable
@@ -42,32 +43,10 @@ function flag(name: string): string | undefined {
 }
 const hasFlag = (name: string) => process.argv.includes(name);
 
-/**
- * Do the actual inference for a task. STAGE 4: replace this stub with a real
- * Anthropic Agent SDK call against the dev's own credit — read task.spec, run
- * the agent, and return what it produced plus the metered cost. Everything
- * around it (checkout, budget, submit, ledger) already works.
- */
-function executeTask(task: CheckoutResult): {
-  result: unknown;
-  actual_cost_cents: number;
-  raw_usage: unknown;
-} {
-  const prompt = task.spec?.prompt ?? task.title;
-  console.log(`     … would call Claude here (model ${task.model}) on: "${prompt}"`);
-
-  // Pretend the run used ~80% of the reserved cap.
-  const actual = Math.round(task.max_cost_cents * 0.8);
-  return {
-    result: {
-      stub: true,
-      summary: `Stubbed completion for "${task.title}".`,
-      echoed_prompt: prompt,
-    },
-    actual_cost_cents: actual,
-    raw_usage: { stub: true, model: task.model, simulated_cost_cents: actual },
-  };
-}
+// The actual inference is delegated to an Executor (src/executor.ts): the
+// StubExecutor by default, or a real Claude call on the volunteer's own credit
+// with EXECUTOR=claude. The runner just orchestrates checkout → execute → submit.
+const executor = getExecutor();
 
 async function main() {
   const token = process.env.GIVEWORK_TOKEN;
@@ -101,6 +80,14 @@ async function main() {
   }
 
   let done = 0;
+  // Tasks whose execution failed this run — don't re-check-out a task we just
+  // released after a failure, or we'd hot-loop on it forever.
+  const failed = new Set<string>();
+  let consecutiveFailures = 0;
+  // Consistent execution failure means a config/auth problem (bad or missing
+  // API key), not a transient task issue — bail instead of firehosing.
+  const MAX_CONSECUTIVE_FAILURES = 3;
+
   try {
     while (done < maxTasks) {
       const budget = await call<Budget>('get_budget');
@@ -124,8 +111,12 @@ async function main() {
         break;
       }
 
-      // Take the oldest affordable task.
-      const pick = open[0];
+      // Take the oldest affordable task we haven't already failed on this run.
+      const pick = open.find((t) => !failed.has(t.id));
+      if (!pick) {
+        console.log('No new affordable tasks to attempt. Done.');
+        break;
+      }
       let checkout: CheckoutResult;
       try {
         checkout = await call<CheckoutResult>('checkout_task', { task_id: pick.id });
@@ -144,13 +135,32 @@ async function main() {
 
       console.log(`▶ checked out ${checkout.task_id.slice(0, 8)} — "${checkout.title}" (cap ${checkout.max_cost_cents}¢)`);
 
-      const { result, actual_cost_cents, raw_usage } = executeTask(checkout);
+      // Run the work. If execution fails (e.g. the real Claude call errors), do
+      // NOT submit — release the task so another volunteer can pick it up.
+      // Submitting fabricated output would corrupt the ledger and the deliverable.
+      let exec;
+      try {
+        exec = await executor.execute(checkout);
+      } catch (err) {
+        console.error(`  ✗ execution failed for ${checkout.task_id.slice(0, 8)}: ${(err as Error).message} — releasing`);
+        await call('release_task', { task_id: checkout.task_id }).catch(() => {});
+        failed.add(checkout.task_id);
+        consecutiveFailures++;
+        if (hasFlag('--stop-on-error') || consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error(
+            `Aborting after ${consecutiveFailures} consecutive execution failure(s) — likely a config/credential problem, not a task issue.`,
+          );
+          break;
+        }
+        continue;
+      }
+      consecutiveFailures = 0;
 
       const submit = await call('submit_result', {
         task_id: checkout.task_id,
-        result,
-        actual_cost_cents,
-        raw_usage,
+        result: exec.result,
+        actual_cost_cents: exec.actual_cost_cents,
+        raw_usage: exec.raw_usage,
       });
       console.log(`✔ submitted ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢`);
       done++;
