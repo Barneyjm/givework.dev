@@ -56,6 +56,51 @@ function pricingFor(model: string) {
   return PRICING[model] ?? PRICING[DEFAULT_MODEL];
 }
 
+/** Strip a surrounding ```json … ``` (or bare ```) fence, if present. */
+function stripCodeFence(s: string): string {
+  const t = s.trim();
+  const m = t.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  return m ? m[1].trim() : t;
+}
+
+/**
+ * Parse a model's text into structured output: tolerate a markdown code fence,
+ * and if it still isn't JSON, keep the raw text under `output` rather than fail.
+ */
+export function coerceResult(text: string): unknown {
+  try {
+    return JSON.parse(stripCodeFence(text));
+  } catch {
+    return { output: text.trim() };
+  }
+}
+
+/**
+ * Turn a task's loose output_schema (key → type-ish string) into a real JSON
+ * Schema for `claude -p --json-schema`, so the CLI returns guaranteed-shaped JSON.
+ */
+export function outputSchemaToJsonSchema(
+  shape: Record<string, string> | undefined,
+): Record<string, unknown> | null {
+  if (!shape || Object.keys(shape).length === 0) return null;
+  const properties: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(shape)) {
+    const t = String(raw).toLowerCase();
+    if (t.endsWith('[]') || t.startsWith('array')) properties[key] = { type: 'array' };
+    else if (t.startsWith('object')) properties[key] = { type: 'object' };
+    else if (t.startsWith('bool')) properties[key] = { type: 'boolean' };
+    else if (t.startsWith('int') || t.startsWith('num') || t.startsWith('float'))
+      properties[key] = { type: 'number' };
+    else properties[key] = { type: 'string' };
+  }
+  return {
+    type: 'object',
+    properties,
+    required: Object.keys(shape),
+    additionalProperties: false,
+  };
+}
+
 /** cents per token for a $/1M-token rate. */
 const centsPerToken = (per1M: number) => per1M / 10_000;
 
@@ -155,13 +200,7 @@ export class ClaudeExecutor implements Executor {
       .join('')
       .trim();
 
-    let result: unknown;
-    try {
-      result = JSON.parse(text);
-    } catch {
-      // Model didn't return clean JSON — keep the raw text rather than failing.
-      result = { output: text };
-    }
+    const result = coerceResult(text);
 
     const usage: Usage = message.usage ?? {};
     return {
@@ -226,9 +265,14 @@ export class ClaudeCliExecutor implements Executor {
         : '') +
       (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '');
 
-    // STAGE 8: pass --json-schema (built from output_schema) for guaranteed-shaped
-    // output, and cap usage so a task can't exceed its reserved budget.
-    const raw = await this.run(['-p', '--output-format', 'json', '--model', model], prompt);
+    // When the task declares an output shape, hand the CLI a JSON Schema so it
+    // returns guaranteed-shaped JSON (no markdown fences, no parsing guesswork).
+    // STAGE 8: cap usage so a task can't exceed its reserved budget.
+    const args = ['-p', '--output-format', 'json', '--model', model];
+    const schema = outputSchemaToJsonSchema(task.spec?.output_schema);
+    if (schema) args.push('--json-schema', JSON.stringify(schema));
+
+    const raw = await this.run(args, prompt);
 
     let data: any;
     try {
@@ -240,12 +284,7 @@ export class ClaudeCliExecutor implements Executor {
       throw new Error(`claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`);
     }
 
-    let result: unknown;
-    try {
-      result = JSON.parse(data.result);
-    } catch {
-      result = { output: data.result };
-    }
+    const result = coerceResult(String(data.result ?? ''));
 
     // Prefer the CLI's own cost figure; fall back to token metering if absent.
     const cents =

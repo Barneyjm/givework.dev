@@ -105,7 +105,7 @@ describe('ClaudeCliExecutor', () => {
     expect((r.raw_usage as any).total_cost_usd).toBe(0.0123);
   });
 
-  it('passes -p/--output-format json/--model to the CLI and feeds the prompt on stdin', async () => {
+  it('passes -p/--output-format json/--model + a --json-schema built from output_schema, prompt on stdin', async () => {
     let seenArgs: string[] = [];
     let seenInput = '';
     const run = async (args: string[], input: string) => {
@@ -114,8 +114,32 @@ describe('ClaudeCliExecutor', () => {
       return JSON.stringify({ result: '{}', total_cost_usd: 0 });
     };
     await new ClaudeCliExecutor({ run }).execute(task);
-    expect(seenArgs).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+    expect(seenArgs.slice(0, 5)).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+    const i = seenArgs.indexOf('--json-schema');
+    expect(i).toBeGreaterThan(-1);
+    expect(JSON.parse(seenArgs[i + 1])).toEqual({
+      type: 'object',
+      properties: { summary: { type: 'string' } },
+      required: ['summary'],
+      additionalProperties: false,
+    });
     expect(seenInput).toContain('summarize this'); // the task prompt reached the CLI
+  });
+
+  it('tolerates a markdown ```json fence in the CLI result (the real claude -p wart)', async () => {
+    const run = cliReply({ result: '```json\n{"response":"pong"}\n```', total_cost_usd: 0 });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.result).toEqual({ response: 'pong' });
+  });
+
+  it('omits --json-schema when the task has no output_schema', async () => {
+    let seenArgs: string[] = [];
+    const run = async (args: string[]) => {
+      seenArgs = args;
+      return JSON.stringify({ result: '{}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute({ ...task, spec: { prompt: 'x' } });
+    expect(seenArgs).not.toContain('--json-schema');
   });
 
   it('falls back to token metering when total_cost_usd is absent', async () => {
