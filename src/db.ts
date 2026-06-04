@@ -47,6 +47,10 @@ async function acquire(): Promise<{ client: Client; release: () => Promise<void>
       statement_timeout: 15_000,
       query_timeout: 20_000,
     });
+    // When query_timeout fires, pg destroys the socket and emits 'error' on the
+    // client; with no listener that's an unhandled exception that crashes the
+    // request. Swallow it — the rejected query already surfaces the failure.
+    client.on('error', () => {});
     await client.connect();
     return { client, release: () => client.end() };
   }
