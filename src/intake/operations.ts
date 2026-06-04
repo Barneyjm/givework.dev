@@ -124,6 +124,12 @@ export async function publishIntake(
   tasksOverride: ProposedTask[] | undefined,
   authoredBy: string,
 ) {
+  // tasksOverride comes from the admin /publish body; a non-array (object or
+  // string) would make the `for (const t of tasks)` below throw a 500 or iterate
+  // string characters. Reject it cleanly.
+  if (tasksOverride !== undefined && !Array.isArray(tasksOverride)) {
+    throw new OpError(400, 'bad_input', 'tasks must be an array');
+  }
   return withTransaction(async (client) => {
     const r = await client.query<{
       status: string;

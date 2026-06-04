@@ -69,6 +69,26 @@ describe('happy path (criterion 1)', () => {
       ['submit', -120], // 380 spent - 500 reserved
     ]);
   });
+
+  it('rejects a non-positive-integer actual_cost_cents and leaves the reservation intact', async () => {
+    await setBudget(dev, 2000);
+    const task = await createTask(np, { max: 500 });
+    await checkoutTask(dev, task);
+
+    // A negative cost would refund the dev's own spend; NaN/floats skew the math.
+    for (const bad of [-100, 1.5, NaN]) {
+      await expect(submitResult(dev, task, { ok: true }, bad, null)).rejects.toMatchObject({
+        status: 400,
+        code: 'bad_input',
+      });
+    }
+
+    // Still locked/reserved, nothing spent, no submit ledger row written.
+    const b = await getBudget(dev);
+    expect(b).toMatchObject({ reserved_cents: 500, spent_cents: 0 });
+    expect((await getTaskRow(task)).status).toBe('locked');
+    expect((await getLedger(dev)).map((l) => l.event_type)).toEqual(['checkout']);
+  });
 });
 
 describe('budget gate (criterion 2)', () => {

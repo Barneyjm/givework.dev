@@ -16,6 +16,7 @@ export class OpError extends Error {
   }
 }
 
+const BAD_INPUT = 400;
 const RESERVE_INSUFFICIENT_BUDGET = 402;
 const CONFLICT = 409;
 
@@ -218,6 +219,13 @@ export async function submitResult(
   actualCostCents: number,
   rawUsage: unknown,
 ): Promise<SubmitResult> {
+  // actual_cost_cents comes straight from the dev's /submit body. Reject
+  // negatives, NaN, and non-integers up front: a negative value would refund
+  // the dev's own spend (corrupting the ledger and letting them overspend the
+  // pool), and NaN/floats would error or skew the budget arithmetic.
+  if (!Number.isInteger(actualCostCents) || actualCostCents < 0) {
+    throw new OpError(BAD_INPUT, 'bad_input', 'actual_cost_cents must be a non-negative integer');
+  }
   return withTransaction(async (client) => {
     // The reservation was made in the task's reserved_period (which may be a
     // prior month if the lock straddled a boundary). Read it first — a plain
@@ -365,11 +373,12 @@ export interface ExpireResult {
  */
 export async function expire(): Promise<ExpireResult> {
   return withTransaction(async (client) => {
-    // Capture which tasks to expire (dev + cost + reservation period) BEFORE
-    // clearing the assignment — an UPDATE ... RETURNING would hand back the
-    // post-update (NULL) values. Lock the rows FOR UPDATE so a concurrent
-    // checkout/submit can't race us.
-    const toExpire = await client.query<{
+    // Capture candidate expired tasks WITHOUT locking them. We must NOT take the
+    // tasks lock before the dev_budgets lock: checkout/submit/release all lock
+    // budget-first, so locking tasks-first here would invert the order and can
+    // deadlock under concurrency (Gemini review). Values are captured now so the
+    // post-update (NULLed) RETURNING below can't lose them.
+    const candidates = await client.query<{
       id: string;
       assigned_dev_id: string;
       nonprofit_id: string;
@@ -378,26 +387,50 @@ export async function expire(): Promise<ExpireResult> {
     }>(
       `SELECT id, assigned_dev_id, nonprofit_id, max_cost_cents, reserved_period
          FROM tasks
-        WHERE status = 'locked' AND lock_expires_at < now()
-        FOR UPDATE`,
+        WHERE status = 'locked' AND lock_expires_at < now()`,
     );
 
-    if (toExpire.rowCount === 0) {
+    if (candidates.rowCount === 0) {
       return { expired_count: 0, task_ids: [] };
     }
 
-    const ids = toExpire.rows.map((r) => r.id);
-    const expired = await client.query<{ id: string }>(
-      `UPDATE tasks
-          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
-        WHERE id = ANY($1::uuid[])
-        RETURNING id`,
+    const ids = candidates.rows.map((r) => r.id);
+
+    // Lock the affected dev_budgets rows FOR UPDATE first, in a deterministic
+    // (dev_id, period) order — the budget-first order every other op uses, so
+    // there is no lock-order inversion.
+    await client.query(
+      `SELECT db.dev_id, db.period
+         FROM dev_budgets db
+        WHERE (db.dev_id, db.period) IN (
+                SELECT t.assigned_dev_id, COALESCE(t.reserved_period, ${CURRENT_PERIOD})::date
+                  FROM tasks t
+                 WHERE t.id = ANY($1::uuid[])
+              )
+        ORDER BY db.dev_id, db.period
+          FOR UPDATE`,
       [ids],
     );
 
-    // Free each reservation from its own reserved_period and write one expire
-    // ledger row (-max_cost_cents) per task.
-    for (const r of toExpire.rows) {
+    // Flip the tasks to open under the budget locks, re-checking the expiry
+    // condition. A task submitted/released since our unlocked read won't match
+    // and is skipped — that op already settled its reservation.
+    const expired = await client.query<{ id: string }>(
+      `UPDATE tasks
+          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
+        WHERE id = ANY($1::uuid[]) AND status = 'locked' AND lock_expires_at < now()
+        RETURNING id`,
+      [ids],
+    );
+    const expiredIds = new Set(expired.rows.map((r) => r.id));
+    if (expiredIds.size === 0) {
+      return { expired_count: 0, task_ids: [] };
+    }
+
+    // Free each freshly-expired reservation from its own reserved_period and
+    // write one expire ledger row (-max_cost_cents) per task.
+    for (const r of candidates.rows) {
+      if (!expiredIds.has(r.id)) continue;
       await client.query(
         `UPDATE dev_budgets
             SET reserved_cents = reserved_cents - $2
@@ -412,8 +445,8 @@ export async function expire(): Promise<ExpireResult> {
     }
 
     return {
-      expired_count: expired.rowCount ?? 0,
-      task_ids: ids,
+      expired_count: expiredIds.size,
+      task_ids: ids.filter((id) => expiredIds.has(id)),
     };
   });
 }

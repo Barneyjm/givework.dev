@@ -239,6 +239,10 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
       if (code === 0) resolve(out);
       else reject(new Error(`claude -p exited ${code}: ${err.slice(0, 300)}`));
     });
+    // If claude fails to spawn or exits before reading stdin, writing here emits
+    // EPIPE on the stream; without a listener Node crashes the whole runner. The
+    // spawn failure itself is already surfaced via child.on('error') above.
+    child.stdin.on('error', () => {});
     child.stdin.write(input);
     child.stdin.end();
   });
