@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Givework Stage 1 — budget ledger core",
+  "bin": {
+    "givework": "dist/givework.mjs"
+  },
+  "files": [
+    "dist/givework.mjs"
+  ],
   "scripts": {
     "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "seed": "node --env-file-if-exists=.env --import tsx scripts/seed-demo.ts",
@@ -11,6 +17,9 @@
     "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "mcp": "node --env-file-if-exists=.env --import tsx src/mcp.ts",
     "runner": "node --env-file-if-exists=.env --import tsx src/runner.ts",
+    "cli": "node --env-file-if-exists=.env --import tsx src/cli/index.ts",
+    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/givework.mjs --banner:js='#!/usr/bin/env node'",
+    "prepare": "npm run build:cli",
     "mint-token": "node --env-file-if-exists=.env --import tsx scripts/mint-token.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -29,6 +38,7 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
+    "esbuild": "^0.24.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",

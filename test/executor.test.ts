@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   StubExecutor,
-  ClaudeExecutor,
   ClaudeCliExecutor,
   getExecutor,
   usageToCents,
   type ExecTask,
 } from '../src/executor.js';
+import { ClaudeExecutor } from '../src/executor-api.js';
 
 const task: ExecTask = {
   task_id: 't1',

@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import Anthropic from '@anthropic-ai/sdk';
 
 // Task execution — the actual donated work. This runs on the VOLUNTEER's own
 // Anthropic credit (the donation), which is the whole point of the platform, and
@@ -45,14 +44,14 @@ export interface Executor {
 
 // USD per 1M tokens (from the Claude model catalog). Used to meter the donation
 // into integer cents so the ledger reflects real spend.
-const PRICING: Record<string, { in: number; out: number }> = {
+export const PRICING: Record<string, { in: number; out: number }> = {
   'claude-opus-4-8': { in: 5, out: 25 },
   'claude-sonnet-4-6': { in: 3, out: 15 },
   'claude-haiku-4-5': { in: 1, out: 5 },
 };
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
-function pricingFor(model: string) {
+export function pricingFor(model: string) {
   return PRICING[model] ?? PRICING[DEFAULT_MODEL];
 }
 
@@ -102,9 +101,9 @@ export function outputSchemaToJsonSchema(
 }
 
 /** cents per token for a $/1M-token rate. */
-const centsPerToken = (per1M: number) => per1M / 10_000;
+export const centsPerToken = (per1M: number) => per1M / 10_000;
 
-interface Usage {
+export interface Usage {
   input_tokens?: number;
   output_tokens?: number;
   cache_read_input_tokens?: number;
@@ -145,71 +144,11 @@ export class StubExecutor implements Executor {
   }
 }
 
-// ---------------------------------------------------------------------------
-// ClaudeExecutor — a real Messages API call on the volunteer's credit.
-// ---------------------------------------------------------------------------
-
-const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI inference to nonprofits.
+// Shared system prompt for the executors that call a model (ClaudeCliExecutor
+// here; ClaudeExecutor in executor-api.ts keeps its own copy).
+export const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI inference to nonprofits.
 You are given one concrete task with a prompt, an expected output shape, and acceptance criteria.
 Do the task and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.`;
-
-// Bound any single task's output so it can't blow its reserved cap; the ledger's
-// submit-clamp is the backstop, but capping max_tokens avoids the overage entirely.
-const OUTPUT_TOKEN_CEILING = 4096;
-
-type MessagesClient = {
-  messages: { create: (body: any) => Promise<any> };
-};
-
-export class ClaudeExecutor implements Executor {
-  private client: MessagesClient;
-
-  constructor(opts: { client?: MessagesClient } = {}) {
-    // The SDK reads ANTHROPIC_API_KEY from the environment (the volunteer's key).
-    this.client = opts.client ?? (new Anthropic() as unknown as MessagesClient);
-  }
-
-  async execute(task: ExecTask): Promise<ExecResult> {
-    const model = PRICING[task.model] ? task.model : DEFAULT_MODEL;
-    const p = pricingFor(model);
-
-    // Cap output tokens by what the reservation can afford (then a hard ceiling).
-    const affordableOut = Math.floor(task.max_cost_cents / centsPerToken(p.out));
-    const maxTokens = Math.max(256, Math.min(OUTPUT_TOKEN_CEILING, affordableOut));
-
-    const userContent =
-      `Task: ${task.title}\n\n` +
-      `${task.spec?.prompt ?? ''}\n\n` +
-      (task.spec?.output_schema
-        ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
-        : '') +
-      (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '');
-
-    const message = await this.client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      thinking: { type: 'disabled' },
-      // Cache the shared system prompt across the runner's task loop (prefix match).
-      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: userContent }],
-    });
-
-    const text = (message.content ?? [])
-      .filter((b: any) => b.type === 'text')
-      .map((b: any) => b.text)
-      .join('')
-      .trim();
-
-    const result = coerceResult(text);
-
-    const usage: Usage = message.usage ?? {};
-    return {
-      result,
-      actual_cost_cents: usageToCents(model, usage),
-      raw_usage: { model, ...usage },
-    };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // ClaudeCliExecutor — the production path. Runs the task on the volunteer's
@@ -318,6 +257,15 @@ export class ClaudeCliExecutor implements Executor {
  */
 export function getExecutor(): Executor {
   if (process.env.EXECUTOR === 'claude') return new ClaudeCliExecutor();
-  if (process.env.EXECUTOR === 'claude-api') return new ClaudeExecutor();
+  if (process.env.EXECUTOR === 'claude-api') {
+    // Lazy: only pull in @anthropic-ai/sdk (via executor-api.ts) when this path is
+    // actually selected, so the runner and the bundled CLI never import the SDK.
+    return {
+      async execute(task) {
+        const { ClaudeExecutor } = await import('./executor-api.js');
+        return new ClaudeExecutor().execute(task);
+      },
+    };
+  }
   return new StubExecutor();
 }
