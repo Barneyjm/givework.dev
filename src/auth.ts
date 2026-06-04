@@ -57,11 +57,12 @@ export async function verifyToken(token: string): Promise<Principal> {
 
 function bearer(c: Context): string {
   const header = c.req.header('authorization') ?? '';
-  const [scheme, token] = header.split(' ');
-  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+  // Tolerate any whitespace (multiple spaces / tabs) between scheme and token.
+  const match = header.match(/^Bearer[ \t]+(\S.*)$/i);
+  if (!match) {
     throw new OpError(401, 'unauthorized', 'Missing or malformed Bearer token');
   }
-  return token;
+  return match[1].trim();
 }
 
 async function authenticate(c: Context): Promise<Principal> {

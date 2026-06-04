@@ -86,7 +86,16 @@ class HttpBackend implements Backend {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
-    const payload = text ? JSON.parse(text) : null;
+    // A crashed server or an intermediary (e.g. a 502 HTML page) returns
+    // non-JSON; don't let JSON.parse throw a raw SyntaxError and kill the runner.
+    let payload: any = null;
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        throw new ToolError(`http_${res.status}`, text.slice(0, 300));
+      }
+    }
     // The REST API returns { error, message } with a 4xx for OpErrors; mirror
     // that into ToolError(code) so the loop sees the same codes as over MCP.
     if (!res.ok) {

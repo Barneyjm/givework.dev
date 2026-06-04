@@ -26,10 +26,19 @@ adminRoutes.post('/devs', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     if (!body.github_handle) throw new OpError(400, 'bad_input', 'Missing github_handle');
-    const { rows } = await query(
-      `INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id, github_handle, email`,
-      [body.github_handle, body.email ?? null],
-    );
+    let rows;
+    try {
+      ({ rows } = await query(
+        `INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id, github_handle, email`,
+        [body.github_handle, body.email ?? null],
+      ));
+    } catch (err: any) {
+      // Unique violation on github_handle -> a clean 409 instead of a 500.
+      if (err?.code === '23505') {
+        throw new OpError(409, 'dev_exists', 'A developer with this GitHub handle already exists');
+      }
+      throw err;
+    }
     // Hand back a dev token so the new dev (or their runner) can authenticate.
     const token = await signDevToken(rows[0].id);
     return { ...rows[0], token };

@@ -128,6 +128,12 @@ export async function checkoutTask(
     if (!task) {
       throw new OpError(404, 'task_not_found', 'Unknown task');
     }
+    // Report an already-claimed task as such, rather than letting the budget gate
+    // below mask it as a misleading 402. The claim UPDATE still guards on
+    // status='open', so this is just clearer up-front error reporting.
+    if (task.status !== 'open') {
+      throw new OpError(CONFLICT, 'task_not_open', 'Task already claimed or not open');
+    }
 
     // 2. Budget gate.
     const available =
@@ -544,6 +550,9 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   const params: unknown[] = [];
 
   if (filter.maxCostCents !== undefined) {
+    if (!Number.isInteger(filter.maxCostCents) || filter.maxCostCents < 0) {
+      throw new OpError(BAD_INPUT, 'bad_input', 'max_cost_cents must be a non-negative integer');
+    }
     params.push(filter.maxCostCents);
     conditions.push(`max_cost_cents <= $${params.length}`);
   }
@@ -552,7 +561,15 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
     conditions.push(`sensitivity = $${params.length}`);
   }
 
-  params.push(filter.limit ?? 10);
+  // Validate + clamp limit: an unchecked NaN/negative would be a SQL error (500).
+  let limit = filter.limit ?? 10;
+  if (filter.limit !== undefined) {
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new OpError(BAD_INPUT, 'bad_input', 'limit must be a positive integer');
+    }
+    if (limit > 100) limit = 100;
+  }
+  params.push(limit);
   const limitParam = `$${params.length}`;
 
   const { rows } = await query<TaskRow>(

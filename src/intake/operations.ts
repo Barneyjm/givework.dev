@@ -1,6 +1,6 @@
 import { withTransaction, query, type Client } from '../db.js';
 import { OpError } from '../operations.js';
-import { getDecomposer, type ProposedTask } from './decompose.js';
+import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -145,7 +145,11 @@ export async function publishIntake(
       throw new OpError(409, 'already_published', 'Request already published');
     }
 
-    const tasks = tasksOverride ?? row.proposed ?? [];
+    // Normalize every task through the same path the decomposer uses, so an
+    // admin-supplied override with missing/invalid fields can't reach the INSERT
+    // and trip a NOT NULL / CHECK violation (500). normalizeTask clamps cents,
+    // whitelists model/sensitivity, and guarantees max >= est > 0.
+    const tasks = (tasksOverride ?? row.proposed ?? []).map(normalizeTask);
     if (tasks.length === 0) {
       throw new OpError(400, 'nothing_to_publish', 'No proposed tasks to publish');
     }

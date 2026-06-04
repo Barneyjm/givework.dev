@@ -138,7 +138,7 @@ const clampInt = (n: unknown, min: number, fallback: number): number => {
  * advisory — we enforce every invariant ourselves so a sloppy response can never
  * produce an invalid task (max >= est > 0, valid enum, integer cents, etc.).
  */
-function normalizeTask(raw: any): ProposedTask {
+export function normalizeTask(raw: any): ProposedTask {
   const est = clampInt(raw?.est_cost_cents, 1, 100);
   const max = Math.max(clampInt(raw?.max_cost_cents, 1, Math.ceil(est * 1.5)), est);
   const sensitivity = SENSITIVITIES.includes(raw?.sensitivity) ? raw.sensitivity : 'sensitive';
