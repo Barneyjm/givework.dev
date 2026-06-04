@@ -1,0 +1,41 @@
+name: Deploy
+
+# Deploys the control plane (the Hono API) to Cloudflare Workers on every push
+# to main, after running any pending DB migrations against the production
+# Postgres. The execution plane (runner + `claude -p` executor) is NOT deployed
+# here — it runs on volunteer machines and polls this API.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deploys (or a deploy and its migration) concurrently.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Migrations run from the CI runner over TCP using `pg` — use Neon's
+      # DIRECT (non-pooled) connection string here so DDL runs on a real session.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run migrate
+
+      # Deploys src/worker.ts per wrangler.toml. DATABASE_URL / JWT_SECRET are
+      # already set as Worker secrets (see wrangler.toml) and are not passed here.
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

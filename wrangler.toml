@@ -1,0 +1,20 @@
+name = "givework"
+main = "src/worker.ts"
+
+# nodejs_compat is required for the `pg` driver (Cloudflare's recommended
+# Postgres driver). A compatibility date >= 2025-04-01 also turns on
+# nodejs_compat_populate_process_env, which copies Worker secrets/vars onto
+# process.env — so src/db.ts and src/auth.ts read process.env unchanged.
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set once per environment, NOT committed):
+#   wrangler secret put DATABASE_URL   # Neon POOLED url, e.g. postgres://...-pooler.../givework
+#   wrangler secret put JWT_SECRET     # long random value
+#
+# These are also what the GitHub Actions deploy expects to already exist on the
+# Worker. `wrangler deploy` does not set secrets; set them out-of-band the first
+# time (locally or via the dashboard), then deploys reuse them.
+
+[observability]
+enabled = true

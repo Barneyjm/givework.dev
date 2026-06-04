@@ -5,14 +5,17 @@
   "type": "module",
   "description": "Givework Stage 1 — budget ledger core",
   "scripts": {
-    "migrate": "tsx scripts/migrate.ts",
-    "seed": "tsx scripts/seed-demo.ts",
-    "dev": "tsx src/server.ts",
-    "start": "tsx src/server.ts",
-    "mcp": "tsx src/mcp.ts",
-    "runner": "tsx src/runner.ts",
-    "mint-token": "tsx scripts/mint-token.ts",
-    "test": "vitest run"
+    "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "seed": "node --env-file-if-exists=.env --import tsx scripts/seed-demo.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
+    "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
+    "mcp": "node --env-file-if-exists=.env --import tsx src/mcp.ts",
+    "runner": "node --env-file-if-exists=.env --import tsx src/runner.ts",
+    "mint-token": "node --env-file-if-exists=.env --import tsx scripts/mint-token.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "cf:dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
@@ -28,6 +31,7 @@
     "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "wrangler": "^4.40.0"
   }
 }
