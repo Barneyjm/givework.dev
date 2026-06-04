@@ -58,8 +58,17 @@ const hasFlag = (name: string) => process.argv.includes(name);
 // The runner is transport-agnostic: it drives a Backend that exposes the five
 // dev operations. Both transports normalize platform errors to ToolError(code),
 // so the loop's race/budget handling is identical regardless of transport.
+interface ApiVersion {
+  service: string;
+  commit: string;
+  ref: string;
+  deployed_at: string | null;
+}
+
 interface Backend {
   readonly kind: string;
+  /** Control-plane build info, if the transport exposes it (HTTP only). */
+  version?(): Promise<ApiVersion>;
   getBudget(): Promise<Budget>;
   listOpenTasks(args: { max_cost_cents?: number; limit?: number; sensitivity?: string }): Promise<OpenTask[]>;
   checkout(taskId: string): Promise<CheckoutResult>;
@@ -104,6 +113,9 @@ class HttpBackend implements Backend {
     return payload as T;
   }
 
+  version() {
+    return this.req<ApiVersion>('GET', '/version');
+  }
   getBudget() {
     return this.req<Budget>('GET', '/budget');
   }
@@ -183,7 +195,16 @@ async function createBackend(token: string): Promise<Backend> {
   const apiUrl = flag('--url') ?? process.env.GIVEWORK_API_URL;
   if (apiUrl) {
     console.log(`Using HTTP backend → ${apiUrl}`);
-    return new HttpBackend(apiUrl, token);
+    const backend = new HttpBackend(apiUrl, token);
+    // Report which control-plane build we're talking to, so volunteers can see an
+    // update landed. Best-effort: an old API without /version shouldn't block work.
+    try {
+      const v = await backend.version();
+      console.log(`Control plane: ${v.commit.slice(0, 8)} (${v.ref})${v.deployed_at ? `, deployed ${v.deployed_at}` : ''}`);
+    } catch {
+      console.log('Control plane: version unknown (API predates /version).');
+    }
+    return backend;
   }
   console.log('Using local MCP backend (no GIVEWORK_API_URL set).');
   return McpBackend.connect();

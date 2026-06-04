@@ -32,10 +32,23 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate
 
+      # Capture the deploy timestamp as epoch seconds (colon-free, so it's safe to
+      # pass through `--var KEY:VALUE`). Surfaced at GET /version alongside the SHA.
+      - name: Build metadata
+        id: meta
+        run: echo "deployed_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
       # Deploys src/worker.ts per wrangler.toml. DATABASE_URL / JWT_SECRET are
       # already set as Worker secrets (see wrangler.toml) and are not passed here.
+      # GIT_SHA / GIT_REF / DEPLOYED_AT are injected as plain-text vars so the
+      # running Worker can report its build at GET /version (no secrets exposed).
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            deploy
+            --var GIT_SHA:${{ github.sha }}
+            --var GIT_REF:${{ github.ref_name }}
+            --var DEPLOYED_AT:${{ steps.meta.outputs.deployed_at }}

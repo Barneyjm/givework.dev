@@ -8,9 +8,27 @@ main = "src/worker.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domains for this Worker. custom_domain=true makes Cloudflare provision
+# the proxied DNS record AND the edge TLS cert automatically — no manual DNS, no
+# *.workers.dev. One Worker serves both hostnames:
+#   givework.dev      — the marketing site (./site assets) + API fall-through
+#   api.givework.dev  — the canonical API address volunteers point runners at
+# Both must be on this Cloudflare account's zone. If the apex is currently served
+# some other way (e.g. Pages), drop the first line so this deploy doesn't adopt it.
+routes = [
+  { pattern = "givework.dev", custom_domain = true },
+  { pattern = "api.givework.dev", custom_domain = true },
+]
+
 # Secrets (set once per environment, NOT committed):
-#   wrangler secret put DATABASE_URL   # Neon POOLED url, e.g. postgres://...-pooler.../givework
-#   wrangler secret put JWT_SECRET     # long random value
+#   wrangler secret put DATABASE_URL          # Neon POOLED url, e.g. postgres://...-pooler.../givework
+#   wrangler secret put JWT_SECRET            # long random value
+#   wrangler secret put GITHUB_CLIENT_ID      # GitHub OAuth app client id (self-serve dev sign-in)
+#   wrangler secret put GITHUB_CLIENT_SECRET  # GitHub OAuth app client secret
+#   wrangler secret put OAUTH_REDIRECT_URI    # https://api.givework.dev/auth/github/callback
+#                                             # Pin this to the canonical API host so it always matches the
+#                                             # callback URL registered on the GitHub OAuth app. (If unset it
+#                                             # defaults to the request origin, which varies by hostname.)
 #
 # These are also what the GitHub Actions deploy expects to already exist on the
 # Worker. `wrangler deploy` does not set secrets; set them out-of-band the first
@@ -30,7 +48,8 @@ enabled = true
 # Serve the static landing page from this same Worker. A request that matches a
 # file in ./site (i.e. `/` -> index.html) is served directly as an asset; anything
 # that doesn't match falls through to the Worker — so the API routes (/intake,
-# /budget, /checkout, /release, /submit, /tasks/open, /admin/*) keep working.
+# /budget, /checkout, /release, /submit, /tasks/open, /auth/*, /devs/*, /admin/*)
+# keep working.
 # Default not_found_handling keeps non-asset paths going to the Worker (no SPA mode).
 # Local preview: `npm run cf:dev` (wrangler dev) serves these assets like prod;
 # `npm run dev` (raw Node) runs the API only and does NOT serve the landing page.

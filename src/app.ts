@@ -6,10 +6,14 @@ import {
   expire,
   getBudget,
   listOpenTasks,
+  isDevVerified,
   OpError,
 } from './operations.js';
+import { query } from './db.js';
 import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
+import { devRoutes } from './devs.js';
+import { oauthRoutes } from './oauth.js';
 import { publicIntakeRoutes, adminIntakeRoutes } from './intake/routes.js';
 
 type Env = { Variables: { principal: Principal } };
@@ -52,6 +56,37 @@ function requireFields(body: any, fields: string[]): void {
     }
   }
 }
+
+// Build/version info — public, unauthenticated, no secrets. The runner pulls
+// this at startup so volunteers can see which control-plane build they're talking
+// to (i.e. confirm an update landed). GIT_SHA / GIT_REF / DEPLOYED_AT are injected
+// as plain-text vars by the CI deploy (`wrangler deploy --var ...`); on local Node
+// they're unset and fall back to 'dev'/'local'.
+app.get('/version', (c) => {
+  const deployedAt = process.env.DEPLOYED_AT; // epoch seconds (string) from CI
+  return c.json({
+    service: 'givework-api',
+    commit: process.env.GIT_SHA ?? 'dev',
+    ref: process.env.GIT_REF ?? 'local',
+    deployed_at:
+      deployedAt && /^\d+$/.test(deployedAt)
+        ? new Date(Number(deployedAt) * 1000).toISOString()
+        : null,
+  });
+});
+
+// Liveness/readiness probe — public, unauthenticated. A nice landing for the API
+// host root (api.givework.dev/health) and what uptime checks / load balancers
+// hit. Pings the database so a 200 means "control plane can actually serve", not
+// just "the Worker booted". DB unreachable -> 503 with status 'degraded'.
+app.get('/health', async (c) => {
+  try {
+    await query('SELECT 1');
+    return c.json({ status: 'ok', db: 'up' });
+  } catch {
+    return c.json({ status: 'degraded', db: 'down' }, 503);
+  }
+});
 
 // --- Dev-authenticated endpoints. dev_id always comes from the token (sub),
 //     never the request body, so a token can only act as its own dev. ---
@@ -102,11 +137,14 @@ app.get('/tasks/open', requireDev, async (c) => {
   const maxCost = c.req.query('max_cost_cents');
   const sensitivity = c.req.query('sensitivity');
   const limit = c.req.query('limit');
-  return handle(() =>
+  const dev = c.get('principal').dev_id!;
+  return handle(async () =>
     listOpenTasks({
       maxCostCents: maxCost !== undefined ? Number(maxCost) : undefined,
       sensitivity: sensitivity ?? undefined,
       limit: limit !== undefined ? Number(limit) : undefined,
+      // Unverified devs are pinned to public tasks; authoritative DB read.
+      devVerified: await isDevVerified(dev),
     }),
   )(c);
 });
@@ -117,6 +155,11 @@ app.post('/admin/expire', requireAdmin, handle(() => expire()));
 
 app.route('/admin', adminRoutes);
 app.route('/admin', adminIntakeRoutes);
+
+// Self-serve developer onboarding: GitHub OAuth sign-in (public) and the
+// dev's own profile/budget endpoints (dev-token gated, mounted internally).
+app.route('/auth', oauthRoutes);
+app.route('/devs', devRoutes);
 
 // Public inbound intake (unauthenticated — simulates an email webhook).
 app.route('/', publicIntakeRoutes);

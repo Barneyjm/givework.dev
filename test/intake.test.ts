@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { resetDb, createDev, setBudget } from './helpers.js';
+import { resetDb, createDev, setBudget, setVerified } from './helpers.js';
 import { pool, closePool } from '../src/db.js';
 import { receiveIntake, publishIntake, getIntake, listIntake } from '../src/intake/operations.js';
 import { StubDecomposer, LocalLLMDecomposer } from '../src/intake/decompose.js';
@@ -56,9 +56,12 @@ describe('publish', () => {
     expect(t.rows[0].intake_request_id).toBe(r.intake_id);
     expect(t.rows[0].authored_by).toBe('admin');
 
-    // End-to-end: a funded dev can check the published task out through the ledger core.
+    // End-to-end: a funded dev can check the published task out through the ledger
+    // core. Intake-decomposed tasks default to sensitivity='sensitive' (intake
+    // often carries personal data), so the dev must be verified to claim it.
     const dev = await createDev('alice');
     await setBudget(dev, 5000);
+    await setVerified(dev);
     const co = await checkoutTask(dev, pub.task_ids[0]);
     expect(co.task_id).toBe(pub.task_ids[0]);
   });

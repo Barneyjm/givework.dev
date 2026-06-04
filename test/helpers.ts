@@ -35,6 +35,11 @@ export async function createDev(handle: string): Promise<string> {
   return rows[0].id;
 }
 
+/** Mark a dev as verified (trusted with non-public work). */
+export async function setVerified(devId: string, verified = true): Promise<void> {
+  await pool.query(`UPDATE devs SET verified = $2 WHERE id = $1`, [devId, verified]);
+}
+
 export async function createNonprofit(name = 'Test NP'): Promise<string> {
   const { rows } = await pool.query(
     `INSERT INTO nonprofits (name, contact_email) VALUES ($1, $2) RETURNING id`,

@@ -119,9 +119,9 @@ export async function checkoutTask(
       );
     }
 
-    // Need the task's cost before we can evaluate the budget gate.
+    // Need the task's cost (budget gate) and sensitivity (trust gate) up front.
     const taskRes = await client.query<TaskRow>(
-      `SELECT id, max_cost_cents, status FROM tasks WHERE id = $1`,
+      `SELECT id, max_cost_cents, status, sensitivity FROM tasks WHERE id = $1`,
       [taskId],
     );
     const task = taskRes.rows[0];
@@ -133,6 +133,25 @@ export async function checkoutTask(
     // status='open', so this is just clearer up-front error reporting.
     if (task.status !== 'open') {
       throw new OpError(CONFLICT, 'task_not_open', 'Task already claimed or not open');
+    }
+
+    // Trust gate: non-public work must never reach an unverified (self-serve,
+    // unvetted) dev. This is the authoritative enforcement point — listOpenTasks
+    // also hides these, but checkout is what actually protects the payload. Read
+    // verified from the DB (not the token) so an admin's verification takes effect
+    // immediately, without waiting for the dev's 90-day token to roll over.
+    if (task.sensitivity !== 'public') {
+      const dev = await client.query<{ verified: boolean }>(
+        `SELECT verified FROM devs WHERE id = $1`,
+        [devId],
+      );
+      if (!dev.rows[0]?.verified) {
+        throw new OpError(
+          403,
+          'not_verified',
+          'This task requires a verified developer; ask an admin to verify your account',
+        );
+      }
     }
 
     // 2. Budget gate.
@@ -539,10 +558,80 @@ export async function getBudget(devId: string): Promise<BudgetView | null> {
   };
 }
 
+/** Whether a dev is verified (trusted with non-public work). Missing dev -> false. */
+export async function isDevVerified(devId: string): Promise<boolean> {
+  const { rows } = await query<{ verified: boolean }>(
+    `SELECT verified FROM devs WHERE id = $1`,
+    [devId],
+  );
+  return rows[0]?.verified ?? false;
+}
+
+export interface DevProfile {
+  id: string;
+  github_handle: string;
+  verified: boolean;
+  budget: BudgetView | null;
+}
+
+/** A dev's own profile + current-period budget, for GET /devs/me. */
+export async function getDevProfile(devId: string): Promise<DevProfile | null> {
+  const { rows } = await query<{ id: string; github_handle: string; verified: boolean }>(
+    `SELECT id, github_handle, verified FROM devs WHERE id = $1`,
+    [devId],
+  );
+  const dev = rows[0];
+  if (!dev) return null;
+  return { ...dev, budget: await getBudget(devId) };
+}
+
+/**
+ * A dev sets their OWN current-period budget — the cap on how much of their own
+ * donated Claude-CLI credit they'll spend this month. Safe to self-serve: it only
+ * governs the dev's own credit, not a shared pool. Lowering it below what's
+ * already reserved+spent would violate the dev_budgets CHECK; we surface that as a
+ * clean 409 rather than letting the constraint error become a 500.
+ */
+export async function setOwnBudget(
+  devId: string,
+  budgetCents: number,
+): Promise<BudgetView> {
+  if (!Number.isInteger(budgetCents) || budgetCents < 0) {
+    throw new OpError(BAD_INPUT, 'bad_input', 'budget_cents must be a non-negative integer');
+  }
+  try {
+    await query(
+      `INSERT INTO dev_budgets (dev_id, period, budget_cents)
+       VALUES ($1, ${CURRENT_PERIOD}, $2)
+       ON CONFLICT (dev_id, period) DO UPDATE SET budget_cents = EXCLUDED.budget_cents`,
+      [devId, budgetCents],
+    );
+  } catch (err: any) {
+    if (err?.code === '23514') {
+      // CHECK (reserved_cents + spent_cents <= budget_cents)
+      throw new OpError(
+        CONFLICT,
+        'budget_below_committed',
+        'New budget is below what you have already reserved or spent this period',
+      );
+    }
+    throw err;
+  }
+  return (await getBudget(devId))!;
+}
+
 export interface OpenTaskFilter {
   maxCostCents?: number;
   sensitivity?: string;
   limit?: number;
+  /**
+   * Whether the requesting dev is verified. When false, the listing is forced to
+   * sensitivity='public' regardless of any requested filter — an unverified dev
+   * must not even see non-public work (and couldn't check it out anyway; see the
+   * trust gate in checkoutTask). Omitted (undefined) means "no restriction",
+   * preserving the unfiltered behaviour for internal callers.
+   */
+  devVerified?: boolean;
 }
 
 export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRow[]> {
@@ -556,8 +645,12 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
     params.push(filter.maxCostCents);
     conditions.push(`max_cost_cents <= $${params.length}`);
   }
-  if (filter.sensitivity !== undefined) {
-    params.push(filter.sensitivity);
+  // An unverified dev is pinned to public tasks: ignore a broader requested
+  // sensitivity rather than honour it.
+  const effectiveSensitivity =
+    filter.devVerified === false ? 'public' : filter.sensitivity;
+  if (effectiveSensitivity !== undefined) {
+    params.push(effectiveSensitivity);
     conditions.push(`sensitivity = $${params.length}`);
   }
 
