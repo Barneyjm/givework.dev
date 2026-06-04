@@ -95,7 +95,9 @@ export class HttpBackend implements Backend {
     if (!res.ok) {
       throw new ToolError(payload?.error ?? `http_${res.status}`, payload?.message ?? text);
     }
-    return payload as T;
+    // A 2xx with an empty body parses to null; hand callers {} so property access
+    // doesn't throw.
+    return (payload ?? {}) as T;
   }
 
   version() {

@@ -1,18 +1,17 @@
 import { spawn } from 'node:child_process';
 
-// Task execution — the actual donated work. This runs on the VOLUNTEER's own
-// Anthropic credit (the donation), which is the whole point of the platform, and
-// is deliberately separate from intake decomposition (which runs free + local on
-// the platform; see src/intake/decompose.ts).
+// Task execution — the actual donated work. The donation is each monthly
+// subscriber's `claude -p` (Claude Code CLI) capacity — the credit Anthropic
+// already includes with a subscription. There is deliberately NO Anthropic SDK
+// and NO ANTHROPIC_API_KEY anywhere in this system: an API-key path would be paid
+// usage, which is not the model. Execution is separate from intake decomposition
+// (which runs free + local on the platform; see src/intake/decompose.ts).
 //
 // Swappable behind the Executor interface:
 //   - StubExecutor      — no model, deterministic. Default + used in tests.
-//   - ClaudeCliExecutor — PRODUCTION. Shells out to `claude -p --output-format json`,
-//     running on the volunteer's Claude Code CLI subscriber credit. There is NO
-//     ANTHROPIC_API_KEY in this system — the donated capacity is each subscriber's
-//     `claude -p` usage. The CLI's own `total_cost_usd` is the metered cost.
-//   - ClaudeExecutor    — reference Anthropic SDK impl (EXECUTOR=claude-api). Useful
-//     for unit-testing the parse/metering path; not the path we ship.
+//   - ClaudeCliExecutor — PRODUCTION. Shells out to `claude -p --output-format json`
+//     on the volunteer's logged-in Claude Code session. The CLI's own
+//     `total_cost_usd` is the metered cost; no key, no API billing.
 //
 // Unlike the decomposer, execution NEVER silently falls back to a stub on
 // failure: submitting fabricated output as if it were real work would corrupt
@@ -44,14 +43,14 @@ export interface Executor {
 
 // USD per 1M tokens (from the Claude model catalog). Used to meter the donation
 // into integer cents so the ledger reflects real spend.
-export const PRICING: Record<string, { in: number; out: number }> = {
+const PRICING: Record<string, { in: number; out: number }> = {
   'claude-opus-4-8': { in: 5, out: 25 },
   'claude-sonnet-4-6': { in: 3, out: 15 },
   'claude-haiku-4-5': { in: 1, out: 5 },
 };
-export const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
-export function pricingFor(model: string) {
+function pricingFor(model: string) {
   return PRICING[model] ?? PRICING[DEFAULT_MODEL];
 }
 
@@ -101,9 +100,9 @@ export function outputSchemaToJsonSchema(
 }
 
 /** cents per token for a $/1M-token rate. */
-export const centsPerToken = (per1M: number) => per1M / 10_000;
+const centsPerToken = (per1M: number) => per1M / 10_000;
 
-export interface Usage {
+interface Usage {
   input_tokens?: number;
   output_tokens?: number;
   cache_read_input_tokens?: number;
@@ -144,9 +143,8 @@ export class StubExecutor implements Executor {
   }
 }
 
-// Shared system prompt for the executors that call a model (ClaudeCliExecutor
-// here; ClaudeExecutor in executor-api.ts keeps its own copy).
-export const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI inference to nonprofits.
+// System prompt for the executor that calls a model (ClaudeCliExecutor).
+const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI inference to nonprofits.
 You are given one concrete task with a prompt, an expected output shape, and acceptance criteria.
 Do the task and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.`;
 
@@ -251,21 +249,11 @@ export class ClaudeCliExecutor implements Executor {
 
 /**
  * The executor the runner uses, chosen by env:
- *   EXECUTOR=claude     → ClaudeCliExecutor (production — the volunteer's `claude -p` credit)
- *   EXECUTOR=claude-api → ClaudeExecutor (reference Anthropic SDK impl)
- *   otherwise           → StubExecutor (deterministic; default, used by tests)
+ *   EXECUTOR=claude → ClaudeCliExecutor (production — the volunteer's `claude -p` credit)
+ *   otherwise       → StubExecutor (deterministic; default, used by tests)
+ * There is intentionally no API-key/SDK option — donated capacity is `claude -p`.
  */
 export function getExecutor(): Executor {
   if (process.env.EXECUTOR === 'claude') return new ClaudeCliExecutor();
-  if (process.env.EXECUTOR === 'claude-api') {
-    // Lazy: only pull in @anthropic-ai/sdk (via executor-api.ts) when this path is
-    // actually selected, so the runner and the bundled CLI never import the SDK.
-    return {
-      async execute(task) {
-        const { ClaudeExecutor } = await import('./executor-api.js');
-        return new ClaudeExecutor().execute(task);
-      },
-    };
-  }
   return new StubExecutor();
 }

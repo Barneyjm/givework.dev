@@ -52,8 +52,10 @@ function awaitToken(base: string): Promise<string> {
       const token = reqUrl.searchParams.get('token');
       res.writeHead(token ? 200 : 400, { 'content-type': 'text/html' });
       res.end(token ? SUCCESS_HTML : 'Missing token');
+      // Only settle on a real token. A tokenless /callback hit (browser prefetch,
+      // an extension, a port scanner) must NOT abort the flow — keep listening and
+      // let the timeout be the only failure path.
       if (token) settle(() => resolve(token));
-      else settle(() => reject(new Error('callback did not include a token')));
     });
 
     server.on('error', (err) => settle(() => reject(err)));

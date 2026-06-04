@@ -37,5 +37,7 @@ export async function apiRequest<T>(baseUrl: string, opts: RequestOpts): Promise
   if (!res.ok) {
     throw new ApiError(payload?.error ?? `http_${res.status}`, payload?.message ?? text, res.status);
   }
-  return payload as T;
+  // A 2xx with an empty body parses to null; hand callers {} so property access
+  // doesn't throw.
+  return (payload ?? {}) as T;
 }

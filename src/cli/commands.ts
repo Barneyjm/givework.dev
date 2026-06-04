@@ -78,8 +78,21 @@ export async function run(args: string[]): Promise<void> {
   } catch {
     /* ignore */
   }
-  const maxTasks = arg(args, '--max') ? Number(arg(args, '--max')) : has(args, '--once') ? 1 : Infinity;
-  const intervalMs = (arg(args, '--interval') ? Number(arg(args, '--interval')) : 15) * 1000;
+  // Validate numeric flags: an unparsed value (e.g. `--interval 5s` → NaN) would
+  // make setTimeout default to ~1ms and, with --watch, hammer the API. Fail fast.
+  const maxArg = arg(args, '--max');
+  const maxTasks = maxArg ? Number(maxArg) : has(args, '--once') ? 1 : Infinity;
+  if (maxArg && (!Number.isInteger(maxTasks) || maxTasks <= 0)) {
+    console.error('--max must be a positive integer');
+    process.exit(1);
+  }
+  const intervalArg = arg(args, '--interval');
+  const intervalSec = intervalArg ? Number(intervalArg) : 15;
+  if (!Number.isFinite(intervalSec) || intervalSec <= 0) {
+    console.error('--interval must be a positive number of seconds');
+    process.exit(1);
+  }
+  const intervalMs = intervalSec * 1000;
   try {
     await runLoop(backend, cliExecutor(), {
       maxTasks,
