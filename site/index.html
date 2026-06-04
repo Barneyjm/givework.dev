@@ -162,12 +162,17 @@
   .step { display:grid; grid-template-columns: 64px 1fr; gap: 1rem; padding: 1.4rem 0; border-bottom: 1px solid rgba(22,19,16,.18); align-items:start; }
   .step:last-child { border-bottom: none; }
   .step .n { width:54px; height:54px; display:grid; place-items:center; border: var(--line); font-family:'Space Mono',monospace; font-weight:700; font-size:1.1rem; }
-  .how-col:nth-child(1) .step:nth-child(2) .n { background: var(--red); color:#fff; border-radius:50%; }
-  .how-col:nth-child(1) .step:nth-child(3) .n { background: var(--yellow); }
-  .how-col:nth-child(1) .step:nth-child(4) .n { background: var(--blue); color:#fff; }
-  .how-col:nth-child(2) .step:nth-child(2) .n { background: var(--blue); color:#fff; }
-  .how-col:nth-child(2) .step:nth-child(3) .n { background: var(--red); color:#fff; border-radius:50%; }
-  .how-col:nth-child(2) .step:nth-child(4) .n { background: var(--yellow); }
+  /* Bauhaus badge system — shape follows colour, matching the hero composition:
+     red = circle, blue = square, yellow = triangle. Numbered steps cycle through
+     them site-wide via these three modifiers. */
+  .step .n--circle, .step .n--square, .step .n--tri { border: none; }
+  .n--circle { background: var(--red);    color:#fff; border-radius:50%; }
+  .n--square { background: var(--blue);   color:#fff; }
+  .n--tri    { background: var(--yellow); color: var(--ink);
+               clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+  /* Beat the base `.step .n { place-items:center }` so the number drops toward
+     the triangle's wide base instead of sitting centered (too high). */
+  .step .n--tri { align-items: end; padding-bottom: 7px; }
   .step h4 { margin:.1rem 0 .3rem; font-size:1.15rem; text-transform:uppercase; letter-spacing:-.01em; font-weight:600; }
   .step p { margin:0; font-weight:300; font-size:.98rem; }
 
@@ -193,6 +198,10 @@
   /* ---------- under the hood ---------- */
   .under { padding: clamp(3rem,6vw,5.5rem) 0; border-top: var(--line); }
   .under-grid { display:grid; grid-template-columns: 1.05fr .95fr; gap: clamp(2rem,4vw,3.5rem); align-items:start; }
+  /* Let columns shrink below content width so the code card's long lines scroll
+     inside the <pre> instead of stretching the whole grid past the viewport. */
+  .under-grid > * { min-width: 0; }
+  .under-grid .step > div:last-child { min-width: 0; }
   .under-grid .how-col .label { margin-bottom:.4rem; }
   .codecard { background: var(--ink); color: var(--paper); border: var(--line); position: sticky; top: 1rem; }
   .codecard .ch { display:flex; align-items:center; gap:.45rem; padding:.7rem 1rem; border-bottom: 1px solid rgba(244,241,230,.22); font-family:'Space Mono',monospace; font-size:.66rem; letter-spacing:.16em; text-transform:uppercase; }
@@ -228,6 +237,9 @@
     .how-cols { grid-template-columns: 1fr; gap: 2.5rem; }
     .under-grid { grid-template-columns: 1fr; gap: 2.5rem; }
     .codecard { position: static; }
+    /* Wrap the code on narrow screens so its long lines can't widen the page
+       (a fixed `white-space: pre` line would force <body> past the viewport). */
+    .codecard pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     .ledger .wrap { grid-template-columns: 1fr; }
     nav .navlink { display: none; }
   }
@@ -373,16 +385,16 @@
 
         <div class="how-col">
           <div class="label">For nonprofits</div>
-          <div class="step"><div class="n">01</div><div><h4>Say it plainly</h4><p>Send a plain-language email describing the work. No technical terms required — write it the way you'd ask a colleague.</p></div></div>
-          <div class="step"><div class="n">02</div><div><h4>We break it down</h4><p>Your request is decomposed into small, well-scoped tasks, each sized so a single volunteer can finish it cleanly.</p></div></div>
-          <div class="step"><div class="n">03</div><div><h4>Volunteers do it</h4><p>Developers' AI agents pick up the tasks and complete them. You get reviewable results — and never a charge.</p></div></div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Say it plainly</h4><p>Send a plain-language email describing the work. No technical terms required — write it the way you'd ask a colleague.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>We break it down</h4><p>Your request is decomposed into small, well-scoped tasks, each sized so a single volunteer can finish it cleanly.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Volunteers do it</h4><p>Developers' AI agents pick up the tasks and complete them. You get reviewable results — and never a charge.</p></div></div>
         </div>
 
         <div class="how-col">
           <div class="label">For developers</div>
-          <div class="step"><div class="n">01</div><div><h4>Connect your runner</h4><p>Your machine, your AI subscription. The runner checks out work it can afford and does it locally — nothing leaves your control.</p></div></div>
-          <div class="step"><div class="n">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
-          <div class="step"><div class="n">03</div><div><h4>Keep the receipt</h4><p>Every checkout and submission is written to an append-only ledger — the record behind your year-end acknowledgment.</p></div></div>
+          <div class="step"><div class="n n--square">01</div><div><h4>Connect your runner</h4><p>Your machine, your AI subscription. The runner checks out work it can afford and does it locally — nothing leaves your control.</p></div></div>
+          <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
+          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the receipt</h4><p>Every checkout and submission is written to an append-only ledger — the record behind your year-end acknowledgment.</p></div></div>
         </div>
 
       </div>
@@ -429,12 +441,12 @@
 
         <div class="how-col">
           <div class="label">Request → result</div>
-          <div class="step"><div class="n">01</div><div><h4>Intake</h4><p>A nonprofit emails a plain-language need. We find-or-create their org and store the request — no account, no form, no model names.</p></div></div>
-          <div class="step"><div class="n">02</div><div><h4>Decompose</h4><p>A small, free model running on our side breaks the request into structured tasks — each with a prompt, an output schema, acceptance criteria, a model, and a hard cost cap in cents.</p></div></div>
-          <div class="step"><div class="n">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
-          <div class="step"><div class="n">04</div><div><h4>Reserve</h4><p>A volunteer's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
-          <div class="step"><div class="n">05</div><div><h4>Execute on idle capacity</h4><p>The runner does the work with <span class="mono">claude -p</span> headless on the volunteer's own machine. Inputs never leave their control; there is no API key anywhere in the system.</p></div></div>
-          <div class="step"><div class="n">06</div><div><h4>Submit &amp; reconcile</h4><p>Actual cost — taken from the CLI's own metering — replaces the reservation. Checkout, submit, and accept each land as an append-only ledger entry, then the reviewed result goes back to the nonprofit.</p></div></div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Intake</h4><p>A nonprofit emails a plain-language need. We find-or-create their org and store the request — no account, no form, no model names.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model running on our side breaks the request into structured tasks — each with a prompt, an output schema, acceptance criteria, a model, and a hard cost cap in cents.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
+          <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A volunteer's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
+          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner does the work with <span class="mono">claude -p</span> headless on the volunteer's own machine. Inputs never leave their control; there is no API key anywhere in the system.</p></div></div>
+          <div class="step"><div class="n n--tri">06</div><div><h4>Submit &amp; reconcile</h4><p>Actual cost — taken from the CLI's own metering — replaces the reservation. Checkout, submit, and accept each land as an append-only ledger entry, then the reviewed result goes back to the nonprofit.</p></div></div>
         </div>
 
         <div>
