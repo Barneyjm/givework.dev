@@ -119,6 +119,27 @@ describe('GitHub OAuth sign-in', () => {
     expect(rows.length).toBe(1);
   });
 
+  it('handles a GitHub username rename without a unique-constraint error', async () => {
+    await signInWithGitHub({ id: 1234, login: 'oldname' });
+    // Same github_id, new handle — must update the existing row, not fail on
+    // UNIQUE(github_id).
+    const res = await signInWithGitHub({ id: 1234, login: 'newname' });
+    expect(res.status).toBe(200);
+    const { rows } = await pool.query(`SELECT github_handle FROM devs WHERE github_id = 1234`);
+    expect(rows.length).toBe(1);
+    expect(rows[0].github_handle).toBe('newname');
+  });
+
+  it('adopts a pre-existing admin-seeded dev with the same handle', async () => {
+    const seeded = await createDev('seeded-handle'); // github_id NULL
+    const res = await signInWithGitHub({ id: 555, login: 'seeded-handle' });
+    expect(res.status).toBe(200);
+    const { rows } = await pool.query(`SELECT id, github_id FROM devs`);
+    expect(rows.length).toBe(1); // adopted, not duplicated
+    expect(rows[0].id).toBe(seeded);
+    expect(Number(rows[0].github_id)).toBe(555);
+  });
+
   it('returns a configuration error when OAuth env is unset', async () => {
     delete process.env.GITHUB_CLIENT_ID;
     const res = await req('/auth/github/login');

@@ -64,14 +64,18 @@ function requireFields(body: any, fields: string[]): void {
 // they're unset and fall back to 'dev'/'local'.
 app.get('/version', (c) => {
   const deployedAt = process.env.DEPLOYED_AT; // epoch seconds (string) from CI
+  let deployedAtIso: string | null = null;
+  if (deployedAt && /^\d+$/.test(deployedAt)) {
+    const d = new Date(Number(deployedAt) * 1000);
+    // An out-of-range epoch yields an Invalid Date; .toISOString() would throw
+    // and crash this public endpoint, so guard before formatting.
+    if (!Number.isNaN(d.getTime())) deployedAtIso = d.toISOString();
+  }
   return c.json({
     service: 'givework-api',
     commit: process.env.GIT_SHA ?? 'dev',
     ref: process.env.GIT_REF ?? 'local',
-    deployed_at:
-      deployedAt && /^\d+$/.test(deployedAt)
-        ? new Date(Number(deployedAt) * 1000).toISOString()
-        : null,
+    deployed_at: deployedAtIso,
   });
 });
 

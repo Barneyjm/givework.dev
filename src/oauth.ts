@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { query } from './db.js';
+import { withTransaction } from './db.js';
 import { signDevToken } from './auth.js';
 import { OpError } from './operations.js';
 
@@ -96,22 +96,43 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
 }
 
 /**
- * Upsert the GitHub identity into devs and return the dev id. github_id is the
- * stable key, but we conflict on github_handle so a self-serve login also adopts
- * any pre-existing admin-seeded row with the same handle (linking github_id onto
- * it) rather than failing the UNIQUE(github_handle) constraint.
+ * Upsert the GitHub identity into devs and return the dev id. There are two
+ * UNIQUE columns (github_id, github_handle) and ON CONFLICT can only target one,
+ * so we resolve by precedence in a single transaction:
+ *   1. by github_id — the stable key; handles repeat logins AND handle renames
+ *      (same id, new handle) without tripping UNIQUE(github_id).
+ *   2. by github_handle (only rows with no github_id yet) — adopts a pre-existing
+ *      admin-seeded dev, linking the OAuth identity onto it.
+ *   3. insert — first time we've seen this account. ON CONFLICT (github_id) makes
+ *      a concurrent first-login race resolve to an update instead of a 23505.
  */
 export async function upsertDev(user: GitHubUser): Promise<string> {
-  const { rows } = await query<{ id: string }>(
-    `INSERT INTO devs (github_id, github_handle, email)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (github_handle) DO UPDATE
-       SET github_id = EXCLUDED.github_id,
-           email = COALESCE(devs.email, EXCLUDED.email)
-     RETURNING id`,
-    [user.id, user.login, user.email],
-  );
-  return rows[0].id;
+  return withTransaction(async (client) => {
+    const byId = await client.query<{ id: string }>(
+      `UPDATE devs SET github_handle = $1, email = COALESCE(email, $2)
+        WHERE github_id = $3 RETURNING id`,
+      [user.login, user.email, user.id],
+    );
+    if (byId.rows[0]) return byId.rows[0].id;
+
+    const byHandle = await client.query<{ id: string }>(
+      `UPDATE devs SET github_id = $1, email = COALESCE(email, $2)
+        WHERE github_handle = $3 AND github_id IS NULL RETURNING id`,
+      [user.id, user.email, user.login],
+    );
+    if (byHandle.rows[0]) return byHandle.rows[0].id;
+
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO devs (github_id, github_handle, email)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (github_id) DO UPDATE
+         SET github_handle = EXCLUDED.github_handle,
+             email = COALESCE(devs.email, EXCLUDED.email)
+       RETURNING id`,
+      [user.id, user.login, user.email],
+    );
+    return inserted.rows[0].id;
+  });
 }
 
 export const oauthRoutes = new Hono<Env>();
@@ -123,7 +144,9 @@ oauthRoutes.get('/github/login', (c) => {
   const state = crypto.randomUUID();
   setCookie(c, STATE_COOKIE, state, {
     httpOnly: true,
-    secure: true,
+    // Secure in prod (always HTTPS); off for plain-HTTP local dev on non-localhost
+    // origins, where browsers reject Secure cookies and would break the flow.
+    secure: new URL(c.req.url).protocol === 'https:',
     sameSite: 'Lax', // Lax so the cookie rides the top-level GET redirect back.
     path: '/',
     maxAge: 600,
@@ -157,10 +180,15 @@ oauthRoutes.get('/github/callback', async (c) => {
     const apiOrigin = new URL(c.req.url).origin;
     return c.html(tokenPage(user.login, token, apiOrigin));
   } catch (err) {
+    // Render the HTML error page for ALL failures (a raw JSON 500 from the global
+    // handler is a poor browser experience). OpErrors carry a safe, specific
+    // message; anything else (network/DB) is logged server-side and shown
+    // generically so we never leak internals to the browser.
     if (err instanceof OpError) {
       return c.html(errorPage(err.message), err.status as any);
     }
-    throw err;
+    console.error('OAuth callback failed:', err);
+    return c.html(errorPage('Something went wrong during sign-in. Please try again.'), 500);
   }
 });
 
