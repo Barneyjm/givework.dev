@@ -49,25 +49,21 @@ describe('ClaudeCliExecutor', () => {
     expect((r.raw_usage as any).total_cost_usd).toBe(0.0123);
   });
 
-  it('passes -p/--output-format json/--model + a --json-schema built from output_schema, prompt on stdin', async () => {
+  it('passes -p/--output-format json/--model, prompt+shape on stdin, and never --json-schema', async () => {
     let seenArgs: string[] = [];
     let seenInput = '';
     const run = async (args: string[], input: string) => {
       seenArgs = args;
       seenInput = input;
-      return JSON.stringify({ result: '{}', total_cost_usd: 0 });
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
     };
     await new ClaudeCliExecutor({ run }).execute(task);
-    expect(seenArgs.slice(0, 5)).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
-    const i = seenArgs.indexOf('--json-schema');
-    expect(i).toBeGreaterThan(-1);
-    expect(JSON.parse(seenArgs[i + 1])).toEqual({
-      type: 'object',
-      properties: { summary: { type: 'string' } },
-      required: ['summary'],
-      additionalProperties: false,
-    });
+    expect(seenArgs).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+    // --json-schema makes claude -p bill but return an empty result; we steer via
+    // the prompt instead, so the flag must never be sent.
+    expect(seenArgs).not.toContain('--json-schema');
     expect(seenInput).toContain('summarize this'); // the task prompt reached the CLI
+    expect(seenInput).toContain('Output shape'); // the shape is conveyed in-prompt
   });
 
   it('tolerates a markdown ```json fence in the CLI result (the real claude -p wart)', async () => {
@@ -76,14 +72,9 @@ describe('ClaudeCliExecutor', () => {
     expect(r.result).toEqual({ response: 'pong' });
   });
 
-  it('omits --json-schema when the task has no output_schema', async () => {
-    let seenArgs: string[] = [];
-    const run = async (args: string[]) => {
-      seenArgs = args;
-      return JSON.stringify({ result: '{}', total_cost_usd: 0 });
-    };
-    await new ClaudeCliExecutor({ run }).execute({ ...task, spec: { prompt: 'x' } });
-    expect(seenArgs).not.toContain('--json-schema');
+  it('throws on an empty result (release, do not submit a blank deliverable)', async () => {
+    const run = cliReply({ result: '', total_cost_usd: 0.12 });
+    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('empty result');
   });
 
   it('falls back to token metering when total_cost_usd is absent', async () => {

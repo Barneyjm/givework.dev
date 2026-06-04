@@ -73,32 +73,6 @@ export function coerceResult(text: string): unknown {
   }
 }
 
-/**
- * Turn a task's loose output_schema (key → type-ish string) into a real JSON
- * Schema for `claude -p --json-schema`, so the CLI returns guaranteed-shaped JSON.
- */
-export function outputSchemaToJsonSchema(
-  shape: Record<string, string> | undefined,
-): Record<string, unknown> | null {
-  if (!shape || Object.keys(shape).length === 0) return null;
-  const properties: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(shape)) {
-    const t = String(raw).toLowerCase();
-    if (t.endsWith('[]') || t.startsWith('array')) properties[key] = { type: 'array' };
-    else if (t.startsWith('object')) properties[key] = { type: 'object' };
-    else if (t.startsWith('bool')) properties[key] = { type: 'boolean' };
-    else if (t.startsWith('int') || t.startsWith('num') || t.startsWith('float'))
-      properties[key] = { type: 'number' };
-    else properties[key] = { type: 'string' };
-  }
-  return {
-    type: 'object',
-    properties,
-    required: Object.keys(shape),
-    additionalProperties: false,
-  };
-}
-
 /** cents per token for a $/1M-token rate. */
 const centsPerToken = (per1M: number) => per1M / 10_000;
 
@@ -206,12 +180,13 @@ export class ClaudeCliExecutor implements Executor {
         : '') +
       (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '');
 
-    // When the task declares an output shape, hand the CLI a JSON Schema so it
-    // returns guaranteed-shaped JSON (no markdown fences, no parsing guesswork).
-    // STAGE 8: cap usage so a task can't exceed its reserved budget.
+    // NOTE: we do NOT pass `--json-schema`. With that flag, `claude -p` runs and
+    // bills but returns an empty `result` field (the structured output doesn't
+    // come back where --output-format json puts the text), so we'd submit a blank
+    // deliverable and still charge the donation. The system prompt + the output
+    // shape in the prompt already steer the model to a JSON object, and
+    // coerceResult parses it. STAGE 8: cap usage so a task can't exceed its cap.
     const args = ['-p', '--output-format', 'json', '--model', model];
-    const schema = outputSchemaToJsonSchema(task.spec?.output_schema);
-    if (schema) args.push('--json-schema', JSON.stringify(schema));
 
     const raw = await this.run(args, prompt);
 
@@ -225,7 +200,13 @@ export class ClaudeCliExecutor implements Executor {
       throw new Error(`claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`);
     }
 
-    const result = coerceResult(String(data.result ?? ''));
+    // An empty result means the run produced no work. Throw so the runner RELEASES
+    // the task instead of submitting a blank deliverable (and charging for it).
+    const resultText = String(data.result ?? '').trim();
+    if (!resultText) {
+      throw new Error('claude -p returned an empty result — releasing rather than submitting blank output');
+    }
+    const result = coerceResult(resultText);
 
     // Prefer the CLI's own cost figure; fall back to token metering if absent.
     const cents =
