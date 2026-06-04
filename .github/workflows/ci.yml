@@ -1,5 +1,16 @@
 name: CI
 
+# Test database strategy:
+# CI runs against the throwaway Postgres service container below — fast, isolated,
+# torn down with the job. For integration testing against *real* Neon, create an
+# ephemeral Neon branch on demand and delete it after (branches are cheap and
+# created/deleted in seconds):
+#   neonctl branches create --name ci-$GITHUB_RUN_ID --parent main   # returns a connection string
+#   DATABASE_URL=<branch-url> TEST_DB_ALLOW_REMOTE=1 npm test
+#   neonctl branches delete ci-$GITHUB_RUN_ID
+# Never point the suite at a shared/prod branch: resetDb() TRUNCATEs every table
+# (test/helpers.ts guards against non-local URLs unless TEST_DB_ALLOW_REMOTE=1).
+
 on:
   push:
     branches: ["**"]
