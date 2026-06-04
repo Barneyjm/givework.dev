@@ -1,17 +1,43 @@
 import pg from 'pg';
 
-const { Pool } = pg;
+const { Pool, Client } = pg;
 
 // Postgres returns BIGINT (OID 20) as a string by default to avoid precision
 // loss. All our money columns are BIGINT but always well within Number's safe
 // integer range (cents), so parse them to JS numbers for ergonomic arithmetic.
 pg.types.setTypeParser(20, (val: string) => parseInt(val, 10));
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+// On Cloudflare Workers a socket may only be used within the request that
+// created it: a connection held in a module-scope pool across requests hangs
+// (the runtime then cancels the request). So on Workers we open a fresh
+// connection per call and close it before responding. On Node — tests, scripts,
+// local dev — a long-lived shared pool is correct and much faster.
+const isWorkers =
+  typeof navigator !== 'undefined' &&
+  (navigator as { userAgent?: string }).userAgent === 'Cloudflare-Workers';
 
-export type Client = pg.PoolClient;
+const connectionString = process.env.DATABASE_URL;
+
+// Shared pool for the Node runtime. Unused on Workers (the request path uses
+// per-request connections via acquire()), but still imported by scripts/tests.
+export const pool = new Pool({ connectionString });
+
+// Either kind of connection — both expose .query, which is all callers use.
+export type Client = pg.PoolClient | pg.Client;
+
+/**
+ * Acquire a client and a matching release function: a per-request connection on
+ * Workers (connected here, closed on release), or a pooled client on Node.
+ */
+async function acquire(): Promise<{ client: Client; release: () => Promise<void> }> {
+  if (isWorkers) {
+    const client = new Client({ connectionString, connectionTimeoutMillis: 10_000 });
+    await client.connect();
+    return { client, release: () => client.end() };
+  }
+  const client = await pool.connect();
+  return { client, release: async () => client.release() };
+}
 
 /**
  * Run `fn` inside a single transaction. Commits on success, rolls back on any
@@ -21,17 +47,18 @@ export type Client = pg.PoolClient;
 export async function withTransaction<T>(
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const client = await pool.connect();
+  const { client, release } = await acquire();
   try {
     await client.query('BEGIN');
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    // Don't let a rollback failure mask the original error.
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
-    client.release();
+    await release();
   }
 }
 
@@ -40,7 +67,13 @@ export async function query<T extends pg.QueryResultRow = any>(
   text: string,
   params?: unknown[],
 ): Promise<pg.QueryResult<T>> {
-  return pool.query<T>(text, params as any[]);
+  if (!isWorkers) return pool.query<T>(text, params as any[]);
+  const { client, release } = await acquire();
+  try {
+    return await client.query<T>(text, params as any[]);
+  } finally {
+    await release();
+  }
 }
 
 export async function closePool(): Promise<void> {
