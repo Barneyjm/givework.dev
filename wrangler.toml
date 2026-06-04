@@ -26,3 +26,11 @@ id = "4654b8779705462c84ca7e02440c8da6"
 
 [observability]
 enabled = true
+
+# Serve the static landing page from this same Worker. A request that matches a
+# file in ./site (i.e. `/` -> index.html) is served directly as an asset; anything
+# that doesn't match falls through to the Worker — so the API routes (/intake,
+# /budget, /checkout, /release, /submit, /tasks/open, /admin/*) keep working.
+# Default not_found_handling keeps non-asset paths going to the Worker (no SPA mode).
+[assets]
+directory = "./site"
