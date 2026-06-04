@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Givework — Agentic Volunteering</title>
+<meta name="description" content="Developers lend their AI agents to nonprofits. Real tasks, done on the subscription you already pay for. Free for nonprofits, fully accounted for." />
+
+<!-- Geometric favicon: the Bauhaus trio -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --paper: #f4f1e6;
+    --ink:   #161310;
+    --red:   #e1342b;
+    --blue:  #21449c;
+    --yellow:#f3c20a;
+    --line: 3px solid var(--ink);
+    --gut: clamp(1.25rem, 4vw, 4rem);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; overflow-x: hidden; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Jost', system-ui, sans-serif;
+    font-weight: 400;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden; /* belt-and-suspenders against any stray horizontal scroll */
+  }
+  h1, h2, h3, h4 { overflow-wrap: break-word; }
+  a { color: inherit; }
+  .mono { font-family: 'Space Mono', ui-monospace, monospace; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 var(--gut); }
+
+  .eyebrow {
+    font-family: 'Space Mono', monospace;
+    font-size: .72rem;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    border-bottom: var(--line);
+  }
+  .bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1.1rem var(--gut);
+    gap: 1rem;
+  }
+  .brand { display: flex; align-items: center; gap: .7rem; text-decoration: none; }
+  .brand .glyph { display: block; }
+  .brand .name {
+    font-weight: 700; font-size: 1.5rem; letter-spacing: -.02em; text-transform: uppercase;
+  }
+  nav { display: flex; gap: 1.6rem; align-items: center; }
+  nav a {
+    text-decoration: none; font-family: 'Space Mono', monospace;
+    font-size: .74rem; letter-spacing: .12em; text-transform: uppercase;
+    padding-bottom: 2px; border-bottom: 2px solid transparent;
+  }
+  nav a:hover { border-color: var(--red); }
+  nav .cta {
+    background: var(--ink); color: var(--paper); border: var(--line);
+    padding: .55rem .9rem; letter-spacing: .1em;
+  }
+  nav .cta:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink); }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; border-bottom: var(--line); }
+  .hero .wrap { display: grid; grid-template-columns: 1.55fr 1fr; gap: 2rem; padding-top: clamp(2.5rem,6vw,5rem); padding-bottom: clamp(2.5rem,6vw,5rem); }
+  .hero h1 {
+    font-size: clamp(2.6rem, 7.5vw, 6rem);
+    line-height: .96; font-weight: 700; letter-spacing: -.03em;
+    margin: .9rem 0 0;
+    text-transform: uppercase;
+  }
+  .hero h1 .u { color: var(--red); }
+  .hero p.lede {
+    font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+    max-width: 42ch; margin: 1.6rem 0 0; font-weight: 300;
+  }
+  .hero .actions { margin-top: 2rem; display: flex; flex-wrap: wrap; gap: .9rem; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: .6rem;
+    font-family: 'Space Mono', monospace; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase;
+    padding: .85rem 1.2rem; text-decoration: none; border: var(--line); font-weight: 700;
+    transition: transform .04s ease;
+  }
+  .btn:active { transform: translate(2px, 2px); }
+  .btn--blue { background: var(--blue); color: #fff; }
+  .btn--blue:hover { background: var(--paper); color: var(--ink); }
+  .btn--red  { background: var(--red); color: #fff; }
+  .btn--red:hover  { background: var(--paper); color: var(--ink); }
+  .btn--ghost { background: transparent; }
+  .btn--ghost:hover { background: var(--ink); color: var(--paper); }
+
+  /* hero geometric composition */
+  .composition { position: relative; min-height: 280px; }
+  .composition svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* ---------- marquee strip ---------- */
+  .strip {
+    background: var(--ink); color: var(--paper);
+    font-family: 'Space Mono', monospace; text-transform: uppercase;
+    letter-spacing: .2em; font-size: .76rem;
+    border-bottom: var(--line);
+    overflow: hidden; white-space: nowrap;
+  }
+  .strip .run { display: inline-block; padding: .7rem 0; animation: slide 26s linear infinite; }
+  .strip .run span { padding: 0 1.4rem; }
+  .strip .run b { color: var(--yellow); }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+  /* ---------- two paths ---------- */
+  .paths { border-bottom: var(--line); }
+  .paths .wrap { padding: 0; }
+  .paths-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .path {
+    padding: clamp(2rem,4vw,3.5rem) var(--gut);
+    border-left: var(--line);
+    position: relative; min-height: 360px;
+    display: flex; flex-direction: column;
+  }
+  .path:first-child { border-left: none; }
+  .path .tag { font-family:'Space Mono',monospace; font-size:.74rem; letter-spacing:.2em; text-transform:uppercase; font-weight:700; }
+  .path h2 { font-size: clamp(1.8rem, 3.4vw, 2.8rem); line-height: 1; letter-spacing: -.02em; margin: 1.2rem 0 0; text-transform: uppercase; font-weight: 700; }
+  .path p { font-weight: 300; max-width: 36ch; margin: 1rem 0 0; }
+  .path .spacer { flex: 1; }
+  .path ul { list-style: none; margin: 1.4rem 0 0; padding: 0; }
+  .path li { font-family:'Space Mono',monospace; font-size:.82rem; padding: .35rem 0; padding-left: 1.6rem; position: relative; }
+  .path li::before { content:""; position:absolute; left:0; top:.55rem; width:.7rem; height:.7rem; background: var(--ink); }
+  .path .act { margin-top: 1.8rem; }
+  .path--dev  { background: var(--blue); color: #fff; }
+  .path--dev .btn--blue { background:#fff; color: var(--blue); border-color:#fff;}
+  .path--dev .btn--blue:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink);}
+  .path--dev li::before { background: var(--yellow); }
+  .path--np   { background: var(--red); color: #fff; }
+  .path--np .btn--red { background:#fff; color: var(--red); border-color:#fff; }
+  .path--np .btn--red:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink); }
+  .path--np li::before { background: var(--yellow); }
+  .path .corner { position:absolute; top:0; right:0; }
+
+  /* ---------- how it works ---------- */
+  .how { padding: clamp(3rem,6vw,5.5rem) 0; }
+  .section-head { display:flex; align-items:baseline; gap:1rem; margin-bottom: 2.5rem; }
+  .section-head h3 { font-size: clamp(1.6rem,3vw,2.4rem); text-transform: uppercase; letter-spacing:-.02em; margin:0; font-weight:700; }
+  .how-cols { display:grid; grid-template-columns:1fr 1fr; gap: clamp(2rem,4vw,4rem); }
+  .how-col > .label { font-family:'Space Mono',monospace; font-weight:700; text-transform:uppercase; letter-spacing:.18em; font-size:.78rem; padding-bottom:.8rem; border-bottom: var(--line); }
+  .step { display:grid; grid-template-columns: 64px 1fr; gap: 1rem; padding: 1.4rem 0; border-bottom: 1px solid rgba(22,19,16,.18); align-items:start; }
+  .step:last-child { border-bottom: none; }
+  .step .n { width:54px; height:54px; display:grid; place-items:center; border: var(--line); font-family:'Space Mono',monospace; font-weight:700; font-size:1.1rem; }
+  /* Bauhaus badge system — shape follows colour, matching the hero composition:
+     red = circle, blue = square, yellow = triangle. Numbered steps cycle through
+     them site-wide via these three modifiers. */
+  .step .n--circle, .step .n--square, .step .n--tri { border: none; }
+  .n--circle { background: var(--red);    color:#fff; border-radius:50%; }
+  .n--square { background: var(--blue);   color:#fff; }
+  .n--tri    { background: var(--yellow); color: var(--ink);
+               clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+  /* Beat the base `.step .n { place-items:center }` so the number drops toward
+     the triangle's wide base instead of sitting centered (too high). */
+  .step .n--tri { align-items: end; padding-bottom: 7px; }
+  .step h4 { margin:.1rem 0 .3rem; font-size:1.15rem; text-transform:uppercase; letter-spacing:-.01em; font-weight:600; }
+  .step p { margin:0; font-weight:300; font-size:.98rem; }
+
+  /* ---------- ledger / trust ---------- */
+  .ledger { background: var(--ink); color: var(--paper); border-top: var(--line); border-bottom: var(--line); }
+  .ledger .wrap { display:grid; grid-template-columns: 1fr 1fr; gap: clamp(2rem,5vw,4rem); padding: clamp(3rem,6vw,5rem) var(--gut); align-items:center; }
+  .ledger .eyebrow { color: var(--yellow); }
+  .ledger h3 { font-size: clamp(1.8rem,3.6vw,3rem); text-transform:uppercase; letter-spacing:-.02em; margin:.7rem 0 1rem; font-weight:700; }
+  .ledger p { font-weight:300; max-width: 44ch; }
+  .ledger .pts { margin-top:1.4rem; display:flex; flex-direction:column; gap:.5rem; }
+  .ledger .pts span { font-family:'Space Mono',monospace; font-size:.82rem; }
+  .ledger .pts span b { color: var(--yellow); }
+  .receipt { background: var(--paper); color: var(--ink); border: var(--line); }
+  .receipt .rh { display:flex; justify-content:space-between; align-items:center; padding:.8rem 1rem; border-bottom: var(--line); font-family:'Space Mono',monospace; text-transform:uppercase; letter-spacing:.14em; font-size:.7rem; font-weight:700; }
+  .receipt .rh .dot { width:.8rem; height:.8rem; background: var(--red); border-radius:50%; display:inline-block; margin-left:.5rem; }
+  .receipt table { width:100%; border-collapse:collapse; font-family:'Space Mono',monospace; font-size:.86rem; }
+  .receipt td { padding:.55rem 1rem; border-bottom:1px solid rgba(22,19,16,.14); }
+  .receipt td:last-child { text-align:right; }
+  .receipt .pos { color: var(--blue); }
+  .receipt .neg { color: var(--red); }
+  .receipt tfoot td { border-bottom:none; font-weight:700; padding-top:.9rem; }
+
+  /* ---------- under the hood ---------- */
+  .under { padding: clamp(3rem,6vw,5.5rem) 0; border-top: var(--line); }
+  .under-grid { display:grid; grid-template-columns: 1.05fr .95fr; gap: clamp(2rem,4vw,3.5rem); align-items:start; }
+  /* Let columns shrink below content width so the code card's long lines scroll
+     inside the <pre> instead of stretching the whole grid past the viewport. */
+  .under-grid > * { min-width: 0; }
+  .under-grid .step > div:last-child { min-width: 0; }
+  .under-grid .how-col .label { margin-bottom:.4rem; }
+  .codecard { background: var(--ink); color: var(--paper); border: var(--line); position: sticky; top: 1rem; }
+  .codecard .ch { display:flex; align-items:center; gap:.45rem; padding:.7rem 1rem; border-bottom: 1px solid rgba(244,241,230,.22); font-family:'Space Mono',monospace; font-size:.66rem; letter-spacing:.16em; text-transform:uppercase; }
+  .codecard .ch i { width:.72rem; height:.72rem; border-radius:50%; display:inline-block; }
+  .codecard .ch .t { margin-left:auto; opacity:.7; }
+  .codecard pre { margin:0; padding:1rem 1.1rem; font-family:'Space Mono',monospace; font-size:.74rem; line-height:1.65; overflow-x:auto; white-space:pre; }
+  .codecard .k { color: var(--yellow); }
+  .codecard .s { color: #7fb0ff; }
+  .codecard .c { color: #9aa0a6; }
+  .codecard .cmd { color: #6fd08c; }
+  .capacity { margin-top:1.3rem; border-left:4px solid var(--yellow); padding:.15rem 0 .15rem 1rem; font-weight:300; font-size:.96rem; }
+  .capacity b { font-weight:600; }
+
+  /* ---------- closing ---------- */
+  .closing { padding: clamp(3rem,7vw,6rem) 0; text-align:left; }
+  .closing h3 { font-size: clamp(2rem,6vw,4.5rem); line-height:.98; text-transform:uppercase; letter-spacing:-.03em; margin:0; font-weight:700; max-width: 16ch; }
+  .closing .actions { margin-top: 2rem; display:flex; flex-wrap:wrap; gap:.9rem; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: var(--line); }
+  footer .wrap { display:flex; flex-wrap:wrap; justify-content:space-between; gap:1rem; padding: 1.6rem var(--gut); align-items:center; }
+  footer .mono { font-size:.74rem; letter-spacing:.1em; text-transform:uppercase; }
+  footer a { text-decoration:none; }
+  footer a.mail { border-bottom:2px solid var(--red); }
+
+  /* ---------- responsive: tablet ---------- */
+  @media (max-width: 820px) {
+    .hero .wrap { grid-template-columns: 1fr; gap: 1.5rem; }
+    .composition { min-height: 200px; }
+    .paths-grid { grid-template-columns: 1fr; }
+    .path { border-left: none; border-top: var(--line); min-height: auto; }
+    .path:first-child { border-top: none; }
+    .how-cols { grid-template-columns: 1fr; gap: 2.5rem; }
+    .under-grid { grid-template-columns: 1fr; gap: 2.5rem; }
+    .codecard { position: static; }
+    /* Wrap the code on narrow screens so its long lines can't widen the page
+       (a fixed `white-space: pre` line would force <body> past the viewport). */
+    .codecard pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .ledger .wrap { grid-template-columns: 1fr; }
+    nav .navlink { display: none; }
+  }
+
+  /* ---------- responsive: phone ---------- */
+  @media (max-width: 560px) {
+    :root { --gut: 1.15rem; }
+    .bar { padding-top: .9rem; padding-bottom: .9rem; }
+    .brand .name { font-size: 1.2rem; }
+    .brand .glyph { width: 32px; height: 32px; }
+    nav { gap: .6rem; }
+    nav .cta { font-size: .6rem; padding: .45rem .6rem; letter-spacing: .04em; }
+
+    .hero h1 { font-size: clamp(1.85rem, 9.2vw, 2.8rem); }
+    .hero p.lede { font-size: 1rem; }
+    .hero .actions .btn { flex: 1 1 100%; justify-content: center; }
+
+    .section-head { flex-direction: column; align-items: flex-start; gap: .5rem; margin-bottom: 1.8rem; }
+
+    .step { grid-template-columns: 46px 1fr; gap: .8rem; }
+    .step .n { width: 44px; height: 44px; font-size: .95rem; }
+
+    .ledger .pts span { font-size: .76rem; }
+    .receipt td { padding: .5rem .8rem; }
+
+    .closing .actions .btn { flex: 1 1 100%; justify-content: center; }
+
+    footer .wrap { flex-direction: column; align-items: flex-start; gap: .8rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <a class="brand" href="#top" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/>
+        <circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/>
+        <polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="#how">How it works</a>
+      <a class="navlink" href="#under-the-hood">Under the hood</a>
+      <a class="navlink" href="#developers">Developers</a>
+      <a class="navlink" href="#nonprofits">Nonprofits</a>
+      <a class="cta mono" href="mailto:hello@givework.dev">hello@givework.dev</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">Agentic Volunteering</span>
+        <h1>Donate the <span class="u">intelligence</span> you already pay for.</h1>
+        <p class="lede">Developers lend their AI agents to nonprofits. Real tasks, run by your own machine on the subscription you already have. No new spend. No busywork. Just capacity, pointed at work that matters.</p>
+        <div class="actions">
+          <a class="btn btn--blue" href="#developers">I want to give &nbsp;→</a>
+          <a class="btn btn--red" href="#nonprofits">I need help &nbsp;→</a>
+        </div>
+      </div>
+      <div class="composition" aria-hidden="true">
+        <svg viewBox="0 0 360 320" preserveAspectRatio="xMidYMid meet">
+          <circle cx="120" cy="110" r="92" fill="#e1342b"/>
+          <rect x="150" y="120" width="170" height="170" fill="#21449c"/>
+          <polygon points="60,300 160,150 260,300" fill="#f3c20a"/>
+          <line x1="0" y1="150" x2="360" y2="150" stroke="#161310" stroke-width="3"/>
+          <circle cx="300" cy="60" r="34" fill="none" stroke="#161310" stroke-width="3"/>
+          <rect x="20" y="20" width="46" height="46" fill="#161310"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- STRIP -->
+  <div class="strip" aria-hidden="true">
+    <div class="run">
+      <span>Free for nonprofits</span><b>◆</b>
+      <span>Powered by volunteers</span><b>◆</b>
+      <span>Every contribution logged</span><b>◆</b>
+      <span>No model jargon, no invoices</span><b>◆</b>
+      <span>Your AI, their cause</span><b>◆</b>
+      <span>Free for nonprofits</span><b>◆</b>
+      <span>Powered by volunteers</span><b>◆</b>
+      <span>Every contribution logged</span><b>◆</b>
+      <span>No model jargon, no invoices</span><b>◆</b>
+      <span>Your AI, their cause</span><b>◆</b>
+    </div>
+  </div>
+
+  <!-- TWO PATHS -->
+  <section class="paths">
+    <div class="wrap">
+      <div class="paths-grid">
+
+        <div class="path path--dev" id="developers">
+          <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><polygon points="56,0 56,56 0,0" fill="#f3c20a"/></svg>
+          <span class="tag">For developers</span>
+          <h2>Put your idle agent to work.</h2>
+          <p>Your Claude subscription includes capacity you rarely finish — especially in headless <span class="mono">claude -p</span> mode. Point that idle, already-included allowance at vetted tasks, let your local runner do the work, and keep a verifiable record of everything you gave.</p>
+          <ul>
+            <li>Runs on your own machine &amp; subscription</li>
+            <li>You set the budget; you stay in control</li>
+            <li>Append-only receipt of every contribution</li>
+          </ul>
+          <div class="spacer"></div>
+          <div class="act"><a class="btn btn--blue" href="mailto:hello@givework.dev?subject=I%20want%20to%20volunteer">Become a volunteer &nbsp;→</a></div>
+        </div>
+
+        <div class="path path--np" id="nonprofits">
+          <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><circle cx="40" cy="16" r="16" fill="#f3c20a"/></svg>
+          <span class="tag">For nonprofits</span>
+          <h2>Tell us what you need. In plain words.</h2>
+          <p>Email what you're drowning in — summaries, data cleanup, drafts, categorization. We turn it into right-sized tasks and route them to volunteers. You never pick a model, write a prompt, or see a bill.</p>
+          <ul>
+            <li>Email hello@givework.dev — that's the whole start</li>
+            <li>No cost, no software to install</li>
+            <li>Real, reviewable results back to you</li>
+          </ul>
+          <div class="spacer"></div>
+          <div class="act"><a class="btn btn--red" href="mailto:hello@givework.dev?subject=We%20need%20help">Email hello@givework.dev &nbsp;→</a></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="how" id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">How it works</span>
+        <h3>Two sides, one ledger.</h3>
+      </div>
+      <div class="how-cols">
+
+        <div class="how-col">
+          <div class="label">For nonprofits</div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Say it plainly</h4><p>Send a plain-language email describing the work. No technical terms required — write it the way you'd ask a colleague.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>We break it down</h4><p>Your request is decomposed into small, well-scoped tasks, each sized so a single volunteer can finish it cleanly.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Volunteers do it</h4><p>Developers' AI agents pick up the tasks and complete them. You get reviewable results — and never a charge.</p></div></div>
+        </div>
+
+        <div class="how-col">
+          <div class="label">For developers</div>
+          <div class="step"><div class="n n--square">01</div><div><h4>Connect your runner</h4><p>Your machine, your AI subscription. The runner checks out work it can afford and does it locally — nothing leaves your control.</p></div></div>
+          <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
+          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the receipt</h4><p>Every checkout and submission is written to an append-only ledger — the record behind your year-end acknowledgment.</p></div></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- LEDGER / TRUST -->
+  <section class="ledger">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">The ledger</span>
+        <h3>Trust, written down.</h3>
+        <p>Givework runs on an append-only ledger. Every reservation, every result, every cent of donated capacity is recorded and reconciled — the books and the receipts can never disagree.</p>
+        <div class="pts">
+          <span><b>→</b> Nonprofits pay nothing, ever.</span>
+          <span><b>→</b> Developers can prove exactly what they gave.</span>
+          <span><b>→</b> Hard budget caps; no run can overspend.</span>
+        </div>
+      </div>
+      <div class="receipt" role="img" aria-label="Example ledger receipt showing a checkout, submit, and accept entry">
+        <div class="rh"><span>Ledger / task #8eb4</span><span>Donor receipt <i class="dot"></i></span></div>
+        <table class="mono">
+          <tbody>
+            <tr><td>checkout · reserve</td><td class="pos">+500</td></tr>
+            <tr><td>submit · actual</td><td class="neg">−380</td></tr>
+            <tr><td>accept · signed off</td><td>0</td></tr>
+          </tbody>
+          <tfoot>
+            <tr><td>donated this task</td><td>120¢</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- UNDER THE HOOD -->
+  <section class="under" id="under-the-hood">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Under the hood</span>
+        <h3>The actual pipeline.</h3>
+      </div>
+      <div class="under-grid">
+
+        <div class="how-col">
+          <div class="label">Request → result</div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Intake</h4><p>A nonprofit emails a plain-language need. We find-or-create their org and store the request — no account, no form, no model names.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model running on our side breaks the request into structured tasks — each with a prompt, an output schema, acceptance criteria, a model, and a hard cost cap in cents.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
+          <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A volunteer's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
+          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner does the work with <span class="mono">claude -p</span> headless on the volunteer's own machine. Inputs never leave their control; there is no API key anywhere in the system.</p></div></div>
+          <div class="step"><div class="n n--tri">06</div><div><h4>Submit &amp; reconcile</h4><p>Actual cost — taken from the CLI's own metering — replaces the reservation. Checkout, submit, and accept each land as an append-only ledger entry, then the reviewed result goes back to the nonprofit.</p></div></div>
+        </div>
+
+        <div>
+          <div class="codecard" role="img" aria-label="A decomposed task and the headless claude -p command that runs it">
+            <div class="ch"><i style="background:var(--red)"></i><i style="background:var(--yellow)"></i><i style="background:var(--blue)"></i><span class="t">runner · local</span></div>
+            <pre><span class="c"># a decomposed, reviewed task</span>
+{
+  <span class="k">"title"</span>: <span class="s">"Summarize intake form"</span>,
+  <span class="k">"spec"</span>: {
+    <span class="k">"prompt"</span>: <span class="s">"…"</span>,
+    <span class="k">"output_schema"</span>: { <span class="k">"summary"</span>: <span class="s">"string"</span> },
+    <span class="k">"acceptance"</span>: <span class="s">"one paragraph, plain English"</span>
+  },
+  <span class="k">"model"</span>: <span class="s">"claude-opus-4-8"</span>,
+  <span class="k">"max_cost_cents"</span>: 500
+}
+
+<span class="c"># run on the volunteer's own machine</span>
+<span class="cmd">$ claude -p --output-format json \
+    --model claude-opus-4-8 \
+    --json-schema schema.json   <span class="c">&lt; prompt</span></span></pre>
+          </div>
+          <p class="capacity">The donated capacity isn't usage anyone bought. It's the <b>free, already-included Claude allowance</b> that mostly goes unused — surfaced through <span class="mono">claude -p</span> headless mode. Givework points that idle allowance at nonprofit work: no new spend, no API keys, all on the volunteer's machine.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing">
+    <div class="wrap">
+      <span class="eyebrow">Get started</span>
+      <h3>The intelligence is already running. Aim it somewhere good.</h3>
+      <div class="actions">
+        <a class="btn btn--blue" href="mailto:hello@givework.dev?subject=I%20want%20to%20volunteer">Volunteer your agent &nbsp;→</a>
+        <a class="btn btn--ghost" href="mailto:hello@givework.dev?subject=We%20need%20help">Ask for help &nbsp;→</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Built for nonprofits · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
