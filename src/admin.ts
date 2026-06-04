@@ -105,6 +105,20 @@ adminRoutes.post('/budgets', async (c) => {
   })(c);
 });
 
+// Verify a dev — promotes a self-serve (GitHub) signup to handle internal/
+// sensitive tasks. Until this is called, the dev can only claim public work.
+adminRoutes.post('/devs/:id/verify', (c) =>
+  adminHandle(async () => {
+    const { rows } = await query(
+      `UPDATE devs SET verified = true WHERE id = $1
+       RETURNING id, github_handle, verified`,
+      [c.req.param('id')],
+    );
+    if (rows.length === 0) throw new OpError(404, 'dev_not_found', 'Unknown dev');
+    return rows[0];
+  })(c),
+);
+
 adminRoutes.post('/tasks/:id/accept', (c) =>
   adminHandle(() => acceptTask(c.req.param('id')))(c),
 );
