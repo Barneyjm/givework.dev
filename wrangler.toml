@@ -32,5 +32,7 @@ enabled = true
 # that doesn't match falls through to the Worker — so the API routes (/intake,
 # /budget, /checkout, /release, /submit, /tasks/open, /admin/*) keep working.
 # Default not_found_handling keeps non-asset paths going to the Worker (no SPA mode).
+# Local preview: `npm run cf:dev` (wrangler dev) serves these assets like prod;
+# `npm run dev` (raw Node) runs the API only and does NOT serve the landing page.
 [assets]
 directory = "./site"
