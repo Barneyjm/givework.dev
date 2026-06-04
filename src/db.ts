@@ -31,7 +31,13 @@ export type Client = pg.PoolClient | pg.Client;
  */
 async function acquire(): Promise<{ client: Client; release: () => Promise<void> }> {
   if (isWorkers) {
-    const client = new Client({ connectionString, connectionTimeoutMillis: 10_000 });
+    // Prefer the Hyperdrive binding (edge-pooled, low-latency) when present;
+    // fall back to the direct DATABASE_URL secret. The dynamic import resolves
+    // only in the Workers runtime and is never reached on Node.
+    // @ts-ignore - 'cloudflare:workers' is a Workers-runtime built-in module
+    const { env } = await import('cloudflare:workers');
+    const cs = (env as Record<string, { connectionString?: string }>).HYPERDRIVE?.connectionString ?? connectionString;
+    const client = new Client({ connectionString: cs, connectionTimeoutMillis: 10_000 });
     await client.connect();
     return { client, release: () => client.end() };
   }
