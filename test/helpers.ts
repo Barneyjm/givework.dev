@@ -7,6 +7,18 @@ import { signDevToken, signAdminToken } from '../src/auth.js';
 export const mintDevToken = (devId: string) => signDevToken(devId);
 export const mintAdminToken = () => signAdminToken();
 
+// resetDb TRUNCATEs every table. The suite must NEVER run against a real
+// database — point it at a local/CI Postgres. Refuse anything that isn't
+// obviously a test DB unless explicitly overridden (TEST_DB_ALLOW_REMOTE=1).
+const url = process.env.DATABASE_URL ?? '';
+const looksLocal = /@(localhost|127\.0\.0\.1|postgres)[:/]/.test(url);
+if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
+  throw new Error(
+    `Refusing to run destructive tests against a non-local database (${url.replace(/:[^:@]*@/, ':***@')}). ` +
+      `Tests TRUNCATE every table. Use a local/CI Postgres, or set TEST_DB_ALLOW_REMOTE=1 to override.`,
+  );
+}
+
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
