@@ -22,7 +22,7 @@ compatibility_flags = ["nodejs_compat"]
 # env.HYPERDRIVE.connectionString and falls back to the DATABASE_URL secret.
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "2dde056e165d48f7a73a1429187c715a"
+id = "4654b8779705462c84ca7e02440c8da6"
 
 [observability]
 enabled = true
