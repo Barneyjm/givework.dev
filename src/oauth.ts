@@ -17,7 +17,16 @@ import { OpError } from './operations.js';
 type Env = { Variables: {} };
 
 const STATE_COOKIE = 'gw_oauth_state';
+const CLI_PORT_COOKIE = 'gw_cli_port';
 const GH_AUTHORIZE = 'https://github.com/login/oauth/authorize';
+
+/** Parse a `?cli=<port>` value into a safe loopback port, or null. */
+function parseCliPort(raw: string | undefined): number | null {
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const port = Number(raw);
+  // Unprivileged, ephemeral range only — the CLI listens on a random high port.
+  return port >= 1024 && port <= 65535 ? port : null;
+}
 const GH_TOKEN = 'https://github.com/login/oauth/access_token';
 const GH_API = 'https://api.github.com';
 
@@ -142,15 +151,29 @@ oauthRoutes.get('/github/login', (c) => {
   // Double-submit CSRF: a random state echoed in both a signed-ish HttpOnly
   // cookie and the GitHub `state` param; the callback requires they match.
   const state = crypto.randomUUID();
+  const isSecure = new URL(c.req.url).protocol === 'https:';
   setCookie(c, STATE_COOKIE, state, {
     httpOnly: true,
     // Secure in prod (always HTTPS); off for plain-HTTP local dev on non-localhost
     // origins, where browsers reject Secure cookies and would break the flow.
-    secure: new URL(c.req.url).protocol === 'https:',
+    secure: isSecure,
     sameSite: 'Lax', // Lax so the cookie rides the top-level GET redirect back.
     path: '/',
     maxAge: 600,
   });
+  // CLI mode: `givework login` opens this with ?cli=<loopback-port>. Remember the
+  // port (validated) so the callback redirects the token back to the local CLI
+  // instead of rendering the browser setup page.
+  const cliPort = parseCliPort(c.req.query('cli'));
+  if (cliPort) {
+    setCookie(c, CLI_PORT_COOKIE, String(cliPort), {
+      httpOnly: true,
+      secure: isSecure,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 600,
+    });
+  }
   const url = new URL(GH_AUTHORIZE);
   url.searchParams.set('client_id', cfg.clientId);
   url.searchParams.set('redirect_uri', cfg.redirectUri);
@@ -165,7 +188,9 @@ oauthRoutes.get('/github/callback', async (c) => {
     const code = c.req.query('code');
     const state = c.req.query('state');
     const cookieState = getCookie(c, STATE_COOKIE);
+    const cliPort = parseCliPort(getCookie(c, CLI_PORT_COOKIE));
     deleteCookie(c, STATE_COOKIE, { path: '/' });
+    deleteCookie(c, CLI_PORT_COOKIE, { path: '/' });
 
     if (!code) throw new OpError(400, 'missing_code', 'Missing authorization code');
     if (!state || !cookieState || state !== cookieState) {
@@ -176,6 +201,13 @@ oauthRoutes.get('/github/callback', async (c) => {
     const user = await fetchGitHubUser(accessToken);
     const devId = await upsertDev(user);
     const token = await signDevToken(devId);
+
+    // CLI mode: hand the token to the local `givework login` server over loopback.
+    // The URL is built ONLY from the validated integer port + a fixed 127.0.0.1
+    // host — never a caller-supplied URL — so this can't be an open redirect.
+    if (cliPort) {
+      return c.redirect(`http://127.0.0.1:${cliPort}/callback?token=${encodeURIComponent(token)}`, 302);
+    }
 
     const apiOrigin = new URL(c.req.url).origin;
     return c.html(tokenPage(user.login, token, apiOrigin));
@@ -202,17 +234,18 @@ code,pre{background:#f4f4f5;border-radius:6px}pre{padding:1rem;overflow-x:auto}
 <h1>Welcome, @${escapeHtml(handle)} 👋</h1>
 <p>Your agent is registered. You can claim <strong>public</strong> tasks right away.
 Internal/sensitive work unlocks once an admin verifies your account.</p>
-<h2>1. Set your runner environment</h2>
+<h2>Connect your agent with the Givework CLI</h2>
+<p>Three commands — no repo to clone. <code>login</code> reopens your browser to finish
+sign-in (you're already signed in, so it's one click), then saves your credential locally.</p>
+<pre>npx github:Barneyjm/givework.dev login
+npx github:Barneyjm/givework.dev budget set 2000   <span class="tok"># cents/month you'll donate</span>
+EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
+<p><strong>Prerequisite:</strong> the <code>claude</code> CLI installed and logged in — that
+logged-in session is the donated capacity (<code>run</code> executes tasks with <code>claude -p</code>).</p>
+<h2>Prefer environment variables?</h2>
+<p>Skip <code>login</code> and use this token directly. It's your credential — keep it secret; it expires in 90 days.</p>
 <pre>export GIVEWORK_API_URL=${escapeHtml(apiOrigin)}
 export GIVEWORK_TOKEN=<span class="tok">${escapeHtml(token)}</span></pre>
-<p>This token is your credential — keep it secret. It expires in 90 days.</p>
-<h2>2. Declare this month's donated budget (in cents)</h2>
-<pre>curl -X POST "$GIVEWORK_API_URL/devs/budget" \\
-  -H "authorization: Bearer $GIVEWORK_TOKEN" \\
-  -H "content-type: application/json" \\
-  -d '{"budget_cents": 2000}'</pre>
-<h2>3. Start your runner</h2>
-<pre>npm run runner</pre>
 </body></html>`;
 }
 

@@ -269,3 +269,73 @@ describe('self-serve budget', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CLI (loopback) OAuth mode — powers `givework login`
+// ---------------------------------------------------------------------------
+
+/** Stub GitHub's token-exchange + user lookup; returns a restore fn. */
+function stubGitHubFetch(ghUser: { id: number; login: string }) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: any) => {
+    const url = String(typeof input === 'string' ? input : input.url);
+    if (url.includes('login/oauth/access_token')) {
+      return new Response(JSON.stringify({ access_token: 'gho_test' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.endsWith('/user')) {
+      return new Response(JSON.stringify({ id: ghUser.id, login: ghUser.login, email: null }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.endsWith('/user/emails')) {
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  return () => { globalThis.fetch = realFetch; };
+}
+
+describe('GitHub OAuth — CLI (loopback) mode', () => {
+  it('login?cli=<port> sets the cli-port cookie', async () => {
+    const login = await req('/auth/github/login?cli=49160');
+    expect(login.status).toBe(302);
+    expect(login.headers.get('set-cookie') ?? '').toContain('gw_cli_port=49160');
+  });
+
+  it('callback 302-redirects the token to http://127.0.0.1:<port>/callback', async () => {
+    const login = await req('/auth/github/login?cli=49160');
+    const state = new URL(login.headers.get('location')!).searchParams.get('state')!;
+    const restore = stubGitHubFetch({ id: 7, login: 'cliuser' });
+    try {
+      const cb = await req(`/auth/github/callback?code=abc&state=${state}`, {
+        headers: { cookie: `gw_oauth_state=${state}; gw_cli_port=49160` },
+      });
+      expect(cb.status).toBe(302);
+      expect(cb.headers.get('location') ?? '').toMatch(/^http:\/\/127\.0\.0\.1:49160\/callback\?token=.+/);
+    } finally {
+      restore();
+    }
+  });
+
+  it('ignores an out-of-range cli port (no cookie set)', async () => {
+    const login = await req('/auth/github/login?cli=80'); // privileged port -> rejected
+    expect(login.headers.get('set-cookie') ?? '').not.toContain('gw_cli_port');
+  });
+
+  it('without a cli cookie, callback still renders the HTML token page', async () => {
+    const login = await req('/auth/github/login');
+    const state = new URL(login.headers.get('location')!).searchParams.get('state')!;
+    const restore = stubGitHubFetch({ id: 8, login: 'webuser' });
+    try {
+      const cb = await req(`/auth/github/callback?code=abc&state=${state}`, {
+        headers: { cookie: `gw_oauth_state=${state}` },
+      });
+      expect(cb.status).toBe(200);
+      expect(cb.headers.get('content-type') ?? '').toContain('text/html');
+    } finally {
+      restore();
+    }
+  });
+});
