@@ -37,7 +37,16 @@ async function acquire(): Promise<{ client: Client; release: () => Promise<void>
     // @ts-ignore - 'cloudflare:workers' is a Workers-runtime built-in module
     const { env } = await import('cloudflare:workers');
     const cs = (env as Record<string, { connectionString?: string }>).HYPERDRIVE?.connectionString ?? connectionString;
-    const client = new Client({ connectionString: cs, connectionTimeoutMillis: 10_000 });
+    // Cap query time so a slow/cold origin (e.g. a Neon free-tier compute waking
+    // from autosuspend) can't hang a Worker request indefinitely. statement_timeout
+    // makes Postgres cancel the query; query_timeout is a client-side backstop in
+    // case the cancel itself stalls (e.g. a wedged connection through Hyperdrive).
+    const client = new Client({
+      connectionString: cs,
+      connectionTimeoutMillis: 10_000,
+      statement_timeout: 15_000,
+      query_timeout: 20_000,
+    });
     await client.connect();
     return { client, release: () => client.end() };
   }
