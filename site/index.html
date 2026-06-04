@@ -147,6 +147,15 @@
   .path--dev .btn--blue { background:#fff; color: var(--blue); border-color:#fff;}
   .path--dev .btn--blue:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink);}
   .path--dev li::before { background: var(--yellow); }
+  .cli-lead { font-family:'Space Mono',monospace; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; font-weight:700; margin:1.4rem 0 .5rem; }
+  pre.cli {
+    background: var(--ink); color: var(--paper); border:2px solid var(--ink);
+    font-family:'Space Mono', ui-monospace, monospace; font-size:.74rem; line-height:1.7;
+    margin:0; padding:.85rem 1rem; overflow-x:auto; white-space:pre;
+  }
+  pre.cli .cli-c { color: var(--yellow); }
+  .cli-note { font-size:.82rem; font-weight:300; margin:.7rem 0 0; }
+  .cli-note .mono { background: rgba(0,0,0,.18); padding:0 .25rem; border-radius:3px; }
   .path--np   { background: var(--red); color: #fff; }
   .path--np .btn--red { background:#fff; color: var(--red); border-color:#fff; }
   .path--np .btn--red:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink); }
@@ -352,6 +361,14 @@
             <li>You set the budget; you stay in control</li>
             <li>Append-only receipt of every contribution</li>
           </ul>
+          <p class="cli-lead">Up and running in three commands:</p>
+          <pre class="cli"><span class="cli-c"># sign in with GitHub (opens your browser)</span>
+npx github:Barneyjm/givework.dev login
+<span class="cli-c"># set how much of your own credit to donate (¢/mo)</span>
+npx github:Barneyjm/givework.dev budget set 2000
+<span class="cli-c"># do donated work on your own claude -p</span>
+EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
+          <p class="cli-note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
           <div class="spacer"></div>
           <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a volunteer &nbsp;→</a></div>
         </div>
@@ -392,7 +409,7 @@
 
         <div class="how-col">
           <div class="label">For developers</div>
-          <div class="step"><div class="n n--square">01</div><div><h4>Connect your runner</h4><p>Your machine, your AI subscription. The runner checks out work it can afford and does it locally — nothing leaves your control.</p></div></div>
+          <div class="step"><div class="n n--square">01</div><div><h4>Sign in &amp; run one command</h4><p><span class="mono">npx github:Barneyjm/givework.dev login</span>, set a budget, then <span class="mono">run</span>. Your machine, your subscription — work is checked out and done locally; nothing leaves your control.</p></div></div>
           <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
           <div class="step"><div class="n n--circle">03</div><div><h4>Keep the receipt</h4><p>Every checkout and submission is written to an append-only ledger — the record behind your year-end acknowledgment.</p></div></div>
         </div>
