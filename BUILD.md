@@ -4,7 +4,7 @@ A build target for Claude Code. This is the **backend ledger core only** — no 
 
 ## Context (for the agent)
 
-Givework is a marketplace where developers donate AI inference capacity to nonprofits ("Agentic Volunteering"). Nonprofits post verifiable tasks; a developer's local runner checks out a task, executes it against the developer's Anthropic Agent SDK credit, and submits the result. The platform tracks budgets and maintains an append-only ledger that later feeds tax-style acknowledgment receipts.
+Givework is a marketplace where developers donate AI inference capacity to nonprofits ("Agentic Volunteering"). Nonprofits post verifiable tasks; a developer's local runner checks out a task, executes it against the developer's Anthropic Agent SDK credit, and submits the result. The platform tracks budgets and maintains an append-only ledger that gives each developer a verifiable record of what they contributed.
 
 Stage 1 builds the part everything else depends on: the budget accounting and task state machine. If the atomic checkout/submit/expire transactions aren't bulletproof, nothing built on top will be. So this stage is small on purpose and heavy on correctness.
 
