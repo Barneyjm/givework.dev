@@ -33,6 +33,12 @@ routes = [
 # These are also what the GitHub Actions deploy expects to already exist on the
 # Worker. `wrangler deploy` does not set secrets; set them out-of-band the first
 # time (locally or via the dashboard), then deploys reuse them.
+#
+# Optional tuning (plain var, not a secret):
+#   GITHUB_AUTOVERIFY_MIN_AGE_DAYS  # min GitHub account age (days) to auto-verify a
+#                                   # self-serve dev for sensitive work. Default 30.
+#                                   # Auto-verify also requires a non-empty public
+#                                   # footprint; admins can still verify by hand.
 
 # Hyperdrive pools + caches connections to Neon on Cloudflare's edge, so the
 # per-request connection in src/db.ts is cheap. The config points at Neon's
