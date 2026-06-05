@@ -66,3 +66,6 @@ enabled = true
 # `npm run dev` (raw Node) runs the API only and does NOT serve the landing page.
 [assets]
 directory = "./site"
+# Default html_handling serves status.html at the clean, extensionless path
+# /status, so the status link is givework.dev/status?task_id=<id> (a query-param
+# page — uncrawled, and the page itself is noindex).

@@ -10,6 +10,7 @@ import {
   getPublicTransparency,
   OpError,
 } from './operations.js';
+import { getRequestStatus } from './intake/operations.js';
 import { query } from './db.js';
 import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
@@ -98,6 +99,17 @@ app.get('/health', async (c) => {
 // name + counts (no contact info or task content). The marketing site can fetch
 // this to render a "who we work with" section.
 app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
+
+// Public per-request status — the capability is the unguessable request id in the
+// link a nonprofit gets by email. Plain-language stage + progress only; 404 for
+// an unknown/invalid id. Backs the status.html page.
+app.get('/requests/:id', (c) =>
+  handle(async () => {
+    const status = await getRequestStatus(c.req.param('id'));
+    if (!status) throw new OpError(404, 'request_not_found', 'Unknown request');
+    return status;
+  })(c),
+);
 
 // --- Dev-authenticated endpoints. dev_id always comes from the token (sub),
 //     never the request body, so a token can only act as its own dev. ---

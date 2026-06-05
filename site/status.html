@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Your request · Givework</title>
+<meta name="robots" content="noindex" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --paper:#f4f1e6; --ink:#161310; --red:#e1342b; --blue:#21449c; --yellow:#f3c20a;
+    --line:3px solid var(--ink);
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:'Jost',system-ui,sans-serif; font-weight:400; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:640px; margin:0 auto; padding:clamp(1.5rem,5vw,3rem) 1.25rem 4rem; }
+  .brand { display:flex; align-items:center; gap:.6rem; text-decoration:none; color:inherit; margin-bottom:2rem; }
+  .brand .name { font-weight:700; font-size:1.3rem; letter-spacing:-.02em; text-transform:uppercase; }
+  .eyebrow { font-family:'Space Mono',monospace; font-size:.72rem; letter-spacing:.24em; text-transform:uppercase; font-weight:700; color:var(--blue); }
+  h1 { font-size:clamp(1.8rem,6vw,2.6rem); line-height:1.05; letter-spacing:-.02em; margin:.4rem 0 1.4rem; text-transform:uppercase; font-weight:700; }
+  .card { border:var(--line); background:#fff; padding:clamp(1.25rem,4vw,2rem); }
+  .org { font-weight:600; font-size:1.15rem; }
+  .sub { font-family:'Space Mono',monospace; font-size:.78rem; color:#5c574e; margin-top:.2rem; }
+
+  /* stepper */
+  .steps { list-style:none; margin:1.8rem 0 0; padding:0; display:flex; flex-direction:column; gap:0; }
+  .step { display:flex; gap:.9rem; align-items:flex-start; padding:.2rem 0; position:relative; }
+  .step .dot { width:1.4rem; height:1.4rem; flex:none; border:var(--line); background:var(--paper); margin-top:.15rem; }
+  .step.done .dot { background:var(--blue); border-color:var(--blue); }
+  .step.current .dot { background:var(--yellow); border-color:var(--ink); }
+  .step .line { position:absolute; left:.65rem; top:1.7rem; bottom:-.6rem; width:3px; background:var(--ink); opacity:.18; }
+  .step:last-child .line { display:none; }
+  .step .t { font-weight:600; }
+  .step.pending .t { opacity:.45; font-weight:400; }
+  .step.current .t { color:var(--ink); }
+
+  .note { margin-top:1.6rem; border-left:4px solid var(--yellow); padding:.4rem 0 .4rem 1rem; font-weight:300; }
+  .bar { margin-top:1.4rem; }
+  .bar .track { height:.7rem; background:rgba(22,19,16,.12); border:2px solid var(--ink); }
+  .bar .fill { height:100%; background:var(--red); width:0; transition:width .4s ease; }
+  .bar .pct { font-family:'Space Mono',monospace; font-size:.76rem; margin-top:.4rem; }
+
+  .muted { font-weight:300; color:#5c574e; }
+  .foot { margin-top:2rem; font-size:.9rem; font-weight:300; }
+  .foot a { color:var(--blue); }
+  .center { text-align:center; padding:2rem 0; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="brand" href="/">
+      <svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name">Givework</span>
+    </a>
+
+    <div id="loading" class="center muted">Loading your request…</div>
+
+    <div id="error" class="center" hidden>
+      <h1>Hmm — we can't find that</h1>
+      <p class="muted">This status link looks broken or expired. Check the link in your email, or reply to it and we'll help.</p>
+    </div>
+
+    <div id="content" hidden>
+      <span class="eyebrow">Your request</span>
+      <h1 id="headline">In progress</h1>
+      <div class="card">
+        <div class="org" id="org"></div>
+        <div class="sub" id="submitted"></div>
+
+        <ol class="steps" id="steps">
+          <li class="step" data-stage="received"><span class="dot"></span><span class="line"></span><span class="t">Received</span></li>
+          <li class="step" data-stage="in_progress"><span class="dot"></span><span class="line"></span><span class="t">In progress</span></li>
+          <li class="step" data-stage="complete"><span class="dot"></span><span class="line"></span><span class="t">Complete</span></li>
+        </ol>
+
+        <div class="bar" id="bar" hidden>
+          <div class="track"><div class="fill" id="fill"></div></div>
+          <div class="pct" id="pct"></div>
+        </div>
+
+        <p class="note" id="note"></p>
+      </div>
+
+      <p class="foot">Questions about your request? Just reply to the email we sent you. <br/>
+        Givework is <a href="/">free for nonprofits</a> — powered by volunteers.</p>
+    </div>
+  </div>
+
+  <script>
+    const ORDER = ['received', 'in_progress', 'complete'];
+
+    function fmtDate(iso) {
+      if (!iso) return '';
+      try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }); }
+      catch { return ''; }
+    }
+
+    function render(s) {
+      document.getElementById('headline').textContent = s.label;
+      document.getElementById('org').textContent = s.org;
+      document.getElementById('submitted').textContent = 'Submitted ' + fmtDate(s.submitted_at);
+      document.getElementById('note').textContent = s.note;
+
+      const closed = s.stage === 'closed';
+      const idx = ORDER.indexOf(s.stage); // -1 when closed
+      document.querySelectorAll('.step').forEach((el) => {
+        const pos = ORDER.indexOf(el.dataset.stage);
+        el.classList.remove('done', 'current', 'pending');
+        if (closed) { el.classList.add('pending'); return; }
+        if (pos < idx) el.classList.add('done');
+        else if (pos === idx) el.classList.add('current');
+        else el.classList.add('pending');
+      });
+
+      // Progress bar only while there are pieces of work in flight or finished.
+      const total = s.progress && s.progress.total;
+      if (!closed && total > 0) {
+        const pct = Math.round((s.progress.done / total) * 100);
+        document.getElementById('fill').style.width = pct + '%';
+        document.getElementById('pct').textContent = s.progress.done + ' of ' + total + ' pieces done';
+        document.getElementById('bar').hidden = false;
+      }
+      document.getElementById('loading').hidden = true;
+      document.getElementById('content').hidden = false;
+    }
+
+    function showError() {
+      document.getElementById('loading').hidden = true;
+      document.getElementById('error').hidden = false;
+    }
+
+    // The link is /status?task_id=<request id>. (Accept ?t= too, for older links.)
+    const params = new URLSearchParams(location.search);
+    const token = params.get('task_id') || params.get('t');
+    if (!token) {
+      showError();
+    } else {
+      fetch('/requests/' + encodeURIComponent(token))
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then(render)
+        .catch(showError);
+    }
+  </script>
+</body>
+</html>

@@ -4,6 +4,8 @@ import {
   ingestInboundEmail,
   dmarcPassed,
   buildOnboardingReply,
+  buildConfirmationReply,
+  statusUrlFor,
 } from '../src/intake/email.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
 import { pool, closePool } from '../src/db.js';
@@ -122,6 +124,8 @@ describe('ingestInboundEmail', () => {
     expect(res.accepted).toBe(true);
     if (!res.accepted) return;
     expect(res.nonprofit_id).toBe(npId);
+    // Carries threading context so the handler can send the confirmation reply.
+    expect(res.reply).toEqual({ subject: 'Cleanup', inReplyTo: '<test-msg-id@local>' });
 
     const { rows } = await pool.query(
       `SELECT from_email, raw_body, nonprofit_id, status FROM intake_requests WHERE id = $1`,
@@ -214,5 +218,32 @@ describe('buildOnboardingReply', () => {
     const subj = decodeWord(raw);
     expect(subj).toContain('Re: Need help');
     expect(subj).not.toContain('Re: Re:');
+  });
+});
+
+describe('buildConfirmationReply', () => {
+  it('confirms receipt with the status link and threads the reply', () => {
+    const url = statusUrlFor('abc-123');
+    const raw = buildConfirmationReply({
+      to: 'director@helpful.org',
+      subject: 'Need help',
+      inReplyTo: '<m@id>',
+      statusUrl: url,
+    });
+    expect(raw).toMatch(/From:.*intake@givework\.dev/);
+    expect(raw).toMatch(/To:.*director@helpful\.org/);
+    expect(decodeWord(raw)).toContain('Re: Need help');
+    expect(raw).toContain('In-Reply-To: <m@id>');
+    expect(raw).toContain(url); // the status-page link
+    expect(url).toBe('https://givework.dev/status?task_id=abc-123');
+  });
+
+  it('uses a default subject when the original had none or was blank', () => {
+    for (const subject of [null, '   ']) {
+      const raw = buildConfirmationReply({ to: 'x@org.org', subject, inReplyTo: null, statusUrl: 'https://givework.dev/status?task_id=1' });
+      const subj = decodeWord(raw);
+      expect(subj).toContain('We got your request');
+      expect(subj).not.toContain('Re: '); // no "Re: " with an empty subject
+    }
   });
 });
