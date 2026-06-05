@@ -257,6 +257,13 @@ describe('buildMime (mailer)', () => {
     expect(raw).not.toContain('References:');
   });
 
+  it('brandedHtml reflows hard-wrapped lines but keeps breaks before bullets and links', () => {
+    const html = brandedHtml('one\ntwo three\nfour\n\n• bullet a\n• bullet b\n\nLink:\nhttps://givework.dev/x');
+    expect(html).toMatch(/one two three four/); // mid-paragraph wraps → spaces
+    expect(html).toContain('<br>• bullet b'); // bullets keep their break
+    expect(html).toContain('<br><a href="https://givework.dev/x"'); // link on its own line
+  });
+
   it('brandedHtml escapes quotes so a crafted URL cannot break out of href', () => {
     const html = brandedHtml('Visit https://evil.example/x"onmouseover="alert(1)');
     expect(html).toContain('&quot;'); // the quote was entity-escaped
