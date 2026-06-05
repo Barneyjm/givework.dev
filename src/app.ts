@@ -12,6 +12,8 @@ import {
 } from './operations.js';
 import { getRequestStatus, getRequestResultsForToken } from './intake/operations.js';
 import { resultsToCsv, resultsToJson } from './results.js';
+import { acceptTaskAndNotify } from './review.js';
+import { type SendEmailBinding } from './mailer.js';
 import { query } from './db.js';
 import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
@@ -151,15 +153,26 @@ app.post('/checkout', requireDev, async (c) => {
 app.post('/submit', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
-    return submitResult(
+    const result = await submitResult(
       dev,
       body.task_id,
       body.result ?? null,
       Number(body.actual_cost_cents),
       body.raw_usage ?? null,
     );
+    // Auto-accept: a verified volunteer's submission flows straight to the
+    // nonprofit — no manual review gate. Non-fatal; the submit already succeeded.
+    try {
+      if (await isDevVerified(dev)) {
+        const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+        await acceptTaskAndNotify(body.task_id, binding);
+      }
+    } catch (err) {
+      console.error('auto-accept on submit failed', err);
+    }
+    return result;
   })(c);
 });
 

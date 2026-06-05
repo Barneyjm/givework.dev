@@ -26,6 +26,8 @@ Dev:
 Admin (needs an admin token — see 'admin login'):
   admin login                paste an admin token
   admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
+  admin review               list submitted work awaiting accept
+  admin accept <taskId>      accept a submission (releases it to the nonprofit)
   admin budget <devId> <cents>
   admin task create --json '{…}'
   admin nonprofit list                       list orgs + their allowlist/task counts

@@ -12,8 +12,32 @@ import {
 } from './helpers.js';
 import { app } from '../src/server.js';
 import { closePool, pool } from '../src/db.js';
+import { shouldAutoVerify } from '../src/oauth.js';
 
 afterAll(closePool);
+
+describe('shouldAutoVerify (GitHub-signal policy)', () => {
+  const old = '2015-01-01T00:00:00Z';
+  const base = { id: 1, login: 'x', email: null, createdAt: old, publicRepos: 3, followers: 1 };
+  it('verifies an established account with a public footprint', () => {
+    expect(shouldAutoVerify(base)).toBe(true);
+  });
+  it('rejects a brand-new account (under the age bar)', () => {
+    const now = new Date('2020-01-15T00:00:00Z').getTime();
+    expect(shouldAutoVerify({ ...base, createdAt: '2020-01-01T00:00:00Z' }, { now })).toBe(false);
+  });
+  it('rejects an old account with zero public footprint', () => {
+    expect(shouldAutoVerify({ ...base, publicRepos: 0, followers: 0 })).toBe(false);
+  });
+  it('rejects when createdAt is missing (incomplete GitHub data → conservative)', () => {
+    expect(shouldAutoVerify({ ...base, createdAt: null })).toBe(false);
+  });
+  it('honors a custom minimum age', () => {
+    const now = new Date('2015-02-01T00:00:00Z').getTime(); // ~31 days old
+    expect(shouldAutoVerify(base, { now, minAgeDays: 90 })).toBe(false);
+    expect(shouldAutoVerify(base, { now, minAgeDays: 7 })).toBe(true);
+  });
+});
 
 function req(path: string, init?: RequestInit) {
   return app.fetch(new Request(`http://test${path}`, init));
@@ -31,7 +55,14 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------
 
 /** Drive the login route, then the callback, stubbing GitHub's HTTP calls. */
-async function signInWithGitHub(ghUser: { id: number; login: string; email?: string | null }) {
+async function signInWithGitHub(ghUser: {
+  id: number;
+  login: string;
+  email?: string | null;
+  created_at?: string;
+  public_repos?: number;
+  followers?: number;
+}) {
   // 1. Login -> 302 with a state param + a matching state cookie.
   const login = await req('/auth/github/login');
   expect(login.status).toBe(302);
@@ -52,7 +83,14 @@ async function signInWithGitHub(ghUser: { id: number; login: string; email?: str
     }
     if (url.endsWith('/user')) {
       return new Response(
-        JSON.stringify({ id: ghUser.id, login: ghUser.login, email: ghUser.email ?? null }),
+        JSON.stringify({
+          id: ghUser.id,
+          login: ghUser.login,
+          email: ghUser.email ?? null,
+          created_at: ghUser.created_at, // omitted → not auto-verified
+          public_repos: ghUser.public_repos ?? 0,
+          followers: ghUser.followers ?? 0,
+        }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }
@@ -93,13 +131,28 @@ describe('GitHub OAuth sign-in', () => {
     expect(rows.length).toBe(1);
     expect(rows[0].github_handle).toBe('octocat');
     expect(Number(rows[0].github_id)).toBe(4242);
-    expect(rows[0].verified).toBe(false); // self-serve starts unverified
+    expect(rows[0].verified).toBe(false); // no qualifying GitHub signal → not auto-verified
 
     // The minted token authenticates against a real dev route.
     const token = tokenFromPage(html);
     const me = await req('/devs/me', { headers: bearer(token) });
     expect(me.status).toBe(200);
     expect((await me.json() as any).github_handle).toBe('octocat');
+  });
+
+  it('auto-verifies an established GitHub account on sign-in', async () => {
+    await signInWithGitHub({
+      id: 777, login: 'veteran', created_at: '2014-05-01T00:00:00Z', public_repos: 12, followers: 30,
+    });
+    const { rows } = await pool.query(`SELECT verified FROM devs WHERE github_id = 777`);
+    expect(rows[0].verified).toBe(true); // GitHub identity is the verification
+  });
+
+  it('does not auto-verify a brand-new throwaway account', async () => {
+    const recent = new Date(Date.now() - 2 * 86_400_000).toISOString(); // 2 days old
+    await signInWithGitHub({ id: 888, login: 'throwaway', created_at: recent, public_repos: 0, followers: 0 });
+    const { rows } = await pool.query(`SELECT verified FROM devs WHERE github_id = 888`);
+    expect(rows[0].verified).toBe(false);
   });
 
   it('rejects a state mismatch (401) — CSRF guard', async () => {

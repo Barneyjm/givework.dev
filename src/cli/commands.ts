@@ -195,6 +195,33 @@ export async function admin(args: string[]): Promise<void> {
       console.log(`✓ verified @${r.github_handle} (${r.id})`);
       return;
     }
+    case 'review': {
+      // The residual manual queue: submitted work awaiting accept (verified devs
+      // auto-accept, so this is mostly unverified-dev public tasks).
+      const adminToken = requireAdminToken();
+      const rows = await apiRequest<any[]>(apiUrl(), { path: '/admin/tasks?status=submitted', token: adminToken });
+      if (!rows.length) { console.log('Nothing awaiting review.'); return; }
+      console.log(`${rows.length} task${rows.length === 1 ? '' : 's'} awaiting accept:`);
+      for (const t of rows) {
+        const preview = typeof t.result === 'string' ? t.result : JSON.stringify(t.result);
+        console.log(`  ${t.id}  @${t.dev ?? '?'}  ${t.actual_cost_cents ?? '?'}¢`);
+        console.log(`    ${t.title}`);
+        console.log(`    → ${String(preview ?? '').slice(0, 160)}`);
+      }
+      console.log('\nAccept with:  givework admin accept <taskId>');
+      return;
+    }
+    case 'accept': {
+      if (!rest[0]) { console.error('Usage: givework admin accept <taskId>'); process.exit(1); }
+      const adminToken = requireAdminToken();
+      const r = await apiRequest<any>(apiUrl(), {
+        method: 'POST',
+        path: `/admin/tasks/${encodeURIComponent(rest[0])}/accept`,
+        token: adminToken,
+      });
+      console.log(`✓ accepted ${rest[0]} (${r.status})`);
+      return;
+    }
     case 'budget': {
       if (!rest[0] || !rest[1]) { console.error('Usage: givework admin budget <devId> <cents>'); process.exit(1); }
       const adminToken = requireAdminToken();
@@ -220,7 +247,7 @@ export async function admin(args: string[]): Promise<void> {
     }
     case 'nonprofit': return adminNonprofit(rest);
     default:
-      console.error('Admin commands: login | verify <devId> | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
+      console.error('Admin commands: login | verify <devId> | review | accept <taskId> | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
       process.exit(1);
   }
 }

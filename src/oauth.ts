@@ -56,6 +56,30 @@ export interface GitHubUser {
   id: number;
   login: string;
   email: string | null;
+  /** ISO timestamp the GitHub account was created — the auto-verify signal. */
+  createdAt: string | null;
+  publicRepos: number;
+  followers: number;
+}
+
+/**
+ * Auto-verify policy: completing GitHub OAuth IS the verification, gated by a
+ * light bar so throwaway accounts can't claim sensitive (PII) work. A real
+ * GitHub account is spoofable but accountable — it pushes authenticity onto the
+ * dev. Default bar: account age >= GITHUB_AUTOVERIFY_MIN_AGE_DAYS (30) and a
+ * non-empty public footprint. Admins can still verify edge cases by hand, and
+ * this never *un*-verifies anyone.
+ */
+export function shouldAutoVerify(
+  user: GitHubUser,
+  opts: { minAgeDays?: number; now?: number } = {},
+): boolean {
+  const minAgeDays = opts.minAgeDays ?? Number(process.env.GITHUB_AUTOVERIFY_MIN_AGE_DAYS ?? 30);
+  const now = opts.now ?? Date.now();
+  if (!user.createdAt) return false;
+  const ageDays = (now - new Date(user.createdAt).getTime()) / 86_400_000;
+  if (!Number.isFinite(ageDays) || ageDays < minAgeDays) return false;
+  return user.publicRepos + user.followers >= 1;
 }
 
 /** Exchange an authorization code for a GitHub access token. Factored for tests. */
@@ -89,7 +113,14 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
   if (!res.ok) {
     throw new OpError(502, 'oauth_user_failed', `GitHub user lookup failed: ${res.status}`);
   }
-  const user = (await res.json()) as { id: number; login: string; email: string | null };
+  const user = (await res.json()) as {
+    id: number;
+    login: string;
+    email: string | null;
+    created_at?: string;
+    public_repos?: number;
+    followers?: number;
+  };
 
   // The public profile email is often null; fall back to the primary verified
   // address from /user/emails (granted by the `user:email` scope).
@@ -101,7 +132,14 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
       email = emails.find((e) => e.primary && e.verified)?.email ?? null;
     }
   }
-  return { id: user.id, login: user.login, email };
+  return {
+    id: user.id,
+    login: user.login,
+    email,
+    createdAt: user.created_at ?? null,
+    publicRepos: user.public_repos ?? 0,
+    followers: user.followers ?? 0,
+  };
 }
 
 /**
@@ -115,30 +153,34 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
  *   3. insert — first time we've seen this account. ON CONFLICT (github_id) makes
  *      a concurrent first-login race resolve to an update instead of a 23505.
  */
-export async function upsertDev(user: GitHubUser): Promise<string> {
+export async function upsertDev(user: GitHubUser, autoVerify = false): Promise<string> {
   return withTransaction(async (client) => {
+    // `verified = verified OR $autoVerify` only ever promotes — a re-login of a
+    // now-eligible account verifies it, and an already-verified dev is never
+    // downgraded.
     const byId = await client.query<{ id: string }>(
-      `UPDATE devs SET github_handle = $1, email = COALESCE(email, $2)
+      `UPDATE devs SET github_handle = $1, email = COALESCE(email, $2), verified = verified OR $4
         WHERE github_id = $3 RETURNING id`,
-      [user.login, user.email, user.id],
+      [user.login, user.email, user.id, autoVerify],
     );
     if (byId.rows[0]) return byId.rows[0].id;
 
     const byHandle = await client.query<{ id: string }>(
-      `UPDATE devs SET github_id = $1, email = COALESCE(email, $2)
+      `UPDATE devs SET github_id = $1, email = COALESCE(email, $2), verified = verified OR $4
         WHERE github_handle = $3 AND github_id IS NULL RETURNING id`,
-      [user.id, user.email, user.login],
+      [user.id, user.email, user.login, autoVerify],
     );
     if (byHandle.rows[0]) return byHandle.rows[0].id;
 
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO devs (github_id, github_handle, email)
-       VALUES ($1, $2, $3)
+      `INSERT INTO devs (github_id, github_handle, email, verified)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (github_id) DO UPDATE
          SET github_handle = EXCLUDED.github_handle,
-             email = COALESCE(devs.email, EXCLUDED.email)
+             email = COALESCE(devs.email, EXCLUDED.email),
+             verified = devs.verified OR EXCLUDED.verified
        RETURNING id`,
-      [user.id, user.login, user.email],
+      [user.id, user.login, user.email, autoVerify],
     );
     return inserted.rows[0].id;
   });
@@ -199,7 +241,8 @@ oauthRoutes.get('/github/callback', async (c) => {
 
     const accessToken = await exchangeCode(code, cfg);
     const user = await fetchGitHubUser(accessToken);
-    const devId = await upsertDev(user);
+    // GitHub identity IS the verification (gated by a light bar) — no manual step.
+    const devId = await upsertDev(user, shouldAutoVerify(user));
     const token = await signDevToken(devId);
 
     // CLI mode: hand the token to the local `givework login` server over loopback.
