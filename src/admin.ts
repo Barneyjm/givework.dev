@@ -1,10 +1,8 @@
 import { Hono } from 'hono';
 import { query } from './db.js';
-import { acceptTask, rejectTask, OpError } from './operations.js';
-import { completedRequestForTask, getRequestResults } from './intake/operations.js';
-import { completionEmail, statusUrlFor } from './intake/email.js';
-import { sendEmail, type SendEmailBinding } from './mailer.js';
-import { resultsToFile } from './results.js';
+import { rejectTask, OpError } from './operations.js';
+import { acceptTaskAndNotify } from './review.js';
+import { type SendEmailBinding } from './mailer.js';
 import { requireAdmin, signDevToken } from './auth.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
@@ -236,28 +234,34 @@ adminRoutes.post('/devs/:id/verify', (c) =>
   })(c),
 );
 
-adminRoutes.post('/tasks/:id/accept', (c) =>
+const TASK_STATUSES = new Set(['open', 'locked', 'submitted', 'accepted', 'rejected', 'expired']);
+
+// List tasks (optionally by status) for the admin review loop — e.g. the small
+// queue of submitted work from unverified devs that still needs a manual accept.
+adminRoutes.get('/tasks', (c) =>
   adminHandle(async () => {
-    const taskId = c.req.param('id');
-    const res = await acceptTask(taskId);
-    // If this acceptance completed the whole request, email the nonprofit. The
-    // accept already succeeded, so a send failure is non-fatal — log and move on.
-    try {
-      const done = await completedRequestForTask(taskId);
-      if (done) {
-        const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-        const results = await getRequestResults(done.request_id);
-        await sendEmail(binding, completionEmail({
-          to: done.from_email,
-          statusUrl: statusUrlFor(done.request_id),
-          // Attach the results so they're in the inbox; omit if there's nothing.
-          attachment: results.length ? resultsToFile(results) : undefined,
-        }));
-      }
-    } catch (err) {
-      console.error('completion email failed', err);
+    const status = c.req.query('status');
+    if (status && !TASK_STATUSES.has(status)) {
+      throw new OpError(400, 'bad_input', `unknown status: ${status}`);
     }
-    return res;
+    const { rows } = await query(
+      `SELECT t.id, t.title, t.status, t.actual_cost_cents, t.intake_request_id,
+              d.github_handle AS dev, t.result
+         FROM tasks t
+         LEFT JOIN devs d ON d.id = t.assigned_dev_id
+        WHERE ($1::text IS NULL OR t.status = $1::task_status)
+        ORDER BY t.submitted_at DESC NULLS LAST, t.created_at DESC
+        LIMIT 50`,
+      [status ?? null],
+    );
+    return rows;
+  })(c),
+);
+
+adminRoutes.post('/tasks/:id/accept', (c) =>
+  adminHandle(() => {
+    const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+    return acceptTaskAndNotify(c.req.param('id'), binding);
   })(c),
 );
 
