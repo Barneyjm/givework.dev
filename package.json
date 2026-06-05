@@ -21,6 +21,7 @@
     "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/givework.mjs --banner:js='#!/usr/bin/env node'",
     "prepare": "npm run build:cli",
     "mint-token": "node --env-file-if-exists=.env --import tsx scripts/mint-token.ts",
+    "intake-email": "node --import tsx scripts/intake-email.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "cf:dev": "wrangler dev",

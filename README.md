@@ -169,6 +169,34 @@ curl -s -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' \
 # From here it's the normal loop — a funded dev's runner checks them out.
 ```
 
+#### Testing the email path locally
+
+The whole inbound-email flow — parse → DMARC gate → allowlist → decompose — runs
+without any email infrastructure. Two ways:
+
+```bash
+export DATABASE_URL='postgres://postgres:postgres@localhost:5433/givework'  # local DB only
+
+# 1. Pipe a raw .eml through the exact code the Worker's email() handler uses.
+#    --seed adds a verified nonprofit so the sender is allowlisted; --dmarc
+#    simulates Cloudflare's verdict (default pass). The script refuses any
+#    non-local DATABASE_URL since it writes rows.
+npm run intake-email -- message.eml --seed director@helpful.org     # -> accepted
+npm run intake-email -- message.eml --seed director@helpful.org --dmarc fail  # -> unauthenticated
+npm run intake-email -- message.eml                                 # -> sender_not_approved
+```
+
+```bash
+# 2. Full Worker runtime via wrangler dev, hitting the real email() binding.
+#    Point Hyperdrive at the local DB, then POST a raw message to the email
+#    handler endpoint (include an Authentication-Results line so DMARC passes).
+export WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="$DATABASE_URL"
+npm run cf:dev   # wrangler dev, serves on :8787
+curl -X POST 'http://localhost:8787/cdn-cgi/handler/email' \
+  --url-query 'from=director@helpful.org' --url-query 'to=intake@givework.dev' \
+  --data-binary @message.eml
+```
+
 Inbound requests default to `sensitive`. Allowlisted email attaches to the
 matched verified nonprofit; the manual admin path find-or-creates a provisional
 org keyed by sender, so repeat requests map to one org.
