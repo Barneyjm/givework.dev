@@ -108,6 +108,31 @@ export async function version(): Promise<void> {
   console.log(`${v.service}  ${v.commit?.slice(0, 8)} (${v.ref})${v.deployed_at ? `  deployed ${v.deployed_at}` : ''}`);
 }
 
+// Browse the open task pool — what `run` would pick from, without claiming any.
+// The API pins unverified devs to public tasks, so the listing reflects what you
+// can actually check out. Default page is small; use --limit to see more.
+export async function tasks(args: string[]): Promise<void> {
+  const token = requireToken();
+  const qs = new URLSearchParams();
+  const max = arg(args, '--max');
+  const sensitivity = arg(args, '--sensitivity');
+  const limit = arg(args, '--limit');
+  if (max) qs.set('max_cost_cents', max);
+  if (sensitivity) qs.set('sensitivity', sensitivity);
+  if (limit) qs.set('limit', limit);
+  const q = qs.toString();
+  const rows = await apiRequest<any[]>(apiUrl(), { path: `/tasks/open${q ? `?${q}` : ''}`, token });
+  if (!rows.length) {
+    console.log('No open tasks right now. Try again later, or run:  givework run --watch');
+    return;
+  }
+  console.log(`${rows.length} open task${rows.length === 1 ? '' : 's'}:`);
+  for (const t of rows) {
+    console.log(`  ${t.id}`);
+    console.log(`    ${t.title}  ·  ${t.model}  ·  ~${t.est_cost_cents}¢ (cap ${t.max_cost_cents}¢)  ·  ${t.sensitivity}`);
+  }
+}
+
 export async function run(args: string[]): Promise<void> {
   const token = requireToken();
   const base = apiUrl();
