@@ -8,9 +8,14 @@ import { receiveIntake, findApprovedNonprofitForSender } from './operations.js';
 // Why this shape is safe:
 //  - The Worker is the only caller; there is no public, unauthenticated HTTP
 //    intake endpoint to spoof. Nothing inbound ever touches a volunteer machine.
-//  - Email Routing only delivers mail that passes SPF/DKIM/DMARC, and we gate
-//    again on an allowlist of verified nonprofits — strangers and spam are
-//    rejected before the decomposer (and its token spend) is ever reached.
+//  - The `From` header is trivially forgeable, so we do NOT trust it on its own.
+//    Email Routing does not drop unauthenticated mail — it *delivers* it and
+//    annotates an Authentication-Results header with its SPF/DKIM/DMARC verdict.
+//    We require dmarc=pass (which authenticates the From-header domain) before
+//    matching the sender against the allowlist of verified nonprofits. Without
+//    that gate, anyone could spoof `From: x@<partner-domain>` and impersonate a
+//    partnered org. Strangers and unauthenticated mail are rejected before the
+//    decomposer (and its token spend) is ever reached.
 //  - Even an allowlisted request only produces a *draft*; a human reviews and
 //    publishes before anything runs. Raw email never auto-executes.
 
@@ -56,19 +61,44 @@ export async function parseInboundEmail(
 
 export type IngestResult =
   | { accepted: true; intake_id: string; nonprofit_id: string }
-  | { accepted: false; reason: 'no_sender' | 'sender_not_approved' | 'empty_body' };
+  | { accepted: false; reason: 'no_sender' | 'unauthenticated' | 'sender_not_approved' | 'empty_body' };
 
 /**
- * Parse, allowlist-check, and (if approved) hand an inbound email to the intake
- * pipeline. Returns a structured result rather than throwing for the expected
- * "rejected" cases, so the Worker handler can map them to a clean SMTP reject.
- * Genuine failures (DB down, decomposer crash) still throw.
+ * Whether the message's From-header domain is DMARC-authenticated, per the
+ * Authentication-Results header Cloudflare prepends. We read the FIRST dmarc=
+ * token: Cloudflare adds its verdict at the top of the header set, so the first
+ * match is the trusted one — a forged Authentication-Results in the sender's own
+ * body sorts below it and can't flip the result. dmarc=pass means SPF or DKIM
+ * passed *and* aligned with the From domain, i.e. From is not spoofed.
+ */
+export function dmarcPassed(authResults: string | null | undefined): boolean {
+  if (!authResults) return false;
+  const m = authResults.match(/dmarc=([a-z]+)/i);
+  return m?.[1]?.toLowerCase() === 'pass';
+}
+
+export interface InboundEmailMeta {
+  /** Cloudflare's Authentication-Results header value (message.headers.get(...)). */
+  authResults?: string | null;
+}
+
+/**
+ * Parse, authenticate, allowlist-check, and (if approved) hand an inbound email
+ * to the intake pipeline. Returns a structured result rather than throwing for
+ * the expected "rejected" cases, so the Worker handler can map them to a clean
+ * SMTP reject. Genuine failures (DB down, decomposer crash) still throw.
+ *
+ * The DMARC gate runs before the allowlist: we only trust `from` once its domain
+ * is authenticated, so a spoofed `From: x@<partner-domain>` can't match.
  */
 export async function ingestInboundEmail(
   raw: ArrayBuffer | Uint8Array | string,
+  meta: InboundEmailMeta = {},
 ): Promise<IngestResult> {
   const parsed = await parseInboundEmail(raw);
   if (!parsed.from) return { accepted: false, reason: 'no_sender' };
+
+  if (!dmarcPassed(meta.authResults)) return { accepted: false, reason: 'unauthenticated' };
 
   const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
   if (!nonprofitId) return { accepted: false, reason: 'sender_not_approved' };
@@ -86,10 +116,14 @@ export async function ingestInboundEmail(
 }
 
 // Minimal shape of Cloudflare's ForwardableEmailMessage — typed locally to avoid
-// pulling in @cloudflare/workers-types just for this one handler.
+// pulling in @cloudflare/workers-types just for this one handler. `headers` is
+// Cloudflare's view of the received headers, including the Authentication-Results
+// it prepends; `from` is the authenticated envelope sender (unused for now — the
+// allowlist trusts the DMARC-aligned From header instead).
 interface ForwardableEmailMessage {
   readonly from: string;
   readonly to: string;
+  readonly headers: Headers;
   readonly raw: ReadableStream<Uint8Array>;
   readonly rawSize: number;
   setReject(reason: string): void;
@@ -97,6 +131,8 @@ interface ForwardableEmailMessage {
 
 const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason'], string> = {
   no_sender: 'Could not read a sender address.',
+  unauthenticated:
+    'Could not verify your sending domain (DMARC). Please email hello@givework.dev to get started.',
   sender_not_approved:
     'This address is for partnered nonprofits. To get started, email hello@givework.dev.',
   empty_body: 'The message had no readable text. Please describe your need in plain text.',
@@ -104,8 +140,9 @@ const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason']
 
 /**
  * Cloudflare Email Worker handler. Bound as `email` on the Worker's default
- * export. Reads the raw message, runs it through ingestInboundEmail, and rejects
- * (a connection-time SMTP reject, not a generated bounce) anything not accepted.
+ * export. Reads the raw message + Cloudflare's Authentication-Results, runs it
+ * through ingestInboundEmail, and rejects (a connection-time SMTP reject, not a
+ * generated bounce) anything not accepted.
  */
 export async function emailHandler(
   message: ForwardableEmailMessage,
@@ -113,7 +150,8 @@ export async function emailHandler(
   let result: IngestResult;
   try {
     const raw = await new Response(message.raw).arrayBuffer();
-    result = await ingestInboundEmail(raw);
+    const authResults = message.headers.get('authentication-results');
+    result = await ingestInboundEmail(raw, { authResults });
   } catch (err) {
     console.error('intake email ingest failed', err);
     // Reject so the sender's server retries / surfaces the failure rather than

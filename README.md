@@ -139,10 +139,14 @@ unauthenticated intake endpoint — nothing to spoof or spam, and nothing inboun
 ever touches a volunteer machine. See `src/intake/email.ts` for the security
 model and `wrangler.toml` for the one-time Email Routing setup.
 
-Only mail from an **allowlisted** (verified) nonprofit is processed — matched by
-exact `contact_email` or org domain (consumer-mailbox domains match by exact
-address only). Everything else is rejected at SMTP time, before the decomposer
-(and its token spend) is ever reached. First contact / onboarding happens at
+Mail must clear two gates before anything happens. First, **DMARC must pass** —
+the `From` header is forgeable, so we require `dmarc=pass` from the
+Authentication-Results Cloudflare adds (it delivers unauthenticated mail too, it
+doesn't drop it), which authenticates the `From` domain. Then the sender must be
+on the **allowlist** of verified nonprofits — matched by exact `contact_email`
+or org domain (consumer-mailbox domains match by exact address only). Everything
+else is rejected at SMTP time, before the decomposer (and its token spend) is
+ever reached. First contact / onboarding happens at
 `hello@givework.dev`, which routes to a human inbox, not the Worker.
 
 ```bash
