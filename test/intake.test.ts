@@ -245,6 +245,12 @@ describe('extractTasks (tolerant JSON extraction)', () => {
     expect(out).toHaveLength(1);
     expect(out[0].title).toBe('has } brace');
   });
+  it('returns [] when .tasks is present but not an array (no TypeError downstream)', () => {
+    // A model returning {tasks: "..."} or {tasks: {...}} must not reach
+    // finalizeTasks' .slice()/.map() — it yields [] and the caller falls back.
+    expect(extractTasks('{"tasks":"just one thing"}')).toEqual([]);
+    expect(extractTasks('{"tasks":{"a":1}}')).toEqual([]);
+  });
   it('throws when there is no JSON', () => {
     expect(() => extractTasks('the model said no')).toThrow();
   });
@@ -272,6 +278,23 @@ describe('CliDecomposer', () => {
     expect(seen!.cmd).toBe('ollama');
     expect(seen!.args).toEqual(['run', 'm']);
     expect(seen!.input).toContain('summarize a report'); // the request body reached the model
+  });
+
+  it('substitutes {model} inside an arg token (e.g. --model={model}), not just standalone', async () => {
+    const prev = process.env.DECOMPOSER_ARGS;
+    process.env.DECOMPOSER_ARGS = 'run --model={model} --json';
+    try {
+      let seen: string[] = [];
+      const run = async (_c: string, args: string[]) => {
+        seen = args;
+        return JSON.stringify({ tasks: [goodTask] });
+      };
+      await new CliDecomposer({ cmd: 'ollama', model: 'glm-4.7-flash', run }).decompose(input);
+      expect(seen).toEqual(['run', '--model=glm-4.7-flash', '--json']);
+    } finally {
+      if (prev === undefined) delete process.env.DECOMPOSER_ARGS;
+      else process.env.DECOMPOSER_ARGS = prev;
+    }
   });
 
   it('falls back to the stub when the CLI errors or returns junk', async () => {

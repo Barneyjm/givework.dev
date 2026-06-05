@@ -308,7 +308,11 @@ export function extractTasks(text: string): unknown[] {
   ) {
     return extractTasks(parsed.result);
   }
-  return Array.isArray(parsed) ? parsed : (parsed?.tasks ?? []);
+  if (Array.isArray(parsed)) return parsed;
+  // Only treat .tasks as the list if it's actually an array — a model that
+  // returns {tasks: "..."} or {tasks: {...}} would otherwise blow up
+  // finalizeTasks' .slice()/.map(). Anything else → no tasks → stub fallback.
+  return Array.isArray(parsed?.tasks) ? parsed.tasks : [];
 }
 
 /** Normalize + cap a raw task list, dropping empties. Shared by the model decomposers. */
@@ -391,7 +395,8 @@ export type CliRun = (cmd: string, args: string[], input: string) => Promise<str
 /** Default args for known CLIs; otherwise rely on DECOMPOSER_ARGS. `{model}` is substituted. */
 function defaultCliArgs(cmd: string, model: string): string[] {
   const envArgs = process.env.DECOMPOSER_ARGS;
-  if (envArgs) return envArgs.split(/\s+/).filter(Boolean).map((a) => (a === '{model}' ? model : a));
+  // Substitute {model} anywhere in a token, so `--model={model}` works too.
+  if (envArgs) return envArgs.split(/\s+/).filter(Boolean).map((a) => a.split('{model}').join(model));
   const base = cmd.split('/').pop();
   if (base === 'ollama') return ['run', model];
   if (base === 'claude') return ['-p'];

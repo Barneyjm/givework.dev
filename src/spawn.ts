@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 // Hard cap on captured stdout. A decomposition draft is a few KB of JSON; a CLI
 // streaming far more than this is runaway/hostile, so we kill it rather than let
 // `out` grow until the (long-lived) watcher process OOMs.
-const MAX_STDOUT_BYTES = 8 * 1024 * 1024; // 8 MiB
+const MAX_STDOUT_CHARS = 8 * 1024 * 1024; // ~8M chars
 
 /** Spawn `cmd args…`, write `input` to stdin, resolve stdout. Throws on non-zero exit / spawn error / timeout / oversized output. */
 export function spawnCli(
@@ -21,6 +21,10 @@ export function spawnCli(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    // Decode as UTF-8 via each stream's StringDecoder so a multi-byte character
+    // split across two chunks isn't corrupted (raw `buf += chunk` would mangle it).
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
@@ -29,10 +33,10 @@ export function spawnCli(
     }, timeoutMs);
     child.stdout.on('data', (d) => {
       out += d;
-      if (out.length > MAX_STDOUT_BYTES) {
+      if (out.length > MAX_STDOUT_CHARS) {
         clearTimeout(timer);
         child.kill('SIGKILL');
-        reject(new Error(`${cmd} produced more than ${MAX_STDOUT_BYTES} bytes — aborted`));
+        reject(new Error(`${cmd} produced more than ${MAX_STDOUT_CHARS} chars — aborted`));
       }
     });
     child.stderr.on('data', (d) => (err += d));
