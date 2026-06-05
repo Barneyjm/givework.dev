@@ -10,7 +10,8 @@ import {
   getPublicTransparency,
   OpError,
 } from './operations.js';
-import { getRequestStatus } from './intake/operations.js';
+import { getRequestStatus, getRequestResultsForToken } from './intake/operations.js';
+import { resultsToCsv, resultsToJson } from './results.js';
 import { query } from './db.js';
 import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
@@ -110,6 +111,30 @@ app.get('/requests/:id', (c) =>
     return status;
   })(c),
 );
+
+// Public results — same unguessable-id capability, but only once the request is
+// complete (no partial-output leak). Default returns JSON for the page preview;
+// ?download=csv|json returns a file. 404 until complete / unknown id.
+app.get('/requests/:id/results', async (c) => {
+  const results = await getRequestResultsForToken(c.req.param('id'));
+  if (!results) {
+    return c.json({ error: 'not_ready', message: 'Results are not available yet' }, 404);
+  }
+  const download = c.req.query('download');
+  if (download === 'csv') {
+    return c.body(resultsToCsv(results), 200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="givework-results.csv"',
+    });
+  }
+  if (download === 'json') {
+    return c.body(resultsToJson(results), 200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="givework-results.json"',
+    });
+  }
+  return c.json({ results });
+});
 
 // --- Dev-authenticated endpoints. dev_id always comes from the token (sub),
 //     never the request body, so a token can only act as its own dev. ---

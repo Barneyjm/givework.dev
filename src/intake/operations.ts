@@ -1,6 +1,7 @@
 import { withTransaction, query, type Client } from '../db.js';
 import { OpError } from '../operations.js';
 import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
+import type { TaskResult } from '../results.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -243,6 +244,38 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
     note,
     progress: { done: r.done, total: r.total },
   };
+}
+
+/**
+ * A completed request's task outputs, for the results download + email
+ * attachment. Returns the per-task results in order. Caller is responsible for
+ * the access check (token + completeness); see getRequestResultsForToken.
+ */
+export async function getRequestResults(requestId: string): Promise<TaskResult[]> {
+  const { rows } = await query<{ title: string; result: unknown }>(
+    `SELECT title, result FROM tasks
+      WHERE intake_request_id = $1 AND result IS NOT NULL
+      ORDER BY created_at ASC`,
+    [requestId],
+  );
+  return rows.map((r) => ({ title: r.title, result: r.result }));
+}
+
+/**
+ * Token-gated results for the public page/download: returns the task outputs
+ * only when the request exists and is fully accepted (complete); null otherwise
+ * (unknown/invalid id, or work still in progress — we don't leak partial output).
+ */
+export async function getRequestResultsForToken(token: string): Promise<TaskResult[] | null> {
+  const status = await getRequestStatus(token);
+  if (!status || status.stage !== 'complete') return null;
+  // getRequestStatus validated the token is a real, complete request; fetch by id.
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM intake_requests WHERE id = $1`,
+    [token],
+  );
+  if (!rows[0]) return null;
+  return getRequestResults(rows[0].id);
 }
 
 export interface CompletionTarget {
