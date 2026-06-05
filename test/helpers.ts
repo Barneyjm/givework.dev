@@ -48,6 +48,18 @@ export async function createNonprofit(name = 'Test NP'): Promise<string> {
   return rows[0].id;
 }
 
+/** A verified (allowlisted) nonprofit with a specific contact address. */
+export async function createVerifiedNonprofit(
+  contactEmail: string,
+  name = 'Verified NP',
+): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO nonprofits (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
+    [name, contactEmail],
+  );
+  return rows[0].id;
+}
+
 /** Set the dev's current-period budget (in cents). */
 export async function setBudget(devId: string, budgetCents: number): Promise<void> {
   await pool.query(

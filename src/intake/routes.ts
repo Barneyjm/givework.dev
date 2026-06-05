@@ -16,12 +16,17 @@ function handle<T>(fn: () => Promise<T>) {
   return async (c: any) => c.json((await fn()) as any);
 }
 
-// Public intake endpoint — simulates an inbound email webhook. Unauthenticated
-// on purpose: anyone can email intake@givework.dev. STAGE 5: a real email
-// provider (SES/Postmark) posting here behind a shared webhook secret.
-export const publicIntakeRoutes = new Hono<Env>();
+// Admin review/publish surface. Mounted under the already-admin-gated router,
+// but we also guard here so it's safe if mounted elsewhere.
+//
+// Inbound nonprofit mail now arrives via the Cloudflare Email Worker
+// (src/intake/email.ts), which calls receiveIntake() in-process — so there is
+// no public, unauthenticated HTTP intake endpoint to spoof or spam. The manual
+// POST /admin/intake below is admin-only, for ops to enter or replay a request.
+export const adminIntakeRoutes = new Hono<Env>();
+adminIntakeRoutes.use('*', requireAdmin);
 
-publicIntakeRoutes.post('/intake', async (c) => {
+adminIntakeRoutes.post('/intake', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return handle(() =>
     receiveIntake({
@@ -29,14 +34,10 @@ publicIntakeRoutes.post('/intake', async (c) => {
       subject: body.subject,
       body: body.body,
       attachments: body.attachments,
+      nonprofit_id: body.nonprofit_id,
     }),
   )(c);
 });
-
-// Admin review/publish surface. Mounted under the already-admin-gated router,
-// but we also guard here so it's safe if mounted elsewhere.
-export const adminIntakeRoutes = new Hono<Env>();
-adminIntakeRoutes.use('*', requireAdmin);
 
 adminIntakeRoutes.get('/intake', (c) => handle(() => listIntake(c.req.query('status')))(c));
 

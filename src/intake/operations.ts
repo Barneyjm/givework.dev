@@ -10,6 +10,49 @@ export interface ReceiveInput {
   subject?: string;
   body: string;
   attachments?: { uri: string; filename?: string; content_type?: string }[];
+  /**
+   * When set, attach the request to this existing nonprofit instead of
+   * find-or-creating a provisional one. The inbound-email path passes the
+   * pre-approved nonprofit it matched the sender to (see
+   * findApprovedNonprofitForSender), so allowlisted mail lands on the real org.
+   */
+  nonprofit_id?: string;
+}
+
+// Consumer mailbox providers: a verified nonprofit whose contact is e.g.
+// jane@gmail.com must NOT authorize the entire gmail.com domain. For these we
+// fall back to exact-address matching only. Org domains authorize by domain.
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com',
+  'hotmail.com', 'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com',
+  'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com',
+]);
+
+/**
+ * The allowlist gate for inbound email. Returns the id of a verified nonprofit
+ * that authorizes this sender — by exact contact_email, or by matching org
+ * domain (consumer-mailbox domains match by exact address only) — else null.
+ * Intake never trusts an unrecognised sender; the email handler rejects when
+ * this returns null, so spam and strangers never reach the decomposer.
+ */
+export async function findApprovedNonprofitForSender(
+  email: string,
+): Promise<string | null> {
+  const addr = email.trim().toLowerCase();
+  const at = addr.lastIndexOf('@');
+  if (at <= 0 || at === addr.length - 1) return null;
+  const domain = addr.slice(at + 1);
+  const domainForMatch = FREE_EMAIL_DOMAINS.has(domain) ? null : domain;
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM nonprofits
+      WHERE verified = true
+        AND ( lower(contact_email) = $1
+              OR ($2::text IS NOT NULL AND lower(split_part(contact_email, '@', 2)) = $2) )
+      ORDER BY (lower(contact_email) = $1) DESC, created_at ASC
+      LIMIT 1`,
+    [addr, domainForMatch],
+  );
+  return rows[0]?.id ?? null;
 }
 
 /**
@@ -43,7 +86,8 @@ export async function receiveIntake(input: ReceiveInput) {
   // Txn 1: persist the inbound request (status 'received'). Kept short — no model
   // call inside an open transaction.
   const { intakeId, nonprofitId } = await withTransaction(async (client) => {
-    const nonprofitId = await findOrCreateProvisionalNonprofit(client, input.from_email);
+    const nonprofitId =
+      input.nonprofit_id ?? (await findOrCreateProvisionalNonprofit(client, input.from_email));
     const ins = await client.query<{ id: string }>(
       `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
        VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
