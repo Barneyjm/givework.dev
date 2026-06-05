@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { arg } from '../src/cli/commands.js';
+import { arg, boolArg } from '../src/cli/commands.js';
 import { apiRequest, ApiError } from '../src/cli/api.js';
 
 // CLI unit tests — pure pieces only (arg parsing, API error mapping, config
@@ -13,6 +13,14 @@ describe('arg()', () => {
     const a = ['set', '2000', '--interval', '30', '--watch'];
     expect(arg(a, '--interval')).toBe('30');
     expect(arg(a, '--max')).toBeUndefined();
+  });
+});
+
+describe('boolArg()', () => {
+  it('parses true/false and returns undefined when the flag is absent', () => {
+    expect(boolArg(['set', 'id', '--verified', 'true'], '--verified')).toBe(true);
+    expect(boolArg(['set', 'id', '--listed', 'false'], '--listed')).toBe(false);
+    expect(boolArg(['set', 'id', '--name', 'x'], '--verified')).toBeUndefined();
   });
 });
 

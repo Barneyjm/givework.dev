@@ -152,8 +152,123 @@ export async function admin(args: string[]): Promise<void> {
       console.log(`✓ created task ${r.id} — "${r.title}" (${r.status})`);
       return;
     }
+    case 'nonprofit': return adminNonprofit(rest);
     default:
-      console.error('Admin commands: login | verify <devId> | budget <devId> <cents> | task create --json \'{…}\'');
+      console.error('Admin commands: login | verify <devId> | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
+      process.exit(1);
+  }
+}
+
+/** Parse `--flag true|false`; undefined if the flag is absent. Errors on a bad value. */
+export function boolArg(args: string[], name: string): boolean | undefined {
+  const v = arg(args, name);
+  if (v === undefined) return undefined;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  console.error(`${name} must be true or false`);
+  process.exit(1);
+}
+
+// Manage nonprofits and their allowlist: list/show, create, override fields, and
+// add/remove authorized senders (emails & domains, allow or deny). The kind of an
+// identifier is inferred from the value — an '@' means an email, otherwise a
+// domain. All routes are admin-gated.
+async function adminNonprofit(args: string[]): Promise<void> {
+  const sub = args[0];
+  const rest = args.slice(1);
+  const usage =
+    'givework admin nonprofit list\n' +
+    '                        show <id>\n' +
+    '                        create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]\n' +
+    '                        set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]\n' +
+    '                        allow <id> <email|domain>      (authorize a sender)\n' +
+    '                        deny  <id> <email|domain>      (block a sender, overrides allow)\n' +
+    '                        rm-id <id> <identifierId>      (remove an identifier; see `show`)';
+  const token = requireAdminToken();
+  const base = apiUrl();
+
+  switch (sub) {
+    case 'list': {
+      const rows = await apiRequest<any[]>(base, { path: '/admin/nonprofits', token });
+      if (!rows.length) { console.log('No nonprofits yet.'); return; }
+      for (const n of rows) {
+        const flags = `${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`;
+        console.log(`${n.id}  ${n.name}  <${n.contact_email}>  [${flags}]  ${n.identifier_count} ids · ${n.tasks_accepted}/${n.tasks_total} tasks`);
+      }
+      return;
+    }
+    case 'show': {
+      if (!rest[0]) { console.error('Usage: givework admin nonprofit show <id>'); process.exit(1); }
+      const n = await apiRequest<any>(base, { path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`, token });
+      console.log(`${n.name}  <${n.contact_email}>${n.ein ? `  EIN ${n.ein}` : ''}`);
+      console.log(`  ${n.verified ? 'verified' : 'unverified'} · ${n.listed ? 'listed (public)' : 'unlisted'}`);
+      if (n.identifiers?.length) {
+        console.log('  identifiers:');
+        for (const i of n.identifiers) console.log(`    ${i.id}  ${String(i.kind).padEnd(11)} ${i.value}`);
+      } else {
+        console.log('  identifiers: none (contact_email + its domain only)');
+      }
+      return;
+    }
+    case 'create': {
+      const name = arg(rest, '--name');
+      const email = arg(rest, '--email');
+      if (!name || !email) { console.error('Usage: givework admin nonprofit create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]'); process.exit(1); }
+      const body: any = { name, contact_email: email };
+      const ein = arg(rest, '--ein');
+      if (ein) body.ein = ein;
+      if (has(rest, '--verified')) body.verified = true;
+      const n = await apiRequest<any>(base, { method: 'POST', path: '/admin/nonprofits', token, body });
+      console.log(`✓ created ${n.id} — ${n.name}`);
+      // `listed` isn't on the create route; opt in with a follow-up update.
+      if (has(rest, '--listed')) {
+        await apiRequest<any>(base, { method: 'POST', path: `/admin/nonprofits/${n.id}`, token, body: { listed: true } });
+        console.log('  listed = true');
+      }
+      return;
+    }
+    case 'set': {
+      if (!rest[0]) { console.error('Usage: givework admin nonprofit set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]'); process.exit(1); }
+      const body: any = {};
+      const name = arg(rest, '--name'); if (name) body.name = name;
+      const email = arg(rest, '--email'); if (email) body.contact_email = email;
+      const ein = arg(rest, '--ein'); if (ein) body.ein = ein;
+      const v = boolArg(rest, '--verified'); if (v !== undefined) body.verified = v;
+      const l = boolArg(rest, '--listed'); if (l !== undefined) body.listed = l;
+      if (Object.keys(body).length === 0) {
+        console.error('Nothing to set — provide at least one of --name/--email/--ein/--verified/--listed.');
+        process.exit(1);
+      }
+      const n = await apiRequest<any>(base, { method: 'POST', path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`, token, body });
+      console.log(`✓ ${n.name}: ${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`);
+      return;
+    }
+    case 'allow':
+    case 'deny': {
+      if (!rest[0] || !rest[1]) { console.error(`Usage: givework admin nonprofit ${sub} <id> <email-or-domain>`); process.exit(1); }
+      const isEmail = rest[1].includes('@');
+      const kind = sub === 'allow' ? (isEmail ? 'email' : 'domain') : (isEmail ? 'email_deny' : 'domain_deny');
+      const r = await apiRequest<any>(base, {
+        method: 'POST',
+        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers`,
+        token,
+        body: { kind, value: rest[1] },
+      });
+      console.log(`✓ ${r.kind}: ${r.value}  (id ${r.id})`);
+      return;
+    }
+    case 'rm-id': {
+      if (!rest[0] || !rest[1]) { console.error('Usage: givework admin nonprofit rm-id <nonprofitId> <identifierId>'); process.exit(1); }
+      await apiRequest<any>(base, {
+        method: 'DELETE',
+        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers/${encodeURIComponent(rest[1])}`,
+        token,
+      });
+      console.log('✓ removed identifier');
+      return;
+    }
+    default:
+      console.error(usage);
       process.exit(1);
   }
 }

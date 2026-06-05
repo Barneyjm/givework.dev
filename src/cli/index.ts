@@ -25,6 +25,11 @@ Admin (needs an admin token — see 'admin login'):
   admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
   admin budget <devId> <cents>
   admin task create --json '{…}'
+  admin nonprofit list                       list orgs + their allowlist/task counts
+  admin nonprofit show <id>                  one org + its allowlist identifiers
+  admin nonprofit set <id> [--verified true|false] [--listed true|false] [--name/--email/--ein]
+  admin nonprofit allow|deny <id> <email|domain>   authorize / block a sender
+  admin nonprofit rm-id <id> <identifierId>  remove an identifier
 
 Config: ${CONFIG_PATH}  (env overrides: GIVEWORK_API_URL, GIVEWORK_TOKEN, GIVEWORK_ADMIN_TOKEN)
 Tip: run tasks on your donated capacity with:  EXECUTOR=claude givework run`;
