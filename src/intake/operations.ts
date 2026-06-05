@@ -118,18 +118,20 @@ export async function receiveIntake(input: ReceiveInput) {
 
   // Decompose OUTSIDE any transaction — a real local model can take seconds, and
   // we must not hold DB locks/connection while it runs.
-  const proposed = await getDecomposer().decompose({
+  const { triagedBy, tasks: proposed } = await getDecomposer().decompose({
     from_email: input.from_email,
     subject: input.subject,
     body: input.body,
     attachment_count: input.attachments?.length ?? 0,
   });
 
+  // Record the engine that actually produced the draft ('stub' | 'local'), not a
+  // blanket 'ai' — a local-model failure falls back to the stub and says so.
   await query(
     `UPDATE intake_requests
-        SET proposed = $2, status = 'decomposed', triaged_by = 'ai', updated_at = now()
+        SET proposed = $2, status = 'decomposed', triaged_by = $3, updated_at = now()
       WHERE id = $1 AND status = 'received'`,
-    [intakeId, JSON.stringify(proposed)],
+    [intakeId, JSON.stringify(proposed), triagedBy],
   );
 
   return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
@@ -152,7 +154,7 @@ export async function redecompose(intakeId: string) {
   );
 
   // Model call outside any transaction.
-  const proposed = await getDecomposer().decompose({
+  const { triagedBy, tasks: proposed } = await getDecomposer().decompose({
     from_email: row.from_email,
     subject: row.subject ?? undefined,
     body: row.raw_body,
@@ -161,9 +163,9 @@ export async function redecompose(intakeId: string) {
 
   // Guard on status so we don't clobber a request that got published mid-call.
   const upd = await query(
-    `UPDATE intake_requests SET proposed = $2, status = 'decomposed', updated_at = now()
+    `UPDATE intake_requests SET proposed = $2, status = 'decomposed', triaged_by = $3, updated_at = now()
       WHERE id = $1 AND status <> 'published' RETURNING id`,
-    [intakeId, JSON.stringify(proposed)],
+    [intakeId, JSON.stringify(proposed), triagedBy],
   );
   if (upd.rowCount === 0) {
     throw new OpError(409, 'already_published', 'Request was published during decomposition');

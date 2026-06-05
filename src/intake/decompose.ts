@@ -31,8 +31,21 @@ export interface IntakeInput {
   attachment_count: number;
 }
 
+/** Which engine actually produced the tasks — recorded as the intake's `triaged_by`. */
+export type TriagedBy = 'stub' | 'local';
+
+export interface DecomposeResult {
+  /**
+   * The engine that produced these tasks. `local` only when the LLM genuinely
+   * succeeded; a local-model failure falls back to the stub and reports `stub`,
+   * so the record never overstates that a model was involved.
+   */
+  triagedBy: TriagedBy;
+  tasks: ProposedTask[];
+}
+
 export interface Decomposer {
-  decompose(input: IntakeInput): Promise<ProposedTask[]>;
+  decompose(input: IntakeInput): Promise<DecomposeResult>;
 }
 
 const DEFAULT_MODEL = 'claude-opus-4-8';
@@ -67,7 +80,7 @@ function detectQuantity(text: string): { count: number; noun: string } | null {
  *   which routinely carries PII. A reviewer can downgrade before publishing.
  */
 export class StubDecomposer implements Decomposer {
-  async decompose(input: IntakeInput): Promise<ProposedTask[]> {
+  async decompose(input: IntakeInput): Promise<DecomposeResult> {
     const ask = (input.subject ? `${input.subject}: ` : '') + input.body.trim();
     const qty = detectQuantity(input.body);
 
@@ -94,27 +107,30 @@ export class StubDecomposer implements Decomposer {
           sensitivity: 'sensitive',
         });
       }
-      return tasks;
+      return { triagedBy: 'stub', tasks };
     }
 
     // No quantity — one task for the whole ask.
     const { est, max } = priceFor(1);
-    return [
-      {
-        title: input.subject?.slice(0, 80) || ask.slice(0, 80) || 'Intake request',
-        spec: {
-          prompt: ask,
-          input_refs: [],
-          output_schema: { result: 'string' },
-          acceptance: 'The request is fulfilled per the description.',
-          unit_count: 1,
+    return {
+      triagedBy: 'stub',
+      tasks: [
+        {
+          title: input.subject?.slice(0, 80) || ask.slice(0, 80) || 'Intake request',
+          spec: {
+            prompt: ask,
+            input_refs: [],
+            output_schema: { result: 'string' },
+            acceptance: 'The request is fulfilled per the description.',
+            unit_count: 1,
+          },
+          est_cost_cents: est,
+          max_cost_cents: max,
+          model: DEFAULT_MODEL,
+          sensitivity: 'sensitive',
         },
-        est_cost_cents: est,
-        max_cost_cents: max,
-        model: DEFAULT_MODEL,
-        sensitivity: 'sensitive',
-      },
-    ];
+      ],
+    };
   }
 }
 
@@ -196,7 +212,7 @@ export class LocalLLMDecomposer implements Decomposer {
     } = {},
   ) {}
 
-  async decompose(input: IntakeInput): Promise<ProposedTask[]> {
+  async decompose(input: IntakeInput): Promise<DecomposeResult> {
     const baseUrl = this.opts.baseUrl ?? process.env.DECOMPOSER_BASE_URL ?? 'http://localhost:11434/v1';
     const model = this.opts.model ?? process.env.DECOMPOSER_MODEL ?? 'glm-4.7-flash:latest';
     const doFetch = this.opts.fetchFn ?? fetch;
@@ -239,9 +255,10 @@ export class LocalLLMDecomposer implements Decomposer {
       const tasks = rawTasks.slice(0, MAX_TASKS).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
 
       if (tasks.length === 0) throw new Error('decomposer produced no usable tasks');
-      return tasks;
+      return { triagedBy: 'local', tasks };
     } catch (err) {
       console.error(`LocalLLMDecomposer fell back to stub: ${(err as Error).message}`);
+      // Fallback returns the stub's result, which honestly reports triagedBy: 'stub'.
       return this.fallback.decompose(input);
     } finally {
       clearTimeout(timer);
