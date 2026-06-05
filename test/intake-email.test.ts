@@ -8,7 +8,7 @@ import {
   completionEmail,
   statusUrlFor,
 } from '../src/intake/email.js';
-import { buildMime, FROM_ADDRESS } from '../src/mailer.js';
+import { buildMime, brandedHtml, FROM_ADDRESS } from '../src/mailer.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
 import { pool, closePool } from '../src/db.js';
 import { resetDb, createVerifiedNonprofit } from './helpers.js';
@@ -219,30 +219,58 @@ describe('email content builders', () => {
     expect(url).toBe('https://givework.dev/status?task_id=abc-123');
   });
 
-  it('completionEmail: clear subject + status link, no threading', () => {
+  it('completionEmail: subject, status link, optional results attachment', () => {
     const url = statusUrlFor('xyz');
     const e = completionEmail({ to: 'director@helpful.org', statusUrl: url });
     expect(e.subject).toBe('Your Givework request is complete');
     expect(e.body).toContain('complete');
     expect(e.body).toContain(url);
     expect(e.inReplyTo).toBeUndefined();
+    expect(e.attachment).toBeUndefined();
+
+    const withFile = completionEmail({
+      to: 'x@org.org',
+      statusUrl: url,
+      attachment: { filename: 'givework-results.csv', contentType: 'text/csv', content: 'task,summary\nA,done' },
+    });
+    expect(withFile.attachment?.filename).toBe('givework-results.csv');
   });
 });
 
 describe('buildMime (mailer)', () => {
-  it('renders From/To/Subject + threading headers + body', () => {
+  it('renders From/To/Subject, threading headers, the text body, and branded HTML', () => {
     const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'Body text', inReplyTo: '<m@id>' });
     expect(raw).toMatch(new RegExp(`From:.*${FROM_ADDRESS.replace('.', '\\.')}`));
     expect(raw).toMatch(/To:.*a@b\.org/);
     expect(decodeWord(raw)).toContain('Hello');
     expect(raw).toContain('In-Reply-To: <m@id>');
     expect(raw).toContain('References: <m@id>');
-    expect(raw).toContain('Body text');
+    expect(raw).toContain('Body text'); // plain-text part
+    // Branded HTML alternative is present (decode the quoted-printable/encoded body).
+    expect(raw).toMatch(/text\/html/);
+    expect(raw).toMatch(/GIVEWORK|GIVEWORK/);
   });
 
   it('omits threading headers when there is no Message-ID', () => {
     const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'x' });
     expect(raw).not.toContain('In-Reply-To:');
     expect(raw).not.toContain('References:');
+  });
+
+  it('brandedHtml escapes quotes so a crafted URL cannot break out of href', () => {
+    const html = brandedHtml('Visit https://evil.example/x"onmouseover="alert(1)');
+    expect(html).toContain('&quot;'); // the quote was entity-escaped
+    expect(html).not.toContain('"onmouseover="alert'); // no raw attribute breakout
+  });
+
+  it('includes an attachment when provided', () => {
+    const raw = buildMime({
+      to: 'a@b.org',
+      subject: 'Done',
+      body: 'see attached',
+      attachment: { filename: 'givework-results.csv', contentType: 'text/csv', content: 'task,summary\nA,done' },
+    });
+    expect(raw).toContain('givework-results.csv');
+    expect(raw).toMatch(/Content-Disposition:.*attachment/i);
   });
 });

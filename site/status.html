@@ -47,6 +47,17 @@
   .bar .fill { height:100%; background:var(--red); width:0; transition:width .4s ease; }
   .bar .pct { font-family:'Space Mono',monospace; font-size:.76rem; margin-top:.4rem; }
 
+  .results { margin-top:1.25rem; }
+  .reshead { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .dl a { font-family:'Space Mono',monospace; font-size:.74rem; text-transform:uppercase; letter-spacing:.06em; color:var(--blue); text-decoration:none; border-bottom:2px solid var(--blue); padding-bottom:1px; margin-left:.9rem; }
+  .dl a:first-child { margin-left:0; }
+  .res-item { padding:.7rem 0; border-bottom:1px solid rgba(22,19,16,.12); }
+  .res-item:last-child { border-bottom:none; }
+  .res-item h4 { margin:0 0 .3rem; font-size:.95rem; font-weight:600; }
+  .res-item pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-family:'Space Mono',ui-monospace,monospace; font-size:.8rem; line-height:1.5; color:#332f29; }
+  table.res { width:100%; border-collapse:collapse; font-size:.82rem; }
+  table.res th, table.res td { text-align:left; padding:.35rem .5rem; border:1px solid rgba(22,19,16,.15); vertical-align:top; }
+  table.res th { background:rgba(22,19,16,.05); font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase; }
   .muted { font-weight:300; color:#5c574e; }
   .foot { margin-top:2rem; font-size:.9rem; font-weight:300; }
   .foot a { color:var(--blue); }
@@ -87,6 +98,17 @@
         </div>
 
         <p class="note" id="note"></p>
+      </div>
+
+      <div class="card results" id="results" hidden>
+        <div class="reshead">
+          <span class="eyebrow">Your results</span>
+          <span class="dl">
+            <a id="dlcsv" href="#">Download CSV</a>
+            <a id="dljson" href="#">Download JSON</a>
+          </span>
+        </div>
+        <div id="resbody"></div>
       </div>
 
       <p class="foot">Questions about your request? Just reply to the email we sent you. <br/>
@@ -130,6 +152,46 @@
       }
       document.getElementById('loading').hidden = true;
       document.getElementById('content').hidden = false;
+
+      if (s.stage === 'complete') loadResults();
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    }
+
+    // Render one task's result: a table for an array of flat objects, else text.
+    function renderResult(result) {
+      const rows = Array.isArray(result) ? result
+        : (result && typeof result === 'object' && Array.isArray(result.results)) ? result.results
+        : null;
+      if (rows && rows.length && rows.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
+        const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+        const head = cols.map((c) => '<th>' + escapeHtml(c) + '</th>').join('');
+        const body = rows.map((r) =>
+          '<tr>' + cols.map((c) => '<td>' + escapeHtml(r[c] ?? '') + '</td>').join('') + '</tr>'
+        ).join('');
+        return '<table class="res"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>';
+      }
+      const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      return '<pre>' + escapeHtml(text) + '</pre>';
+    }
+
+    function loadResults() {
+      const base = '/requests/' + encodeURIComponent(token) + '/results';
+      document.getElementById('dlcsv').href = base + '?download=csv';
+      document.getElementById('dljson').href = base + '?download=json';
+      fetch(base)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((d) => {
+          const items = d.results || [];
+          if (!items.length) return; // nothing to show
+          document.getElementById('resbody').innerHTML = items
+            .map((it) => '<div class="res-item"><h4>' + escapeHtml(it.title) + '</h4>' + renderResult(it.result) + '</div>')
+            .join('');
+          document.getElementById('results').hidden = false;
+        })
+        .catch(() => {/* results optional; page still shows status */});
     }
 
     function showError() {

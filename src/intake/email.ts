@@ -1,5 +1,5 @@
 import PostalMime from 'postal-mime';
-import { sendEmail, type OutboundEmail, type SendEmailBinding } from '../mailer.js';
+import { sendEmail, type OutboundEmail, type SendEmailBinding, type EmailAttachment } from '../mailer.js';
 import { receiveIntake, findApprovedNonprofitForSender } from './operations.js';
 
 // Inbound email → intake. This is the production front door for nonprofit
@@ -302,12 +302,17 @@ export function confirmationEmail(opts: {
   };
 }
 
-/** Completion email when every piece of a request is accepted. */
-export function completionEmail(opts: { to: string; statusUrl: string }): OutboundEmail {
+/** Completion email when every piece of a request is accepted, with results attached. */
+export function completionEmail(opts: {
+  to: string;
+  statusUrl: string;
+  attachment?: EmailAttachment;
+}): OutboundEmail {
   return {
     to: opts.to,
     subject: 'Your Givework request is complete',
     body: completionText(opts.statusUrl),
+    attachment: opts.attachment,
   };
 }
 

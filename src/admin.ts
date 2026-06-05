@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { query } from './db.js';
 import { acceptTask, rejectTask, OpError } from './operations.js';
-import { completedRequestForTask } from './intake/operations.js';
+import { completedRequestForTask, getRequestResults } from './intake/operations.js';
 import { completionEmail, statusUrlFor } from './intake/email.js';
 import { sendEmail, type SendEmailBinding } from './mailer.js';
+import { resultsToFile } from './results.js';
 import { requireAdmin, signDevToken } from './auth.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
@@ -245,9 +246,12 @@ adminRoutes.post('/tasks/:id/accept', (c) =>
       const done = await completedRequestForTask(taskId);
       if (done) {
         const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+        const results = await getRequestResults(done.request_id);
         await sendEmail(binding, completionEmail({
           to: done.from_email,
           statusUrl: statusUrlFor(done.request_id),
+          // Attach the results so they're in the inbox; omit if there's nothing.
+          attachment: results.length ? resultsToFile(results) : undefined,
         }));
       }
     } catch (err) {
