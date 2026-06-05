@@ -374,7 +374,7 @@
           <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><polygon points="56,0 56,56 0,0" fill="#f3c20a"/></svg>
           <span class="tag">For developers</span>
           <h2>Put your idle agent to work.</h2>
-          <p>Your Claude subscription includes capacity you rarely finish — especially in headless <span class="mono">claude -p</span> mode. Point that idle, already-included allowance at vetted tasks, let your local runner do the work, and keep a verifiable record of everything you gave.</p>
+          <p>Your Claude plan includes a free, dedicated <a href="https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan" target="_blank" rel="noopener noreferrer">Agent SDK credit</a> built for headless <span class="mono">claude -p</span> work — separate from your normal usage and mostly left on the table. Point that included allowance at vetted tasks, let your local runner do the work, and keep a verifiable record of everything you gave.</p>
           <ul>
             <li>Runs on your own machine &amp; subscription</li>
             <li>You set the budget; you stay in control</li>
@@ -430,7 +430,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <div class="label">For developers</div>
           <div class="step"><div class="n n--square">01</div><div><h4>Sign in &amp; run one command</h4><p><span class="mono">npx github:Barneyjm/givework.dev login</span>, set a budget, then <span class="mono">run</span>. Your machine, your subscription — work is checked out and done locally; nothing leaves your control.</p></div></div>
           <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
-          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the receipt</h4><p>Every checkout and submission is written to an append-only ledger — the record behind your year-end acknowledgment.</p></div></div>
+          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the record</h4><p>Every checkout and submission is written to an append-only ledger — a verifiable record of exactly what you gave.</p></div></div>
         </div>
 
       </div>
@@ -445,13 +445,14 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <h3>Trust, written down.</h3>
         <p>Givework runs on an append-only ledger. Every reservation, every result, every cent of donated capacity is recorded and reconciled — the books and the receipts can never disagree.</p>
         <div class="pts">
+          <span><b>→</b> Work comes from established nonprofits we partner with, not anonymous submitters.</span>
           <span><b>→</b> Nonprofits pay nothing, ever.</span>
           <span><b>→</b> Developers can prove exactly what they gave.</span>
           <span><b>→</b> Hard budget caps; no run can overspend.</span>
         </div>
       </div>
-      <div class="receipt" role="img" aria-label="Example ledger receipt showing a checkout, submit, and accept entry">
-        <div class="rh"><span>Ledger / task #8eb4</span><span>Donor receipt <i class="dot"></i></span></div>
+      <div class="receipt" role="img" aria-label="Example ledger entry showing a checkout, submit, and accept entry">
+        <div class="rh"><span>Ledger / task #8eb4</span><span>Donation log <i class="dot"></i></span></div>
         <table class="mono">
           <tbody>
             <tr><td>checkout · reserve</td><td class="pos">+500</td></tr>
@@ -477,7 +478,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
 
         <div class="how-col">
           <div class="label">Request → result</div>
-          <div class="step"><div class="n n--circle">01</div><div><h4>Intake</h4><p>A nonprofit emails a plain-language need. We find-or-create their org and store the request — no account, no form, no model names.</p></div></div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Intake</h4><p>A nonprofit we work with emails a plain-language need. We partner with established nonprofits we know — not anonymous submitters — so there's a real organization behind every request. No account, no form, no model names.</p></div></div>
           <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model running on our side breaks the request into structured tasks — each with a prompt, an output schema, acceptance criteria, a model, and a hard cost cap in cents.</p></div></div>
           <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
           <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A volunteer's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
@@ -505,7 +506,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
     --model claude-opus-4-8 \
     --json-schema schema.json   <span class="c">&lt; prompt</span></span></pre>
           </div>
-          <p class="capacity">The donated capacity isn't usage anyone bought. It's the <b>free, already-included Claude allowance</b> that mostly goes unused — surfaced through <span class="mono">claude -p</span> headless mode. Givework points that idle allowance at nonprofit work: no new spend, no API keys, all on the volunteer's machine.</p>
+          <p class="capacity">The donated capacity isn't usage anyone bought, and it isn't a loophole. Every Pro, Max, Team, and Enterprise plan now includes a <b>free monthly Claude Agent SDK credit</b> — a separate allowance, on top of your normal usage limits, meant for exactly this kind of headless <span class="mono">claude -p</span> work. Anthropic <a href="https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan" target="_blank" rel="noopener noreferrer">supports it explicitly</a>; it's a benefit you're given, not capacity they're counting on you to waste. Givework simply points that included, mostly-unused credit at nonprofit work: no new spend, no API keys, all on the volunteer's machine. The article steers <em>shared production automation</em> toward a paid API key — which is exactly why this stays personal: every volunteer donates their own individual credit from their own logged-in session, never a shared or pooled key.</p>
         </div>
 
       </div>
