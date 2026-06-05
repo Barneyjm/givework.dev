@@ -91,6 +91,18 @@ describe('dmarcPassed', () => {
     // Multiple genuine passes (e.g. a benign upstream + Cloudflare) still pass.
     expect(dmarcPassed('upstream; dmarc=pass, mx.cloudflare.net; dmarc=pass')).toBe(true);
   });
+
+  it('does not mistake the published policy (policy.dmarc=) for a verdict', () => {
+    // Real Cloudflare header: dmarc=pass result + policy.dmarc=quarantine policy.
+    const ar =
+      'mx.cloudflare.net; dkim=pass header.d=southendsolutions.com header.s=google; ' +
+      'dmarc=pass header.from=southendsolutions.com policy.dmarc=quarantine; spf=none';
+    expect(dmarcPassed(ar)).toBe(true);
+    // A real fail with a quarantine policy still fails (policy token ignored).
+    expect(
+      dmarcPassed('mx.cloudflare.net; dmarc=fail header.from=x.org policy.dmarc=reject'),
+    ).toBe(false);
+  });
 });
 
 describe('ingestInboundEmail', () => {

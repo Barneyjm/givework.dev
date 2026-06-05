@@ -91,7 +91,13 @@ export type IngestResult =
  */
 export function dmarcPassed(authResults: string | null | undefined): boolean {
   if (!authResults) return false;
-  const verdicts = [...authResults.matchAll(/dmarc=([a-z]+)/gi)].map((m) => m[1].toLowerCase());
+  // Match the standalone `dmarc=<result>` method, NOT a property like
+  // `policy.dmarc=quarantine` (the published policy, which Cloudflare includes).
+  // The negative lookbehind rejects a preceding word char or dot, so
+  // `policy.dmarc=` and `arc.dmarc=` don't count as verdicts.
+  const verdicts = [...authResults.matchAll(/(?<![\w.])dmarc=([a-z]+)/gi)].map((m) =>
+    m[1].toLowerCase(),
+  );
   return verdicts.length > 0 && verdicts.every((v) => v === 'pass');
 }
 
