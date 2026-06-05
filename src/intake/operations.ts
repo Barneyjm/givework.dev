@@ -245,6 +245,40 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
   };
 }
 
+export interface CompletionTarget {
+  request_id: string;
+  from_email: string;
+  org: string;
+}
+
+/**
+ * Atomically claim the completion notification for the task's intake request:
+ * if every task is now accepted AND it hasn't been claimed yet, flip
+ * completed_notified_at and return who to notify; otherwise null. The flip is a
+ * single UPDATE, so two concurrent accepts of the final tasks can't both win —
+ * only the first to commit returns a row, the rest get null (no double-send).
+ * Tasks with no intake_request_id (admin-created) return null.
+ */
+export async function completedRequestForTask(taskId: string): Promise<CompletionTarget | null> {
+  const { rows } = await query<{ request_id: string; from_email: string; org: string }>(
+    `WITH claimed AS (
+       UPDATE intake_requests r
+          SET completed_notified_at = now()
+        WHERE r.id = (SELECT intake_request_id FROM tasks WHERE id = $1)
+          AND r.completed_notified_at IS NULL
+          AND EXISTS (SELECT 1 FROM tasks t WHERE t.intake_request_id = r.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks t WHERE t.intake_request_id = r.id AND t.status <> 'accepted'
+          )
+        RETURNING r.id, r.from_email, r.nonprofit_id
+     )
+     SELECT c.id AS request_id, c.from_email, n.name AS org
+       FROM claimed c JOIN nonprofits n ON n.id = c.nonprofit_id`,
+    [taskId],
+  );
+  return rows[0] ?? null;
+}
+
 /** Re-run the decomposer on a request, replacing the draft. */
 export async function redecompose(intakeId: string) {
   const r = await query<{ from_email: string; subject: string | null; raw_body: string; status: string }>(

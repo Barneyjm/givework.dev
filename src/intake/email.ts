@@ -1,9 +1,6 @@
 import PostalMime from 'postal-mime';
-import { createMimeMessage } from 'mimetext';
+import { sendEmail, type OutboundEmail, type SendEmailBinding } from '../mailer.js';
 import { receiveIntake, findApprovedNonprofitForSender } from './operations.js';
-
-/** The address inbound intake arrives at — also the From on onboarding replies. */
-const INTAKE_ADDRESS = 'intake@givework.dev';
 
 // Inbound email → intake. This is the production front door for nonprofit
 // requests: Cloudflare Email Routing delivers mail for intake@givework.dev to
@@ -198,9 +195,8 @@ export async function ingestInboundEmail(
 
 // Minimal shape of Cloudflare's ForwardableEmailMessage — typed locally to avoid
 // pulling in @cloudflare/workers-types just for this one handler. `headers` is
-// Cloudflare's view of the received headers, including the Authentication-Results
-// it prepends; `from` is the authenticated envelope sender (unused for now — the
-// allowlist trusts the DMARC-aligned From header instead).
+// Cloudflare's view of the received headers (incl. Authentication-Results);
+// `from` is the authenticated envelope sender, used as the reply recipient.
 interface ForwardableEmailMessage {
   readonly from: string;
   readonly to: string;
@@ -208,7 +204,6 @@ interface ForwardableEmailMessage {
   readonly raw: ReadableStream<Uint8Array>;
   readonly rawSize: number;
   setReject(reason: string): void;
-  reply(message: unknown): Promise<void>;
 }
 
 const ONBOARDING_TEXT = `Hi there,
@@ -251,6 +246,21 @@ Questions? Just reply to this email.
 — The Givework team`;
 }
 
+/** A friendly completion body, with the status link. */
+function completionText(statusUrl: string): string {
+  return `Hi there,
+
+Good news — the work on your request is complete.
+
+See the final status here:
+${statusUrl}
+
+Your results are on their way back to you. Thank you for working with Givework —
+whenever you need a hand again, just email intake@givework.dev.
+
+— The Givework team`;
+}
+
 /** Prefix "Re:" without stacking it; fall back to a default subject. */
 function replySubject(subject: string | null, fallback: string): string {
   const s = subject?.trim();
@@ -258,63 +268,47 @@ function replySubject(subject: string | null, fallback: string): string {
   return /^re:/i.test(s) ? s : `Re: ${s}`;
 }
 
-/** Shared MIME scaffold for an auto-reply (sender, recipient, threading, body). */
-function buildReply(opts: {
-  to: string;
-  subject: string;
-  inReplyTo: string | null;
-  body: string;
-}): string {
-  const msg = createMimeMessage();
-  msg.setSender({ name: 'Givework', addr: INTAKE_ADDRESS });
-  msg.setRecipient(opts.to);
-  msg.setSubject(opts.subject);
-  if (opts.inReplyTo) {
-    msg.setHeader('In-Reply-To', opts.inReplyTo);
-    msg.setHeader('References', opts.inReplyTo);
-  }
-  msg.addMessage({ contentType: 'text/plain', data: opts.body });
-  return msg.asRaw();
+/** The public status-page link for a request id (extensionless path + query). */
+export function statusUrlFor(intakeId: string): string {
+  return `https://givework.dev/status?task_id=${intakeId}`;
 }
 
-/**
- * Raw MIME for the onboarding auto-reply (authenticated non-partner). Pure, so
- * it's unit-testable; the handler wraps it in a cloudflare:email EmailMessage.
- */
-export function buildOnboardingReply(opts: {
+/** Onboarding email for an authenticated sender who isn't a partner yet. */
+export function onboardingEmail(opts: {
   to: string;
   subject: string | null;
   inReplyTo: string | null;
-}): string {
-  return buildReply({
+}): OutboundEmail {
+  return {
     to: opts.to,
     subject: replySubject(opts.subject, 'Getting started with Givework'),
-    inReplyTo: opts.inReplyTo,
     body: ONBOARDING_TEXT,
-  });
+    inReplyTo: opts.inReplyTo,
+  };
 }
 
-/**
- * Raw MIME for the confirmation reply sent when a partner's request is accepted —
- * includes the plain-language status-page link. Pure / unit-testable.
- */
-export function buildConfirmationReply(opts: {
+/** Confirmation email when a request is received, with the status-page link. */
+export function confirmationEmail(opts: {
   to: string;
   subject: string | null;
   inReplyTo: string | null;
   statusUrl: string;
-}): string {
-  return buildReply({
+}): OutboundEmail {
+  return {
     to: opts.to,
     subject: replySubject(opts.subject, 'We got your request'),
-    inReplyTo: opts.inReplyTo,
     body: confirmationText(opts.statusUrl),
-  });
+    inReplyTo: opts.inReplyTo,
+  };
 }
 
-/** The public status-page link for a request id (extensionless path + query). */
-export function statusUrlFor(intakeId: string): string {
-  return `https://givework.dev/status?task_id=${intakeId}`;
+/** Completion email when every piece of a request is accepted. */
+export function completionEmail(opts: { to: string; statusUrl: string }): OutboundEmail {
+  return {
+    to: opts.to,
+    subject: 'Your Givework request is complete',
+    body: completionText(opts.statusUrl),
+  };
 }
 
 const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason'], string> = {
@@ -328,12 +322,13 @@ const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason']
 
 /**
  * Cloudflare Email Worker handler. Bound as `email` on the Worker's default
- * export. Reads the raw message + Cloudflare's Authentication-Results, runs it
- * through ingestInboundEmail, and rejects (a connection-time SMTP reject, not a
- * generated bounce) anything not accepted.
+ * export (invoked as email(message, env)). Reads the raw message + Cloudflare's
+ * Authentication-Results, runs ingest, then either sends a confirmation /
+ * onboarding email via the SEND_EMAIL binding or SMTP-rejects the message.
  */
 export async function emailHandler(
   message: ForwardableEmailMessage,
+  env?: { SEND_EMAIL?: SendEmailBinding },
 ): Promise<void> {
   let result: IngestResult;
   try {
@@ -347,13 +342,14 @@ export async function emailHandler(
     message.setReject('Temporary error processing your message — please try again later.');
     return;
   }
+
   if (result.accepted) {
     // Confirm receipt with a link to the plain-language status page. The intake
-    // is already saved, so a reply failure is non-fatal — just log it.
+    // is already saved, so a send failure is non-fatal — just log it.
     try {
-      await sendReply(
-        message,
-        buildConfirmationReply({
+      await sendEmail(
+        env?.SEND_EMAIL,
+        confirmationEmail({
           to: message.from,
           subject: result.reply.subject,
           inReplyTo: result.reply.inReplyTo,
@@ -361,42 +357,29 @@ export async function emailHandler(
         }),
       );
     } catch (err) {
-      console.error('confirmation reply failed', err);
+      console.error('confirmation email failed', err);
     }
     return;
   }
 
   // An authenticated sender who just isn't a partner yet gets a friendly
-  // onboarding auto-reply instead of a bounce. We only do this for
-  // sender_not_approved — never for unauthenticated/spoofed mail, where replying
-  // to a forged From would be backscatter. If the reply can't be sent, fall back
-  // to the SMTP reject so the sender still gets *something*.
+  // onboarding email instead of a bounce. Never for unauthenticated/spoofed mail
+  // (backscatter). If the email can't be sent, fall back to the SMTP reject so
+  // the sender still gets *something*.
   if (result.reason === 'sender_not_approved') {
     try {
-      await sendReply(
-        message,
-        buildOnboardingReply({
+      const sent = await sendEmail(
+        env?.SEND_EMAIL,
+        onboardingEmail({
           to: message.from,
           subject: result.reply?.subject ?? null,
           inReplyTo: result.reply?.inReplyTo ?? null,
         }),
       );
-      return;
+      if (sent) return;
     } catch (err) {
-      console.error('onboarding reply failed', err);
+      console.error('onboarding email failed', err);
     }
   }
   message.setReject(REJECT_REASONS[result.reason]);
-}
-
-/**
- * Send an auto-reply to the original sender. Reply recipient is message.from
- * (the envelope sender) — Cloudflare only permits replying to the original
- * sender, so we can't target a differing parsed header From; for DMARC-aligned
- * mail (the only mail that reaches a reply) they share the authenticated domain.
- */
-async function sendReply(message: ForwardableEmailMessage, rawMime: string): Promise<void> {
-  // @ts-ignore - 'cloudflare:email' is a Workers-runtime built-in module
-  const { EmailMessage } = await import('cloudflare:email');
-  await message.reply(new EmailMessage(INTAKE_ADDRESS, message.from, rawMime));
 }

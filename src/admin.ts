@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { query } from './db.js';
 import { acceptTask, rejectTask, OpError } from './operations.js';
+import { completedRequestForTask } from './intake/operations.js';
+import { completionEmail, statusUrlFor } from './intake/email.js';
+import { sendEmail, type SendEmailBinding } from './mailer.js';
 import { requireAdmin, signDevToken } from './auth.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
@@ -233,7 +236,25 @@ adminRoutes.post('/devs/:id/verify', (c) =>
 );
 
 adminRoutes.post('/tasks/:id/accept', (c) =>
-  adminHandle(() => acceptTask(c.req.param('id')))(c),
+  adminHandle(async () => {
+    const taskId = c.req.param('id');
+    const res = await acceptTask(taskId);
+    // If this acceptance completed the whole request, email the nonprofit. The
+    // accept already succeeded, so a send failure is non-fatal — log and move on.
+    try {
+      const done = await completedRequestForTask(taskId);
+      if (done) {
+        const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+        await sendEmail(binding, completionEmail({
+          to: done.from_email,
+          statusUrl: statusUrlFor(done.request_id),
+        }));
+      }
+    } catch (err) {
+      console.error('completion email failed', err);
+    }
+    return res;
+  })(c),
 );
 
 adminRoutes.post('/tasks/:id/reject', (c) =>

@@ -3,10 +3,12 @@ import {
   parseInboundEmail,
   ingestInboundEmail,
   dmarcPassed,
-  buildOnboardingReply,
-  buildConfirmationReply,
+  onboardingEmail,
+  confirmationEmail,
+  completionEmail,
   statusUrlFor,
 } from '../src/intake/email.js';
+import { buildMime, FROM_ADDRESS } from '../src/mailer.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
 import { pool, closePool } from '../src/db.js';
 import { resetDb, createVerifiedNonprofit } from './helpers.js';
@@ -191,59 +193,56 @@ describe('ingestInboundEmail', () => {
 const decodeWord = (s: string) =>
   s.replace(/=\?utf-8\?B\?([^?]+)\?=/gi, (_, b64) => Buffer.from(b64, 'base64').toString('utf8'));
 
-describe('buildOnboardingReply', () => {
-  it('builds a threaded onboarding reply from intake@ to the sender', () => {
-    const raw = buildOnboardingReply({
-      to: 'hello@newcharity.org',
-      subject: 'Can you help us?',
-      inReplyTo: '<abc@mail>',
-    });
-    expect(raw).toMatch(/From:.*intake@givework\.dev/);
-    expect(raw).toMatch(/To:.*hello@newcharity\.org/);
-    expect(decodeWord(raw)).toContain('Re: Can you help us?');
-    expect(raw).toContain('In-Reply-To: <abc@mail>');
-    expect(raw).toContain('References: <abc@mail>');
-    expect(raw).toContain('hello@givework.dev'); // onboarding CTA in the body
+describe('email content builders', () => {
+  it('onboardingEmail: threaded reply subject + onboarding CTA', () => {
+    const e = onboardingEmail({ to: 'hello@newcharity.org', subject: 'Can you help us?', inReplyTo: '<abc@mail>' });
+    expect(e.to).toBe('hello@newcharity.org');
+    expect(e.subject).toBe('Re: Can you help us?');
+    expect(e.inReplyTo).toBe('<abc@mail>');
+    expect(e.body).toContain('hello@givework.dev'); // CTA
   });
 
-  it('uses a default subject and omits threading headers when there is no Message-ID', () => {
-    const raw = buildOnboardingReply({ to: 'x@org.org', subject: null, inReplyTo: null });
-    expect(decodeWord(raw)).toContain('Getting started with Givework');
-    expect(raw).not.toContain('In-Reply-To:');
-    expect(raw).not.toContain('References:');
+  it('onboardingEmail: default subject for blank/missing original; no stacked Re:', () => {
+    for (const subject of [null, '   ']) {
+      const e = onboardingEmail({ to: 'x@org.org', subject, inReplyTo: null });
+      expect(e.subject).toBe('Getting started with Givework');
+    }
+    expect(onboardingEmail({ to: 'x@org.org', subject: 'Re: Hi', inReplyTo: null }).subject).toBe('Re: Hi');
   });
 
-  it('does not stack Re: when the subject is already a reply', () => {
-    const raw = buildOnboardingReply({ to: 'x@org.org', subject: 'Re: Need help', inReplyTo: null });
-    const subj = decodeWord(raw);
-    expect(subj).toContain('Re: Need help');
-    expect(subj).not.toContain('Re: Re:');
-  });
-});
-
-describe('buildConfirmationReply', () => {
-  it('confirms receipt with the status link and threads the reply', () => {
+  it('confirmationEmail: status link in the body + threaded subject', () => {
     const url = statusUrlFor('abc-123');
-    const raw = buildConfirmationReply({
-      to: 'director@helpful.org',
-      subject: 'Need help',
-      inReplyTo: '<m@id>',
-      statusUrl: url,
-    });
-    expect(raw).toMatch(/From:.*intake@givework\.dev/);
-    expect(raw).toMatch(/To:.*director@helpful\.org/);
-    expect(decodeWord(raw)).toContain('Re: Need help');
-    expect(raw).toContain('In-Reply-To: <m@id>');
-    expect(raw).toContain(url); // the status-page link
+    const e = confirmationEmail({ to: 'director@helpful.org', subject: 'Need help', inReplyTo: '<m@id>', statusUrl: url });
+    expect(e.subject).toBe('Re: Need help');
+    expect(e.inReplyTo).toBe('<m@id>');
+    expect(e.body).toContain(url);
     expect(url).toBe('https://givework.dev/status?task_id=abc-123');
   });
 
-  it('uses a default subject when the original had none or was blank', () => {
-    for (const subject of [null, '   ']) {
-      const raw = buildConfirmationReply({ to: 'x@org.org', subject, inReplyTo: null, statusUrl: 'https://givework.dev/status?task_id=1' });
-      const subj = decodeWord(raw);
-      expect(subj).toContain('We got your request');
-      expect(subj).not.toContain('Re: '); // no "Re: " with an empty subject
-    }
+  it('completionEmail: clear subject + status link, no threading', () => {
+    const url = statusUrlFor('xyz');
+    const e = completionEmail({ to: 'director@helpful.org', statusUrl: url });
+    expect(e.subject).toBe('Your Givework request is complete');
+    expect(e.body).toContain('complete');
+    expect(e.body).toContain(url);
+    expect(e.inReplyTo).toBeUndefined();
+  });
+});
+
+describe('buildMime (mailer)', () => {
+  it('renders From/To/Subject + threading headers + body', () => {
+    const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'Body text', inReplyTo: '<m@id>' });
+    expect(raw).toMatch(new RegExp(`From:.*${FROM_ADDRESS.replace('.', '\\.')}`));
+    expect(raw).toMatch(/To:.*a@b\.org/);
+    expect(decodeWord(raw)).toContain('Hello');
+    expect(raw).toContain('In-Reply-To: <m@id>');
+    expect(raw).toContain('References: <m@id>');
+    expect(raw).toContain('Body text');
+  });
+
+  it('omits threading headers when there is no Message-ID', () => {
+    const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'x' });
+    expect(raw).not.toContain('In-Reply-To:');
+    expect(raw).not.toContain('References:');
   });
 });
