@@ -50,11 +50,14 @@ export async function findApprovedNonprofitForSender(
     `SELECT n.id
        FROM nonprofits n
       WHERE n.verified = true
-        -- A deny on the exact address or its domain blocks the sender outright.
+        -- A deny carves out a sender within THIS org's own allowlist (e.g. allow
+        -- the domain but block one mailbox). Scope it to n.id: one org's deny must
+        -- never suppress a sender that a different org legitimately authorizes.
         AND NOT EXISTS (
           SELECT 1 FROM nonprofit_identifiers d
-           WHERE (d.kind = 'email_deny' AND lower(d.value) = $1)
-              OR (d.kind = 'domain_deny' AND $2::text IS NOT NULL AND lower(d.value) = $2)
+           WHERE d.nonprofit_id = n.id
+             AND ( (d.kind = 'email_deny' AND lower(d.value) = $1)
+                OR (d.kind = 'domain_deny' AND $2::text IS NOT NULL AND lower(d.value) = $2) )
         )
         AND (
           -- legacy single contact_email (exact, or its org domain)

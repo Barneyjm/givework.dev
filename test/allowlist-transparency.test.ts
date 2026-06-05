@@ -58,6 +58,15 @@ describe('findApprovedNonprofitForSender with identifiers', () => {
     await addIdentifier(id, 'domain_deny', 'partner.org');
     expect(await findApprovedNonprofitForSender('x@partner.org')).toBeNull();
   });
+
+  it("one org's deny does NOT suppress a sender another org legitimately allows", async () => {
+    // Org A blocks shared.org for itself; Org B authorizes it as its own domain.
+    const orgA = await createVerifiedNonprofit('a@orga.org', 'Org A');
+    await addIdentifier(orgA, 'domain_deny', 'shared.org');
+    const orgB = await createVerifiedNonprofit('b@shared.org', 'Org B');
+    // B's sender must still resolve to B — A's deny is scoped to A only.
+    expect(await findApprovedNonprofitForSender('team@shared.org')).toBe(orgB);
+  });
 });
 
 describe('admin nonprofit management', () => {
