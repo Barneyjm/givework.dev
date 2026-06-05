@@ -27,7 +27,7 @@ describe('receive', () => {
     expect(np.rows[0].verified).toBe(false); // provisional
 
     const full = await getIntake(r.intake_id);
-    expect(full.triaged_by).toBe('ai');
+    expect(full.triaged_by).toBe('stub'); // default decomposer; honestly recorded
     expect(full.from_email).toBe('director@shelter.org');
   });
 
@@ -100,20 +100,21 @@ describe('publish', () => {
 describe('StubDecomposer sizing', () => {
   const d = new StubDecomposer();
 
-  it('splits a quantity into batches of 10', async () => {
-    const tasks = await d.decompose({ from_email: 'x', body: 'tag 23 emails', attachment_count: 0 });
+  it('splits a quantity into batches of 10 and reports triagedBy stub', async () => {
+    const { tasks, triagedBy } = await d.decompose({ from_email: 'x', body: 'tag 23 emails', attachment_count: 0 });
     expect(tasks.length).toBe(3); // 10 + 10 + 3
     expect(tasks[2].spec.unit_count).toBe(3);
+    expect(triagedBy).toBe('stub');
   });
 
   it('makes a single task when there is no quantity', async () => {
-    const tasks = await d.decompose({ from_email: 'x', body: 'write a thank-you note', attachment_count: 0 });
+    const { tasks } = await d.decompose({ from_email: 'x', body: 'write a thank-you note', attachment_count: 0 });
     expect(tasks.length).toBe(1);
     expect(tasks[0].spec.unit_count).toBe(1);
   });
 
   it('caps the number of tasks for huge quantities', async () => {
-    const tasks = await d.decompose({ from_email: 'x', body: 'process 100000 records', attachment_count: 0 });
+    const { tasks } = await d.decompose({ from_email: 'x', body: 'process 100000 records', attachment_count: 0 });
     expect(tasks.length).toBeLessThanOrEqual(20);
   });
 });
@@ -137,8 +138,9 @@ describe('LocalLLMDecomposer', () => {
         }),
       )) as unknown as typeof fetch;
 
-    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    const { tasks, triagedBy } = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(tasks).toHaveLength(1);
+    expect(triagedBy).toBe('local'); // genuine model success
     const t = tasks[0];
     expect(t.max_cost_cents).toBeGreaterThanOrEqual(t.est_cost_cents); // clamped
     expect(t.est_cost_cents).toBe(201); // rounded int
@@ -147,17 +149,19 @@ describe('LocalLLMDecomposer', () => {
     expect(t.spec.unit_count).toBe(4); // rounded int
   });
 
-  it('falls back to the stub when the endpoint is unreachable', async () => {
+  it('falls back to the stub when the endpoint is unreachable (reports stub, not local)', async () => {
     const fetchFn = (async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
-    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    const { tasks, triagedBy } = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(tasks.length).toBeGreaterThan(0); // stub still produced a task
+    expect(triagedBy).toBe('stub'); // honest: no model actually ran
   });
 
   it('falls back when the model returns no usable tasks', async () => {
     const fetchFn = (async () => reply(JSON.stringify({ tasks: [] }))) as unknown as typeof fetch;
-    const tasks = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    const { tasks, triagedBy } = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(tasks.length).toBeGreaterThan(0);
+    expect(triagedBy).toBe('stub');
   });
 });
