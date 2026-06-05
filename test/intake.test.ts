@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { resetDb, createDev, setBudget, setVerified } from './helpers.js';
 import { pool, closePool } from '../src/db.js';
-import { receiveIntake, publishIntake, getIntake, listIntake } from '../src/intake/operations.js';
+import { receiveIntake, publishIntake, getIntake, listIntake, uploadDraft } from '../src/intake/operations.js';
 import { StubDecomposer, LocalLLMDecomposer, CliDecomposer, extractTasks } from '../src/intake/decompose.js';
 import { checkoutTask } from '../src/operations.js';
 
@@ -149,6 +149,21 @@ describe('LocalLLMDecomposer', () => {
     expect(t.spec.unit_count).toBe(4); // rounded int
   });
 
+  it('asks the endpoint for schema-constrained JSON (the structured-output primitive)', async () => {
+    let sentBody: any;
+    const fetchFn = (async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return reply(JSON.stringify({ tasks: [{ title: 'T', spec: { prompt: 'go' }, est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive' }] }));
+    }) as unknown as typeof fetch;
+    await new LocalLLMDecomposer({ fetchFn }).decompose(input);
+    expect(sentBody.response_format.type).toBe('json_schema');
+    const schema = sentBody.response_format.json_schema.schema;
+    // the model is constrained to our exact draft shape — no field drift possible
+    expect(schema.properties.tasks.items.required).toContain('title');
+    expect(schema.properties.tasks.items.properties.model.enum).toContain('claude-sonnet-4-6');
+    expect(schema.properties.tasks.items.properties.sensitivity.enum).toContain('sensitive');
+  });
+
   it('falls back to the stub when the endpoint is unreachable (reports stub, not local)', async () => {
     const fetchFn = (async () => {
       throw new Error('ECONNREFUSED');
@@ -163,6 +178,34 @@ describe('LocalLLMDecomposer', () => {
     const { tasks, triagedBy } = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(tasks.length).toBeGreaterThan(0);
     expect(triagedBy).toBe('stub');
+  });
+});
+
+describe('uploadDraft (off-Worker decompose watcher)', () => {
+  const draft = [{
+    title: 'Local draft', spec: { prompt: 'summarize the report', unit_count: 1 },
+    est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive',
+  }];
+
+  it('replaces the stub draft and records the engine, normalizing tasks', async () => {
+    const r = await receiveIntake({ from_email: 'a@b.org', body: 'do a thing' });
+    expect((await getIntake(r.intake_id)).triaged_by).toBe('stub');
+
+    const res = await uploadDraft(r.intake_id, draft, 'local');
+    expect(res).toMatchObject({ status: 'decomposed', triaged_by: 'local', count: 1 });
+
+    const full = await getIntake(r.intake_id);
+    expect(full.triaged_by).toBe('local');
+    expect(full.proposed[0].title).toBe('Local draft');
+    expect(full.proposed[0].max_cost_cents).toBeGreaterThanOrEqual(full.proposed[0].est_cost_cents);
+  });
+
+  it('rejects empty/non-array drafts and an already-published request', async () => {
+    const r = await receiveIntake({ from_email: 'a@b.org', body: 'a thing' });
+    await expect(uploadDraft(r.intake_id, [], 'local')).rejects.toMatchObject({ status: 400 });
+    await expect(uploadDraft(r.intake_id, 'nope', 'local')).rejects.toMatchObject({ status: 400 });
+    await publishIntake(r.intake_id, undefined, 'admin');
+    await expect(uploadDraft(r.intake_id, draft, 'local')).rejects.toMatchObject({ status: 409 });
   });
 });
 
@@ -181,6 +224,14 @@ describe('extractTasks (tolerant JSON extraction)', () => {
     const out = extractTasks(dirty) as any[];
     expect(out).toHaveLength(1);
     expect(out[0].spec.prompt).toBe('line one\nline two');
+  });
+  it('strips ANSI escape codes that CLIs (ollama) leak into stdout', () => {
+    const ansi = '\u001b[2K\u001b[1G{"tasks":[{"title":"A","spec":{"prompt":"x"}}]}\u001b[0m';
+    expect(extractTasks(ansi)).toHaveLength(1);
+  });
+  it('repairs almost-JSON (trailing / missing commas) via jsonrepair', () => {
+    expect(extractTasks('{"tasks":[{"title":"A","spec":{"prompt":"x"}},]}')).toHaveLength(1); // trailing comma
+    expect(extractTasks('{"tasks":[{"title":"A" "spec":{"prompt":"x"}}]}')).toHaveLength(1); // missing comma
   });
   it('throws when there is no JSON', () => {
     expect(() => extractTasks('the model said no')).toThrow();

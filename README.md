@@ -234,22 +234,25 @@ curl -s http://localhost:3000/transparency
 
 ### Decomposer (`src/intake/decompose.ts`)
 
-Three implementations behind one `Decomposer` interface, chosen by env. The two
-model-backed ones share tolerant output parsing (`extractTasks`) — fenced JSON,
-the `claude -p --output-format json` wrapper, and unescaped control chars inside
-strings (which local models routinely emit) all parse — and both **fall back to
-the stub** on any failure so intake never hard-fails. Every model-proposed task
-is re-normalized on our side (`max_cost >= est_cost > 0`, model/sensitivity
-clamped, integer cents).
+Three implementations behind one `Decomposer` interface, chosen by env. Both
+model-backed ones **fall back to the stub** on any failure so intake never
+hard-fails, and every model-proposed task is re-normalized on our side
+(`max_cost >= est_cost > 0`, model/sensitivity clamped, integer cents).
 
 - **`StubDecomposer`** (default) — deterministic, no model. Splits a detected
   quantity into batches. Used by the test suite (hermetic, no model needed).
 - **`LocalLLMDecomposer`** (`DECOMPOSER=local`) — a real LLM via any
-  OpenAI-compatible **HTTP** endpoint (Ollama by default). Understands intent,
-  unlike the stub.
+  OpenAI-compatible **HTTP** endpoint (Ollama by default). Uses the
+  **structured-output primitive**: the request carries `response_format:
+  json_schema` with our exact draft schema, so the model's decoding is
+  constrained to conforming JSON — no field drift, no parse-repair guessing.
+  **This is the reliable path; prefer it.**
 - **`CliDecomposer`** (`DECOMPOSER=cli`) — a real LLM via any **`-p` style CLI**
   (the same idea as the executor's `claude -p`): spawn a command, feed the prompt
   on stdin, read the reply. Ollama by default; `claude`, llamafile, etc. all work.
+  A raw CLI can't constrain decoding, so this path relies on tolerant parsing
+  (`extractTasks`: strips ANSI, unwraps fenced/`claude -p` JSON, runs `jsonrepair`
+  on malformed output) — best-effort, use when an HTTP endpoint isn't available.
 
 ```bash
 # HTTP (OpenAI-compatible, e.g. Ollama / LM Studio)
@@ -264,10 +267,18 @@ export DECOMPOSER=cli  DECOMPOSER_CMD=claude  DECOMPOSER_ARGS="-p"   # {model} i
 **Where it runs.** Decomposition is deliberately a small/free/local model — but
 the model-backed decomposers only run on **Node** (a local control plane): the
 Worker has no subprocess and no reachable local endpoint, so in the deployed
-Worker `getDecomposer()` uses the **stub**. To use a real model in the live flow,
-decomposition must run off-Worker (see `// STAGE 6:` — ack inbound immediately,
-decompose async on a Node worker/queue). Task *execution* is separate — it runs
-on the volunteer's donated Claude credit.
+Worker `getDecomposer()` uses the **stub**. Inbound email therefore lands as a
+stub draft (`triaged_by = stub`); a real model upgrades it off-Worker.
+
+**`admin decompose --watch`** is that bridge: run it locally with
+`DECOMPOSER=local` (or `cli`) and it polls prod for stub-drafted intake,
+re-decomposes each with your local model, and posts the result back via
+`POST /admin/intake/:id/draft` (recording `triaged_by = local`). Only genuine
+model output is uploaded — a fallback-to-stub run is left untouched for the next
+pass. `--once` runs a single sweep; `--interval <s>` sets the poll cadence.
+Local models are slow under schema-constrained decoding, so the HTTP request
+timeout defaults to 240s (`DECOMPOSER_TIMEOUT_MS`). Task *execution* is separate
+— it runs on the volunteer's donated Claude credit.
 
 ## HTTP surface
 
