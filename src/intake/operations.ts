@@ -30,10 +30,13 @@ const FREE_EMAIL_DOMAINS = new Set([
 
 /**
  * The allowlist gate for inbound email. Returns the id of a verified nonprofit
- * that authorizes this sender — by exact contact_email, or by matching org
- * domain (consumer-mailbox domains match by exact address only) — else null.
- * Intake never trusts an unrecognised sender; the email handler rejects when
- * this returns null, so spam and strangers never reach the decomposer.
+ * that authorizes this sender, else null. A sender is authorized by ANY allow
+ * identifier — the legacy contact_email, an admin-added `email`, or a matching
+ * `domain` (consumer-mailbox domains match by exact address only) — UNLESS the
+ * address or its domain is explicitly denied (`email_deny` / `domain_deny`),
+ * which overrides every allow. Intake never trusts an unrecognised sender; the
+ * email handler rejects when this returns null, so spam and strangers never
+ * reach the decomposer.
  */
 export async function findApprovedNonprofitForSender(
   email: string,
@@ -44,11 +47,36 @@ export async function findApprovedNonprofitForSender(
   const domain = addr.slice(at + 1);
   const domainForMatch = FREE_EMAIL_DOMAINS.has(domain) ? null : domain;
   const { rows } = await query<{ id: string }>(
-    `SELECT id FROM nonprofits
-      WHERE verified = true
-        AND ( lower(contact_email) = $1
-              OR ($2::text IS NOT NULL AND lower(split_part(contact_email, '@', 2)) = $2) )
-      ORDER BY (lower(contact_email) = $1) DESC, created_at ASC
+    `SELECT n.id
+       FROM nonprofits n
+      WHERE n.verified = true
+        -- A deny carves out a sender within THIS org's own allowlist (e.g. allow
+        -- the domain but block one mailbox). Scope it to n.id: one org's deny must
+        -- never suppress a sender that a different org legitimately authorizes.
+        AND NOT EXISTS (
+          SELECT 1 FROM nonprofit_identifiers d
+           WHERE d.nonprofit_id = n.id
+             AND ( (d.kind = 'email_deny' AND lower(d.value) = $1)
+                OR (d.kind = 'domain_deny' AND $2::text IS NOT NULL AND lower(d.value) = $2) )
+        )
+        AND (
+          -- legacy single contact_email (exact, or its org domain)
+          lower(n.contact_email) = $1
+          OR ($2::text IS NOT NULL AND lower(split_part(n.contact_email, '@', 2)) = $2)
+          -- admin-added identifiers for this org
+          OR EXISTS (
+            SELECT 1 FROM nonprofit_identifiers i
+             WHERE i.nonprofit_id = n.id
+               AND ( (i.kind = 'email' AND lower(i.value) = $1)
+                  OR (i.kind = 'domain' AND $2::text IS NOT NULL AND lower(i.value) = $2) )
+          )
+        )
+      -- Prefer an exact-address match over a domain match for determinism.
+      ORDER BY (
+          lower(n.contact_email) = $1
+          OR EXISTS (SELECT 1 FROM nonprofit_identifiers i
+                      WHERE i.nonprofit_id = n.id AND i.kind = 'email' AND lower(i.value) = $1)
+        ) DESC, n.created_at ASC
       LIMIT 1`,
     [addr, domainForMatch],
   );

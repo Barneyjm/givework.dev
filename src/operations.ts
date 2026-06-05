@@ -820,3 +820,46 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   );
   return rows;
 }
+
+// ---------------------------------------------------------------------------
+// public transparency
+// ---------------------------------------------------------------------------
+
+export interface TransparencyOrg {
+  name: string;
+  tasks_total: number;
+  tasks_accepted: number;
+}
+
+export interface Transparency {
+  totals: { orgs: number; tasks_total: number; tasks_accepted: number };
+  orgs: TransparencyOrg[];
+}
+
+/**
+ * Public "who we work with" rollup: opt-in (`listed`) nonprofits with their task
+ * counts — total tasks that entered the pool and how many were accepted. No
+ * contact info, EINs, or task content; just org name + counts. Drives the public
+ * GET /transparency endpoint. count(...)::int lands as a JS number (int4 parser).
+ */
+export async function getPublicTransparency(): Promise<Transparency> {
+  const { rows } = await query<TransparencyOrg>(
+    `SELECT n.name,
+            count(t.id)::int AS tasks_total,
+            (count(t.id) FILTER (WHERE t.status = 'accepted'))::int AS tasks_accepted
+       FROM nonprofits n
+       LEFT JOIN tasks t ON t.nonprofit_id = n.id
+      WHERE n.listed = true
+      GROUP BY n.id, n.name
+      ORDER BY tasks_total DESC, n.name ASC`,
+  );
+  const totals = rows.reduce(
+    (a, r) => ({
+      orgs: a.orgs + 1,
+      tasks_total: a.tasks_total + r.tasks_total,
+      tasks_accepted: a.tasks_accepted + r.tasks_accepted,
+    }),
+    { orgs: 0, tasks_total: 0, tasks_accepted: 0 },
+  );
+  return { totals, orgs: rows };
+}
