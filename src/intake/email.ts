@@ -1,5 +1,9 @@
 import PostalMime from 'postal-mime';
+import { createMimeMessage } from 'mimetext';
 import { receiveIntake, findApprovedNonprofitForSender } from './operations.js';
+
+/** The address inbound intake arrives at — also the From on onboarding replies. */
+const INTAKE_ADDRESS = 'intake@givework.dev';
 
 // Inbound email → intake. This is the production front door for nonprofit
 // requests: Cloudflare Email Routing delivers mail for intake@givework.dev to
@@ -31,6 +35,8 @@ export interface ParsedEmail {
    * Headers view) does not reliably surface the verdict Cloudflare added.
    */
   authResults: string | null;
+  /** Original Message-ID, used to thread the onboarding auto-reply (In-Reply-To). */
+  messageId: string | null;
 }
 
 /** Strip tags from an HTML body as a last resort when there's no text/plain part. */
@@ -68,12 +74,24 @@ export async function parseInboundEmail(
     text,
     attachments,
     authResults,
+    messageId: email.messageId ?? null,
   };
 }
 
+export type RejectReason = 'no_sender' | 'unauthenticated' | 'sender_not_approved' | 'empty_body';
+
 export type IngestResult =
   | { accepted: true; intake_id: string; nonprofit_id: string }
-  | { accepted: false; reason: 'no_sender' | 'unauthenticated' | 'sender_not_approved' | 'empty_body' };
+  | {
+      accepted: false;
+      reason: RejectReason;
+      /**
+       * Threading context for a friendly onboarding reply. Populated only for
+       * `sender_not_approved` — the one rejected case where the sender is
+       * DMARC-authenticated, so it's safe to email them back (no backscatter).
+       */
+      reply?: { subject: string | null; inReplyTo: string | null };
+    };
 
 /**
  * Whether the message's From-header domain is DMARC-authenticated, per the
@@ -140,7 +158,13 @@ export async function ingestInboundEmail(
   if (!passed) return { accepted: false, reason: 'unauthenticated' };
 
   const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
-  if (!nonprofitId) return { accepted: false, reason: 'sender_not_approved' };
+  if (!nonprofitId) {
+    return {
+      accepted: false,
+      reason: 'sender_not_approved',
+      reply: { subject: parsed.subject, inReplyTo: parsed.messageId },
+    };
+  }
 
   if (!parsed.text) return { accepted: false, reason: 'empty_body' };
 
@@ -166,6 +190,52 @@ interface ForwardableEmailMessage {
   readonly raw: ReadableStream<Uint8Array>;
   readonly rawSize: number;
   setReject(reason: string): void;
+  reply(message: unknown): Promise<void>;
+}
+
+const ONBOARDING_TEXT = `Hi there,
+
+Thanks for reaching out to Givework!
+
+Givework connects nonprofits with developers who donate their AI agents to do
+real work — summaries, data cleanup, categorization, drafting, and more. It's
+free for nonprofits, and you never have to pick a model, write a prompt, or see
+a bill.
+
+This inbox (intake@givework.dev) only accepts requests from organizations we've
+already partnered with, which is why your message didn't go through yet. To get
+started, just reply to hello@givework.dev with:
+
+  • your organization's name and what you do
+  • the kind of work you're drowning in
+
+We'll get you set up, and from then on you can email your needs here in plain
+language and we'll turn them into tasks for our volunteers.
+
+— The Givework team
+https://givework.dev`;
+
+/**
+ * Build the raw MIME for the onboarding auto-reply. Pure (no Workers runtime),
+ * so it's unit-testable; the handler wraps it in a cloudflare:email EmailMessage.
+ * Threads the reply to the original via In-Reply-To/References when we have the
+ * sender's Message-ID.
+ */
+export function buildOnboardingReply(opts: {
+  to: string;
+  subject: string | null;
+  inReplyTo: string | null;
+}): string {
+  const msg = createMimeMessage();
+  msg.setSender({ name: 'Givework', addr: INTAKE_ADDRESS });
+  msg.setRecipient(opts.to);
+  msg.setSubject(opts.subject ? `Re: ${opts.subject}` : 'Getting started with Givework');
+  if (opts.inReplyTo) {
+    msg.setHeader('In-Reply-To', opts.inReplyTo);
+    msg.setHeader('References', opts.inReplyTo);
+  }
+  msg.addMessage({ contentType: 'text/plain', data: ONBOARDING_TEXT });
+  return msg.asRaw();
 }
 
 const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason'], string> = {
@@ -198,7 +268,27 @@ export async function emailHandler(
     message.setReject('Temporary error processing your message — please try again later.');
     return;
   }
-  if (!result.accepted) {
-    message.setReject(REJECT_REASONS[result.reason]);
+  if (result.accepted) return;
+
+  // An authenticated sender who just isn't a partner yet gets a friendly
+  // onboarding auto-reply instead of a bounce. We only do this for
+  // sender_not_approved — never for unauthenticated/spoofed mail, where replying
+  // to a forged From would be backscatter. If the reply can't be sent, fall back
+  // to the SMTP reject so the sender still gets *something*.
+  if (result.reason === 'sender_not_approved') {
+    try {
+      // @ts-ignore - 'cloudflare:email' is a Workers-runtime built-in module
+      const { EmailMessage } = await import('cloudflare:email');
+      const raw = buildOnboardingReply({
+        to: message.from,
+        subject: result.reply?.subject ?? null,
+        inReplyTo: result.reply?.inReplyTo ?? null,
+      });
+      await message.reply(new EmailMessage(INTAKE_ADDRESS, message.from, raw));
+      return;
+    } catch (err) {
+      console.error('onboarding reply failed', err);
+    }
   }
+  message.setReject(REJECT_REASONS[result.reason]);
 }
