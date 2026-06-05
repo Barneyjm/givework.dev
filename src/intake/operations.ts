@@ -84,25 +84,37 @@ export async function receiveIntake(input: ReceiveInput) {
   }
 
   // Txn 1: persist the inbound request (status 'received'). Kept short — no model
-  // call inside an open transaction.
-  const { intakeId, nonprofitId } = await withTransaction(async (client) => {
-    const nonprofitId =
-      input.nonprofit_id ?? (await findOrCreateProvisionalNonprofit(client, input.from_email));
-    const ins = await client.query<{ id: string }>(
-      `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
-       VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
-      [input.from_email, input.subject ?? null, input.body, nonprofitId],
-    );
-    const intakeId = ins.rows[0].id;
-    for (const a of input.attachments ?? []) {
-      await client.query(
-        `INSERT INTO intake_attachments (intake_request_id, uri, filename, content_type)
-         VALUES ($1, $2, $3, $4)`,
-        [intakeId, a.uri, a.filename ?? null, a.content_type ?? null],
+  // call inside an open transaction. A caller-supplied nonprofit_id (the admin
+  // manual path) that isn't a real UUID / known org would trip a foreign-key
+  // (23503) or invalid-text (22P02) error on INSERT; map those to a clean 400
+  // rather than a 500, the same way setOwnBudget maps its CHECK violation.
+  let intakeId: string;
+  let nonprofitId: string;
+  try {
+    ({ intakeId, nonprofitId } = await withTransaction(async (client) => {
+      const nonprofitId =
+        input.nonprofit_id ?? (await findOrCreateProvisionalNonprofit(client, input.from_email));
+      const ins = await client.query<{ id: string }>(
+        `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
+         VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
+        [input.from_email, input.subject ?? null, input.body, nonprofitId],
       );
+      const intakeId = ins.rows[0].id;
+      for (const a of input.attachments ?? []) {
+        await client.query(
+          `INSERT INTO intake_attachments (intake_request_id, uri, filename, content_type)
+           VALUES ($1, $2, $3, $4)`,
+          [intakeId, a.uri, a.filename ?? null, a.content_type ?? null],
+        );
+      }
+      return { intakeId, nonprofitId };
+    }));
+  } catch (err: any) {
+    if (err?.code === '23503' || err?.code === '22P02') {
+      throw new OpError(400, 'bad_nonprofit_id', 'nonprofit_id does not reference a known nonprofit');
     }
-    return { intakeId, nonprofitId };
-  });
+    throw err;
+  }
 
   // Decompose OUTSIDE any transaction — a real local model can take seconds, and
   // we must not hold DB locks/connection while it runs.

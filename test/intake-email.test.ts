@@ -83,9 +83,13 @@ describe('dmarcPassed', () => {
     expect(dmarcPassed(undefined)).toBe(false);
   });
 
-  it('reads the FIRST (Cloudflare-prepended) verdict, ignoring a forged trailing one', () => {
-    // Cloudflare's real verdict is first; an attacker-injected header sorts below.
+  it('requires EVERY verdict to pass, so a forged dmarc=pass cannot flip a real fail (no ordering bypass)', () => {
+    // Headers.get() joins all Authentication-Results; we can't rely on order, so
+    // any non-pass verdict (Cloudflare's genuine one) loses — in either position.
     expect(dmarcPassed('mx.cloudflare.net; dmarc=fail, evil.example; dmarc=pass')).toBe(false);
+    expect(dmarcPassed('evil.example; dmarc=pass, mx.cloudflare.net; dmarc=fail')).toBe(false);
+    // Multiple genuine passes (e.g. a benign upstream + Cloudflare) still pass.
+    expect(dmarcPassed('upstream; dmarc=pass, mx.cloudflare.net; dmarc=pass')).toBe(true);
   });
 });
 

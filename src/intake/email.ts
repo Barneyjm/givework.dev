@@ -65,16 +65,22 @@ export type IngestResult =
 
 /**
  * Whether the message's From-header domain is DMARC-authenticated, per the
- * Authentication-Results header Cloudflare prepends. We read the FIRST dmarc=
- * token: Cloudflare adds its verdict at the top of the header set, so the first
- * match is the trusted one — a forged Authentication-Results in the sender's own
- * body sorts below it and can't flip the result. dmarc=pass means SPF or DKIM
+ * Authentication-Results header(s) Cloudflare adds. dmarc=pass means SPF or DKIM
  * passed *and* aligned with the From domain, i.e. From is not spoofed.
+ *
+ * `Headers.get('authentication-results')` joins EVERY Authentication-Results
+ * header into one string — Cloudflare's trusted verdict PLUS any the sender
+ * forged into their own message — in an order we can't rely on. So we don't
+ * trust position: we require at least one dmarc verdict and demand that ALL of
+ * them are `pass`. Cloudflare's real verdict is always in the set, so a forged
+ * `dmarc=pass` can't help an attacker (their forged token can only sit alongside
+ * Cloudflare's genuine `fail`/`none`, which makes this return false), and a
+ * forged `fail` only rejects the attacker's own mail.
  */
 export function dmarcPassed(authResults: string | null | undefined): boolean {
   if (!authResults) return false;
-  const m = authResults.match(/dmarc=([a-z]+)/i);
-  return m?.[1]?.toLowerCase() === 'pass';
+  const verdicts = [...authResults.matchAll(/dmarc=([a-z]+)/gi)].map((m) => m[1].toLowerCase());
+  return verdicts.length > 0 && verdicts.every((v) => v === 'pass');
 }
 
 export interface InboundEmailMeta {
@@ -88,17 +94,19 @@ export interface InboundEmailMeta {
  * the expected "rejected" cases, so the Worker handler can map them to a clean
  * SMTP reject. Genuine failures (DB down, decomposer crash) still throw.
  *
- * The DMARC gate runs before the allowlist: we only trust `from` once its domain
- * is authenticated, so a spoofed `From: x@<partner-domain>` can't match.
+ * The DMARC gate runs first — before even parsing — so unauthenticated mail
+ * (the bulk of hostile inbound) is rejected without paying for a full MIME
+ * parse, and we only ever trust `from` once its domain is authenticated, so a
+ * spoofed `From: x@<partner-domain>` can't match.
  */
 export async function ingestInboundEmail(
   raw: ArrayBuffer | Uint8Array | string,
   meta: InboundEmailMeta = {},
 ): Promise<IngestResult> {
+  if (!dmarcPassed(meta.authResults)) return { accepted: false, reason: 'unauthenticated' };
+
   const parsed = await parseInboundEmail(raw);
   if (!parsed.from) return { accepted: false, reason: 'no_sender' };
-
-  if (!dmarcPassed(meta.authResults)) return { accepted: false, reason: 'unauthenticated' };
 
   const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
   if (!nonprofitId) return { accepted: false, reason: 'sender_not_approved' };

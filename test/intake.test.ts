@@ -36,6 +36,21 @@ describe('receive', () => {
     const b = await receiveIntake({ from_email: 'x@org.org', body: 'second ask' });
     expect(a.nonprofit_id).toBe(b.nonprofit_id);
   });
+
+  it('maps a bad caller-supplied nonprofit_id to a clean 400, not a 500', async () => {
+    // The admin manual path can pass nonprofit_id directly; a stale/typo'd value
+    // must surface as bad_input rather than an unhandled FK/UUID error.
+    await expect(
+      receiveIntake({ from_email: 'x@org.org', body: 'hi', nonprofit_id: 'not-a-uuid' }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+    await expect(
+      receiveIntake({
+        from_email: 'x@org.org',
+        body: 'hi',
+        nonprofit_id: '00000000-0000-0000-0000-000000000000',
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+  });
 });
 
 describe('publish', () => {
