@@ -45,6 +45,13 @@ id = "4654b8779705462c84ca7e02440c8da6"
 [observability]
 enabled = true
 
+# Outbound transactional email via Cloudflare Email Sending (the domain
+# givework.dev is onboarded there, so SPF/DKIM are aligned). The Worker sends the
+# intake confirmation + completion notifications through this binding
+# (src/mailer.ts). Sends from an address on the onboarded domain to any recipient.
+[[send_email]]
+name = "SEND_EMAIL"
+
 # Inbound nonprofit intake arrives as email, not HTTP. The Worker's `email`
 # handler (src/worker.ts → src/intake/email.ts) is invoked by Cloudflare Email
 # Routing. Wiring is a one-time dashboard/DNS step, NOT configured in this file:

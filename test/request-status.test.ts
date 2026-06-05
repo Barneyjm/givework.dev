@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { receiveIntake, publishIntake, getRequestStatus } from '../src/intake/operations.js';
+import {
+  receiveIntake,
+  publishIntake,
+  getRequestStatus,
+  completedRequestForTask,
+} from '../src/intake/operations.js';
 import { app } from '../src/server.js';
 import { pool, closePool } from '../src/db.js';
-import { resetDb } from './helpers.js';
+import { resetDb, createNonprofit, createTask } from './helpers.js';
 
 afterAll(closePool);
 beforeEach(resetDb);
@@ -85,5 +90,32 @@ describe('GET /requests/:id', () => {
 
     const junk = await app.fetch(new Request('http://test/requests/nope'));
     expect(junk.status).toBe(404);
+  });
+});
+
+describe('completedRequestForTask (completion trigger)', () => {
+  it('returns the notify target only once every task is accepted', async () => {
+    const r = await newRequest();
+    await publishIntake(r.intake_id, undefined, 'admin');
+    const ids = (
+      await pool.query(`SELECT id FROM tasks WHERE intake_request_id = $1 ORDER BY created_at`, [r.intake_id])
+    ).rows.map((x) => x.id);
+
+    // Accept all but the last → not complete yet.
+    await pool.query(`UPDATE tasks SET status='accepted' WHERE id = ANY($1::uuid[])`, [ids.slice(0, -1)]);
+    expect(await completedRequestForTask(ids[0])).toBeNull();
+
+    // Accept the last → completing acceptance returns the target.
+    await pool.query(`UPDATE tasks SET status='accepted' WHERE id = $1`, [ids.at(-1)]);
+    const target = await completedRequestForTask(ids.at(-1)!);
+    expect(target).toMatchObject({ request_id: r.intake_id, from_email: 'director@shelter.org' });
+    expect(target?.org).toBeTruthy();
+  });
+
+  it('is null for a task that has no intake request (admin-created)', async () => {
+    const np = await createNonprofit();
+    const taskId = await createTask(np, { max: 100 });
+    await pool.query(`UPDATE tasks SET status='accepted' WHERE id = $1`, [taskId]);
+    expect(await completedRequestForTask(taskId)).toBeNull();
   });
 });

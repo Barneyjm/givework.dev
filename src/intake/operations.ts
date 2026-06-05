@@ -245,6 +245,43 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
   };
 }
 
+export interface CompletionTarget {
+  request_id: string;
+  from_email: string;
+  org: string;
+}
+
+/**
+ * If the task's intake request is now fully accepted (every task accepted),
+ * return who to notify; else null. Tasks created outside intake (no
+ * intake_request_id) return null. Call this right after accepting a task: a
+ * non-null result means *this* acceptance completed the request, so it's the
+ * single point at which the completion email should fire.
+ */
+export async function completedRequestForTask(taskId: string): Promise<CompletionTarget | null> {
+  const { rows } = await query<{
+    request_id: string;
+    from_email: string;
+    org: string;
+    total: number;
+    done: number;
+  }>(
+    `SELECT r.id AS request_id, r.from_email, n.name AS org,
+            count(t.*)::int AS total,
+            count(t.*) FILTER (WHERE t.status = 'accepted')::int AS done
+       FROM tasks src
+       JOIN intake_requests r ON r.id = src.intake_request_id
+       JOIN nonprofits n ON n.id = r.nonprofit_id
+       JOIN tasks t ON t.intake_request_id = r.id
+      WHERE src.id = $1
+      GROUP BY r.id, r.from_email, n.name`,
+    [taskId],
+  );
+  const r = rows[0];
+  if (!r || r.total === 0 || r.done < r.total) return null;
+  return { request_id: r.request_id, from_email: r.from_email, org: r.org };
+}
+
 /** Re-run the decomposer on a request, replacing the draft. */
 export async function redecompose(intakeId: string) {
   const r = await query<{ from_email: string; subject: string | null; raw_body: string; status: string }>(
