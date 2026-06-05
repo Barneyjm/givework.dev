@@ -38,7 +38,13 @@ const esc = (s: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-/** Render the plain-text body into branded HTML: paragraphs, <br>, linkified URLs. */
+/**
+ * Render the plain-text body into branded HTML. The text is hard-wrapped for
+ * plain-text readers, so we REFLOW it here: blank lines split paragraphs, and
+ * within a paragraph the hard wraps collapse to spaces — except before a bullet
+ * or a link, where the break is intentional. This avoids the "jumpy" mid-sentence
+ * wraps that leak through if every newline becomes a <br>.
+ */
 function bodyToHtml(text: string): string {
   return text
     .trim()
@@ -46,7 +52,9 @@ function bodyToHtml(text: string): string {
     .map((para) => {
       const html = esc(para)
         .replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" style="color:${C.blue};">$1</a>`)
-        .replace(/\n/g, '<br>');
+        // Keep a break only before bullets / links; collapse other wraps to spaces.
+        .replace(/\n(\s*(?:[•\-*]|<a\b))/g, '<br>$1')
+        .replace(/\n+/g, ' ');
       return `<p style="margin:0 0 16px;">${html}</p>`;
     })
     .join('');
