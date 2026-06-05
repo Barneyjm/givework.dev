@@ -634,6 +634,145 @@ export interface OpenTaskFilter {
   devVerified?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// dev self-serve history & aggregates
+// ---------------------------------------------------------------------------
+
+export interface LedgerEntry {
+  id: number;
+  task_id: string;
+  task_title: string | null;
+  nonprofit_id: string;
+  nonprofit_name: string | null;
+  event_type: string;
+  delta_cents: number;
+  created_at: string;
+}
+
+export interface LedgerPage {
+  entries: LedgerEntry[];
+  /** Cursor for the next (older) page — pass as `before`. Null when no more. */
+  next_before: number | null;
+}
+
+/**
+ * A dev's own ledger entries, newest first, with the task title and nonprofit
+ * name joined in for a readable history. Keyset-paginated on the ledger id
+ * (monotonic BIGSERIAL): pass the previous page's `next_before` to walk
+ * backwards. Scoped to the caller's dev_id — never the path/body — so a token
+ * can only ever read its own history. LEFT JOINs so an entry survives even if a
+ * task/nonprofit row were ever removed.
+ */
+export async function getDevLedger(
+  devId: string,
+  opts: { limit?: number; before?: number } = {},
+): Promise<LedgerPage> {
+  let limit = opts.limit ?? 50;
+  if (opts.limit !== undefined) {
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new OpError(BAD_INPUT, 'bad_input', 'limit must be a positive integer');
+    }
+    if (limit > 100) limit = 100;
+  }
+  const params: unknown[] = [devId];
+  let cursor = '';
+  if (opts.before !== undefined) {
+    if (!Number.isInteger(opts.before) || opts.before < 0) {
+      throw new OpError(BAD_INPUT, 'bad_input', 'before must be a non-negative integer');
+    }
+    params.push(opts.before);
+    cursor = `AND l.id < $${params.length}`;
+  }
+  // Fetch one extra row to learn whether an older page exists without a count(*).
+  params.push(limit + 1);
+  const { rows } = await query<LedgerEntry>(
+    `SELECT l.id, l.task_id, t.title AS task_title,
+            l.nonprofit_id, n.name AS nonprofit_name,
+            l.event_type, l.delta_cents, l.created_at
+       FROM ledger l
+       LEFT JOIN tasks t ON t.id = l.task_id
+       LEFT JOIN nonprofits n ON n.id = l.nonprofit_id
+      WHERE l.dev_id = $1 ${cursor}
+      ORDER BY l.id DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  let next_before: number | null = null;
+  if (rows.length > limit) {
+    rows.pop(); // drop the look-ahead row
+    next_before = rows[rows.length - 1].id;
+  }
+  return { entries: rows, next_before };
+}
+
+export interface DevStats {
+  /**
+   * All-time actual compute donated, in cents. Derived from `submit` events:
+   * the spend booked at submit is (checkout reservation + the submit delta), and
+   * the reservation is the task's max_cost_cents — so spend = delta + max_cost.
+   * Reservations that were released/expired net to zero and live (still-locked)
+   * reservations are excluded, so this is money actually given, not committed.
+   */
+  total_donated_cents: number;
+  tasks_completed: number;
+  tasks_accepted: number;
+  nonprofits_helped: number;
+  first_contribution_at: string | null;
+  last_contribution_at: string | null;
+  by_month: { month: string; donated_cents: number; tasks: number }[];
+}
+
+/**
+ * A dev's all-time contribution aggregates plus a per-month breakdown — the
+ * "running tally" the runner can show. Scoped to the caller's dev_id. SUM over
+ * BIGINT yields NUMERIC (returned as a string by node-postgres), so the money
+ * sums are cast back to ::bigint to land as JS numbers via the OID-20 parser.
+ */
+export async function getDevStats(devId: string): Promise<DevStats> {
+  const summaryP = query<{
+    total_donated_cents: number;
+    tasks_completed: number;
+    tasks_accepted: number;
+    nonprofits_helped: number;
+    first_contribution_at: string | null;
+    last_contribution_at: string | null;
+  }>(
+    `SELECT
+        COALESCE(SUM(l.delta_cents + t.max_cost_cents)
+                 FILTER (WHERE l.event_type = 'submit'), 0)::bigint AS total_donated_cents,
+        COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'submit') AS tasks_completed,
+        COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'accept') AS tasks_accepted,
+        COUNT(DISTINCT l.nonprofit_id)
+          FILTER (WHERE l.event_type IN ('submit', 'accept')) AS nonprofits_helped,
+        MIN(l.created_at) FILTER (WHERE l.event_type = 'submit') AS first_contribution_at,
+        MAX(l.created_at) FILTER (WHERE l.event_type = 'submit') AS last_contribution_at
+       FROM ledger l JOIN tasks t ON t.id = l.task_id
+      WHERE l.dev_id = $1`,
+    [devId],
+  );
+  const monthsP = query<{ month: string; donated_cents: number; tasks: number }>(
+    `SELECT to_char(date_trunc('month', l.created_at), 'YYYY-MM') AS month,
+            SUM(l.delta_cents + t.max_cost_cents)::bigint AS donated_cents,
+            COUNT(DISTINCT l.task_id) AS tasks
+       FROM ledger l JOIN tasks t ON t.id = l.task_id
+      WHERE l.dev_id = $1 AND l.event_type = 'submit'
+      GROUP BY 1
+      ORDER BY 1 DESC`,
+    [devId],
+  );
+  const [summary, months] = await Promise.all([summaryP, monthsP]);
+  const s = summary.rows[0];
+  return {
+    total_donated_cents: s.total_donated_cents,
+    tasks_completed: s.tasks_completed,
+    tasks_accepted: s.tasks_accepted,
+    nonprofits_helped: s.nonprofits_helped,
+    first_contribution_at: s.first_contribution_at,
+    last_contribution_at: s.last_contribution_at,
+    by_month: months.rows,
+  };
+}
+
 export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRow[]> {
   const conditions: string[] = [`status = 'open'`];
   const params: unknown[] = [];

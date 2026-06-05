@@ -1,5 +1,5 @@
 import { login } from './login.js';
-import { whoami, budget, version, run, admin, status } from './commands.js';
+import { whoami, budget, history, stats, version, run, admin, status } from './commands.js';
 import { ApiError } from './api.js';
 import { CONFIG_PATH } from './config.js';
 
@@ -17,6 +17,8 @@ Dev:
   budget set <cents>         set how much of your own Claude credit to donate this month
   run [--once|--watch]       do work: poll → checkout → claude -p → submit
                              [--interval <s>] [--max <n>] [--stop-on-error]
+  stats                      your all-time donated total and per-month breakdown
+  history [--limit <n>]      your ledger entries, newest first [--before <id>]
   version                    show the control-plane build
   status                     show local config (api url, login state)
 
@@ -35,6 +37,8 @@ async function main(argv: string[]): Promise<void> {
     case 'login': return login();
     case 'whoami': return whoami();
     case 'budget': return budget(args);
+    case 'stats': return stats();
+    case 'history': return history(args);
     case 'run': return run(args);
     case 'version': return version();
     case 'status': return status();

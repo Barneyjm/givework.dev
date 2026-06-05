@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getDevProfile, setOwnBudget, OpError } from './operations.js';
+import { getDevProfile, setOwnBudget, getDevLedger, getDevStats, OpError } from './operations.js';
 import { requireDev, type Principal } from './auth.js';
 
 // A dev's own self-serve surface. Every route is dev-token gated and acts only
@@ -33,6 +33,27 @@ devRoutes.get('/me', (c) => {
     if (!profile) throw new OpError(404, 'dev_not_found', 'Unknown dev');
     return profile;
   })(c);
+});
+
+// My own ledger history — newest first, keyset-paginated on the ledger id via
+// ?before=<id> (cursor from the prior page's next_before), ?limit=<n> (≤100).
+// dev_id comes from the token, so this only ever returns the caller's entries.
+devRoutes.get('/me/ledger', (c) => {
+  const dev = c.get('principal').dev_id!;
+  const limit = c.req.query('limit');
+  const before = c.req.query('before');
+  return handle(() =>
+    getDevLedger(dev, {
+      limit: limit !== undefined ? Number(limit) : undefined,
+      before: before !== undefined ? Number(before) : undefined,
+    }),
+  )(c);
+});
+
+// My all-time contribution totals + per-month breakdown — the running tally.
+devRoutes.get('/me/stats', (c) => {
+  const dev = c.get('principal').dev_id!;
+  return handle(() => getDevStats(dev))(c);
 });
 
 // Self-set the current-period budget — how much of my own donated Claude credit
