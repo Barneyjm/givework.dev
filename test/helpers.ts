@@ -23,7 +23,8 @@ if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
 export async function resetDb(): Promise<void> {
   await pool.query(
     `TRUNCATE ledger, tasks, intake_attachments, intake_requests,
-              dev_budgets, nonprofit_budgets, nonprofits, devs RESTART IDENTITY CASCADE`,
+              dev_budgets, nonprofit_budgets, nonprofit_identifiers, nonprofits, devs
+              RESTART IDENTITY CASCADE`,
   );
 }
 

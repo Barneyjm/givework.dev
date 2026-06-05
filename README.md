@@ -201,6 +201,37 @@ Inbound requests default to `sensitive`. Allowlisted email attaches to the
 matched verified nonprofit; the manual admin path find-or-creates a provisional
 org keyed by sender, so repeat requests map to one org.
 
+### Allowlist management & transparency
+
+A nonprofit's `contact_email` is just the seed. Admins attach more authorized
+senders via `nonprofit_identifiers` — extra `email`s, whole `domain`s, plus
+`email_deny`/`domain_deny` entries that override an allow (block one address even
+when its domain is allowed). A sender is authorized if **any** allow identifier
+matches and **no** deny does. Consumer-mailbox domains (gmail.com, …) still only
+match by exact address, never by domain.
+
+```bash
+A=(-H "authorization: Bearer $ADMIN" -H 'content-type: application/json')
+# Authorize a second domain for an org, then block one mailbox under it.
+curl -s "${A[@]}" -X POST http://localhost:3000/admin/nonprofits/$NP/identifiers \
+  -d '{"kind":"domain","value":"helpful-foundation.org"}'
+curl -s "${A[@]}" -X POST http://localhost:3000/admin/nonprofits/$NP/identifiers \
+  -d '{"kind":"email_deny","value":"intern@helpful.org"}'
+# Verify + publish the org (opt-in to the public list).
+curl -s "${A[@]}" -X POST http://localhost:3000/admin/nonprofits/$NP \
+  -d '{"verified":true,"listed":true}'
+```
+
+`GET /transparency` is public and opt-in: only orgs an admin marked `listed`
+appear, exposing just name + task counts (no contact info or task content) so the
+marketing site can render a "who we work with" section.
+
+```bash
+curl -s http://localhost:3000/transparency
+# { "totals": { "orgs": 4, "tasks_total": 120, "tasks_accepted": 98 },
+#   "orgs": [ { "name": "Helpful Org", "tasks_total": 38, "tasks_accepted": 31 }, … ] }
+```
+
 ### Decomposer (`src/intake/decompose.ts`)
 
 Two implementations behind one `Decomposer` interface, chosen by env:
@@ -245,6 +276,8 @@ A  POST /admin/intake/:id/decompose
 A  POST /admin/intake/:id/publish   { tasks? }   -- defaults to the AI draft
 A  POST /admin/intake/:id/reject
 
+—  GET  /transparency                                   -- public: listed orgs + task counts
+
 D  POST /checkout            { task_id }
 D  POST /submit              { task_id, result, actual_cost_cents, raw_usage }
 D  POST /release             { task_id }
@@ -253,6 +286,11 @@ D  GET  /tasks/open?max_cost_cents=&sensitivity=&limit=
 A  POST /admin/expire
 A  POST /admin/devs          { github_handle, email? }  -- returns the dev row + a dev token
 A  POST /admin/nonprofits    { name, ein?, contact_email, verified? }
+A  GET  /admin/nonprofits                               -- all orgs + identifier/task counts
+A  GET  /admin/nonprofits/:id                           -- one org + its allowlist identifiers
+A  POST /admin/nonprofits/:id { name?, ein?, contact_email?, verified?, listed? }  -- override fields
+A  POST /admin/nonprofits/:id/identifiers   { kind, value }  -- kind: email|domain|email_deny|domain_deny
+A  DELETE /admin/nonprofits/:id/identifiers/:identifierId
 A  POST /admin/tasks         { nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity? }
 A  POST /admin/budgets       { dev_id, budget_cents }   -- current period
 A  POST /admin/tasks/:id/accept

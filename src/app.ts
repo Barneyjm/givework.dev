@@ -7,6 +7,7 @@ import {
   getBudget,
   listOpenTasks,
   isDevVerified,
+  getPublicTransparency,
   OpError,
 } from './operations.js';
 import { query } from './db.js';
@@ -91,6 +92,12 @@ app.get('/health', async (c) => {
     return c.json({ status: 'degraded', db: 'down' }, 503);
   }
 });
+
+// Public transparency — who we work with + per-org task counts. Unauthenticated
+// and opt-in: only nonprofits an admin marked `listed` appear, and only their
+// name + counts (no contact info or task content). The marketing site can fetch
+// this to render a "who we work with" section.
+app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
 
 // --- Dev-authenticated endpoints. dev_id always comes from the token (sub),
 //     never the request body, so a token can only act as its own dev. ---
