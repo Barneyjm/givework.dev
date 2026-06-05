@@ -136,7 +136,9 @@
       document.getElementById('error').hidden = false;
     }
 
-    const token = new URLSearchParams(location.search).get('t');
+    // The link is /status?task_id=<request id>. (Accept ?t= too, for older links.)
+    const params = new URLSearchParams(location.search);
+    const token = params.get('task_id') || params.get('t');
     if (!token) {
       showError();
     } else {

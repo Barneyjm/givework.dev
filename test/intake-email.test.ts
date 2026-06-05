@@ -235,7 +235,7 @@ describe('buildConfirmationReply', () => {
     expect(decodeWord(raw)).toContain('Re: Need help');
     expect(raw).toContain('In-Reply-To: <m@id>');
     expect(raw).toContain(url); // the status-page link
-    expect(url).toBe('https://givework.dev/status.html?t=abc-123');
+    expect(url).toBe('https://givework.dev/status?task_id=abc-123');
   });
 
   it('uses a default subject when the original had none', () => {

@@ -312,9 +312,9 @@ export function buildConfirmationReply(opts: {
   });
 }
 
-/** The public status-page link for a request id. */
+/** The public status-page link for a request id (extensionless path + query). */
 export function statusUrlFor(intakeId: string): string {
-  return `https://givework.dev/status.html?t=${intakeId}`;
+  return `https://givework.dev/status?task_id=${intakeId}`;
 }
 
 const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason'], string> = {
