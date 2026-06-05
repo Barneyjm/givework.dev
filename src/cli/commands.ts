@@ -62,6 +62,47 @@ export async function budget(args: string[]): Promise<void> {
   console.log(`✓ budget set: ${b.budget_cents}¢ this period (${b.available_cents}¢ available)`);
 }
 
+export async function history(args: string[]): Promise<void> {
+  const token = requireToken();
+  const qs = new URLSearchParams();
+  const limit = arg(args, '--limit');
+  const before = arg(args, '--before');
+  if (limit) qs.set('limit', limit);
+  if (before) qs.set('before', before);
+  const q = qs.toString();
+  const page = await apiRequest<any>(apiUrl(), { path: `/devs/me/ledger${q ? `?${q}` : ''}`, token });
+  if (!page.entries.length) {
+    console.log('No contributions yet — run `givework run` to start.');
+    return;
+  }
+  for (const e of page.entries) {
+    const when = new Date(e.created_at).toISOString().slice(0, 16).replace('T', ' ');
+    const amount = `${e.delta_cents > 0 ? '+' : ''}${e.delta_cents}¢`;
+    const label = e.task_title ?? e.task_id;
+    console.log(`${when}  ${e.event_type.padEnd(8)} ${amount.padStart(7)}  ${label}${e.nonprofit_name ? `  · ${e.nonprofit_name}` : ''}`);
+  }
+  if (page.next_before) {
+    console.log(`\n… older entries:  givework history --before ${page.next_before}`);
+  }
+}
+
+export async function stats(): Promise<void> {
+  const token = requireToken();
+  const s = await apiRequest<any>(apiUrl(), { path: '/devs/me/stats', token });
+  console.log(`donated:    ${s.total_donated_cents}¢ all time`);
+  console.log(`tasks:      ${s.tasks_completed} completed · ${s.tasks_accepted} accepted`);
+  console.log(`nonprofits: ${s.nonprofits_helped} helped`);
+  if (s.first_contribution_at) {
+    console.log(`since:      ${new Date(s.first_contribution_at).toISOString().slice(0, 10)}`);
+  }
+  if (s.by_month?.length) {
+    console.log('\nby month:');
+    for (const m of s.by_month) {
+      console.log(`  ${m.month}   ${String(m.donated_cents).padStart(7)}¢   ${m.tasks} task${m.tasks === 1 ? '' : 's'}`);
+    }
+  }
+}
+
 export async function version(): Promise<void> {
   const v = await apiRequest<any>(apiUrl(), { path: '/version' });
   console.log(`${v.service}  ${v.commit?.slice(0, 8)} (${v.ref})${v.deployed_at ? `  deployed ${v.deployed_at}` : ''}`);
