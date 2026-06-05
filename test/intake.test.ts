@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { resetDb, createDev, setBudget, setVerified } from './helpers.js';
 import { pool, closePool } from '../src/db.js';
 import { receiveIntake, publishIntake, getIntake, listIntake } from '../src/intake/operations.js';
-import { StubDecomposer, LocalLLMDecomposer } from '../src/intake/decompose.js';
+import { StubDecomposer, LocalLLMDecomposer, CliDecomposer, extractTasks } from '../src/intake/decompose.js';
 import { checkoutTask } from '../src/operations.js';
 
 afterAll(closePool);
@@ -163,5 +163,60 @@ describe('LocalLLMDecomposer', () => {
     const { tasks, triagedBy } = await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(tasks.length).toBeGreaterThan(0);
     expect(triagedBy).toBe('stub');
+  });
+});
+
+describe('extractTasks (tolerant JSON extraction)', () => {
+  const one = [{ title: 'T', spec: { prompt: 'do it', unit_count: 1 }, est_cost_cents: 50, max_cost_cents: 75, model: 'x', sensitivity: 'public' }];
+  it('reads a bare array, {tasks:[…]}, fenced JSON, and the claude -p wrapper', () => {
+    expect(extractTasks(JSON.stringify(one))).toHaveLength(1);
+    expect(extractTasks(JSON.stringify({ tasks: one }))).toHaveLength(1);
+    expect(extractTasks('Here you go:\n```json\n' + JSON.stringify({ tasks: one }) + '\n```\nthanks')).toHaveLength(1);
+    // claude -p --output-format json: real content nested in `.result`.
+    expect(extractTasks(JSON.stringify({ type: 'result', result: JSON.stringify({ tasks: one }) }))).toHaveLength(1);
+  });
+  it('tolerates raw control chars inside strings (common in local-model output)', () => {
+    // A literal newline inside a string value — invalid JSON until escaped.
+    const dirty = '{"tasks":[{"title":"T","spec":{"prompt":"line one\nline two"}}]}';
+    const out = extractTasks(dirty) as any[];
+    expect(out).toHaveLength(1);
+    expect(out[0].spec.prompt).toBe('line one\nline two');
+  });
+  it('throws when there is no JSON', () => {
+    expect(() => extractTasks('the model said no')).toThrow();
+  });
+});
+
+describe('CliDecomposer', () => {
+  const input = { from_email: 'x@y.org', body: 'summarize a report', attachment_count: 0 };
+  const goodTask = { title: 'Summarize', spec: { prompt: 'summarize the report', unit_count: 1 }, est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive' };
+
+  it('runs the CLI, parses fenced output, and reports triagedBy local', async () => {
+    const run = async () => '```json\n' + JSON.stringify({ tasks: [goodTask] }) + '\n```';
+    const { tasks, triagedBy } = await new CliDecomposer({ run }).decompose(input);
+    expect(tasks).toHaveLength(1);
+    expect(triagedBy).toBe('local');
+    expect(tasks[0].spec.prompt).toContain('summarize');
+  });
+
+  it('passes the prompt on stdin to the configured cmd/args', async () => {
+    let seen: { cmd: string; args: string[]; input: string } | null = null;
+    const run = async (cmd: string, args: string[], inp: string) => {
+      seen = { cmd, args, input: inp };
+      return JSON.stringify({ tasks: [goodTask] });
+    };
+    await new CliDecomposer({ cmd: 'ollama', args: ['run', 'm'], run }).decompose(input);
+    expect(seen!.cmd).toBe('ollama');
+    expect(seen!.args).toEqual(['run', 'm']);
+    expect(seen!.input).toContain('summarize a report'); // the request body reached the model
+  });
+
+  it('falls back to the stub when the CLI errors or returns junk', async () => {
+    const boom = async () => { throw new Error('command not found: ollama'); };
+    expect((await new CliDecomposer({ run: boom }).decompose(input)).triagedBy).toBe('stub');
+    const junk = async () => 'I could not do that';
+    const r = await new CliDecomposer({ run: junk }).decompose(input);
+    expect(r.triagedBy).toBe('stub');
+    expect(r.tasks.length).toBeGreaterThan(0);
   });
 });

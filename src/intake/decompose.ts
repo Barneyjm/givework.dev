@@ -194,6 +194,85 @@ Respond with ONLY a JSON object of the form:
 
 type FetchFn = typeof fetch;
 
+/** The user-message half of the decomposer prompt (the request itself). */
+function userMessage(input: IntakeInput): string {
+  return (
+    `From: ${input.from_email}\n` +
+    (input.subject ? `Subject: ${input.subject}\n` : '') +
+    `Attachments: ${input.attachment_count}\n\n` +
+    input.body
+  );
+}
+
+/**
+ * Escape raw control characters that appear INSIDE JSON string literals. Local
+ * models routinely emit unescaped newlines/tabs inside string values (e.g. a
+ * multi-line prompt), which JSON.parse rejects. We track string state and escape
+ * only the control chars within strings — inter-token whitespace is untouched.
+ */
+function escapeControlCharsInStrings(s: string): string {
+  let out = '';
+  let inStr = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (inStr && ch === '\\') {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = !inStr;
+      out += ch;
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if (inStr && code < 0x20) {
+      out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${code.toString(16).padStart(4, '0')}`;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Pull the proposed-task list out of a model's raw text output. Tolerant of the
+ * shapes different runners produce: a bare JSON array or `{tasks:[…]}`, a
+ * ```json fenced block, leading/trailing prose, unescaped control chars inside
+ * strings, and the `claude -p --output-format json` wrapper (`{result:"…json…"}`).
+ * Throws if no JSON is found.
+ */
+export function extractTasks(text: string): unknown[] {
+  let s = text.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const start = s.search(/[[{]/);
+  if (start === -1) throw new Error('no JSON found in model output');
+  const open = s[start];
+  const end = s.lastIndexOf(open === '[' ? ']' : '}');
+  if (end <= start) throw new Error('unterminated JSON in model output');
+  const parsed: any = JSON.parse(escapeControlCharsInStrings(s.slice(start, end + 1)));
+  // claude -p --output-format json wrapper: the real content is in `.result`.
+  if (
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+    typeof parsed.result === 'string' && !parsed.tasks
+  ) {
+    return extractTasks(parsed.result);
+  }
+  return Array.isArray(parsed) ? parsed : (parsed?.tasks ?? []);
+}
+
+/** Normalize + cap a raw task list, dropping empties. Shared by the model decomposers. */
+function finalizeTasks(raw: unknown[]): ProposedTask[] {
+  return raw.slice(0, MAX_TASKS).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
+}
+
 /**
  * Decompose via a local OpenAI-compatible chat endpoint (Ollama by default, but
  * any compatible server works via DECOMPOSER_BASE_URL). Free and local. Falls
@@ -223,12 +302,6 @@ export class LocalLLMDecomposer implements Decomposer {
     const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs ?? 120_000);
 
     try {
-      const userMsg =
-        `From: ${input.from_email}\n` +
-        (input.subject ? `Subject: ${input.subject}\n` : '') +
-        `Attachments: ${input.attachment_count}\n\n` +
-        input.body;
-
       const res = await doFetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -236,7 +309,7 @@ export class LocalLLMDecomposer implements Decomposer {
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userMsg },
+            { role: 'user', content: userMessage(input) },
           ],
           temperature: 0.2,
           response_format: { type: 'json_object' },
@@ -250,10 +323,7 @@ export class LocalLLMDecomposer implements Decomposer {
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error('decomposer returned empty content');
 
-      const parsed = JSON.parse(content);
-      const rawTasks: any[] = Array.isArray(parsed) ? parsed : parsed?.tasks ?? [];
-      const tasks = rawTasks.slice(0, MAX_TASKS).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
-
+      const tasks = finalizeTasks(extractTasks(content));
       if (tasks.length === 0) throw new Error('decomposer produced no usable tasks');
       return { triagedBy: 'local', tasks };
     } catch (err) {
@@ -266,11 +336,81 @@ export class LocalLLMDecomposer implements Decomposer {
   }
 }
 
+// ---------------------------------------------------------------------------
+// CliDecomposer — any "-p style" CLI as the model (ollama, claude, …)
+// ---------------------------------------------------------------------------
+
+/** A CLI runner: spawn `cmd args…`, feed the prompt on stdin, resolve stdout. */
+export type CliRun = (cmd: string, args: string[], input: string) => Promise<string>;
+
+/** Default args for known CLIs; otherwise rely on DECOMPOSER_ARGS. `{model}` is substituted. */
+function defaultCliArgs(cmd: string, model: string): string[] {
+  const envArgs = process.env.DECOMPOSER_ARGS;
+  if (envArgs) return envArgs.split(/\s+/).filter(Boolean).map((a) => (a === '{model}' ? model : a));
+  const base = cmd.split('/').pop();
+  if (base === 'ollama') return ['run', model];
+  if (base === 'claude') return ['-p'];
+  return [];
+}
+
+/**
+ * Decompose by shelling out to any CLI that takes a prompt on stdin and prints
+ * the model's reply (Ollama by default; `claude -p`, llamafile, etc. all work).
+ * The Node-only spawn helper is imported lazily so this module stays Worker-safe.
+ * Like LocalLLMDecomposer, falls back to the stub on any failure.
+ *
+ *   DECOMPOSER=cli  DECOMPOSER_CMD=ollama  DECOMPOSER_MODEL=glm-4.7-flash:latest
+ *   DECOMPOSER=cli  DECOMPOSER_CMD=claude  DECOMPOSER_ARGS="-p"
+ */
+export class CliDecomposer implements Decomposer {
+  private fallback = new StubDecomposer();
+
+  constructor(
+    private opts: { cmd?: string; args?: string[]; model?: string; timeoutMs?: number; run?: CliRun } = {},
+  ) {}
+
+  async decompose(input: IntakeInput): Promise<DecomposeResult> {
+    const cmd = this.opts.cmd ?? process.env.DECOMPOSER_CMD ?? 'ollama';
+    const model = this.opts.model ?? process.env.DECOMPOSER_MODEL ?? 'glm-4.7-flash:latest';
+    const args = this.opts.args ?? defaultCliArgs(cmd, model);
+    const timeoutMs = this.opts.timeoutMs ?? 120_000;
+    const run =
+      this.opts.run ??
+      (async (c, a, inp) => (await import('../spawn.js')).spawnCli(c, a, inp, timeoutMs));
+
+    // No system/user split on a CLI — one prompt, with an explicit JSON nudge.
+    const prompt =
+      `${SYSTEM_PROMPT}\n\n` +
+      `Respond with ONLY a JSON object of the form {"tasks": [ … ]} and nothing else.\n\n` +
+      userMessage(input);
+
+    try {
+      const out = await run(cmd, args, prompt);
+      const tasks = finalizeTasks(extractTasks(out));
+      if (tasks.length === 0) throw new Error('decomposer produced no usable tasks');
+      return { triagedBy: 'local', tasks };
+    } catch (err) {
+      console.error(`CliDecomposer fell back to stub: ${(err as Error).message}`);
+      return this.fallback.decompose(input);
+    }
+  }
+}
+
 /**
  * The decomposer the pipeline uses, chosen by env at call time:
- *   DECOMPOSER=local → LocalLLMDecomposer (Ollama/OpenAI-compatible, free)
+ *   DECOMPOSER=cli   → CliDecomposer (any "-p style" CLI; ollama default)
+ *   DECOMPOSER=local → LocalLLMDecomposer (OpenAI-compatible HTTP; ollama default)
  *   otherwise        → StubDecomposer (deterministic; default, used by tests)
+ * Note: the model decomposers only run on Node (local control plane); the Worker
+ * has neither a subprocess nor a reachable local endpoint, so it uses the stub.
  */
 export function getDecomposer(): Decomposer {
-  return process.env.DECOMPOSER === 'local' ? new LocalLLMDecomposer() : new StubDecomposer();
+  switch (process.env.DECOMPOSER) {
+    case 'cli':
+      return new CliDecomposer();
+    case 'local':
+      return new LocalLLMDecomposer();
+    default:
+      return new StubDecomposer();
+  }
 }
