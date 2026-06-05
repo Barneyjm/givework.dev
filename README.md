@@ -131,29 +131,75 @@ model names — the decomposer and an admin reviewer set those.
 received → decompose (AI-drafted) → admin review → published → normal tasks
 ```
 
-`POST /intake` is unauthenticated (it stands in for an inbound-email webhook).
-Decomposition runs automatically and the draft comes back in the response:
+Inbound requests arrive **as email**, not over HTTP. Cloudflare Email Routing
+delivers mail for `intake@givework.dev` to the Worker's `email` handler
+(`src/intake/email.ts`), which parses it, checks the sender against the
+allowlist, and calls `receiveIntake()` in-process. There is no public,
+unauthenticated intake endpoint — nothing to spoof or spam, and nothing inbound
+ever touches a volunteer machine. See `src/intake/email.ts` for the security
+model and `wrangler.toml` for the one-time Email Routing setup.
+
+Mail must clear two gates before anything happens. First, **DMARC must pass** —
+the `From` header is forgeable, so we require `dmarc=pass` from the
+Authentication-Results Cloudflare adds (it delivers unauthenticated mail too, it
+doesn't drop it), which authenticates the `From` domain. Then the sender must be
+on the **allowlist** of verified nonprofits — matched by exact `contact_email`
+or org domain (consumer-mailbox domains match by exact address only). Everything
+else is rejected at SMTP time, before the decomposer (and its token spend) is
+ever reached. First contact / onboarding happens at
+`hello@givework.dev`, which routes to a human inbox, not the Worker.
 
 ```bash
-# 1. The "email" arrives (no auth). A quantity in the body gets sized into batches.
-curl -s -X POST http://localhost:3000/intake -H 'content-type: application/json' -d '{
+# Local: drive the same pipeline directly (no email infra needed). Admins can
+# also submit/replay a request by hand via POST /admin/intake.
+curl -s -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' \
+  -X POST http://localhost:3000/admin/intake -d '{
   "from_email":"director@hopehouse.org",
   "subject":"Overwhelmed with paperwork",
   "body":"We have 30 client intake forms and need each summarized into the family'\''s top needs."
 }'
 # -> { intake_id, status:"decomposed", proposed:[ 3 tasks, sensitivity "sensitive" ] }
 
-# 2. Admin reviews and publishes (turns the draft into real, open tasks).
+# Admin reviews and publishes (turns the draft into real, open tasks).
 curl -s -H "authorization: Bearer $ADMIN" http://localhost:3000/admin/intake/$INTAKE_ID
 curl -s -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' \
   -X POST http://localhost:3000/admin/intake/$INTAKE_ID/publish -d '{}'
 # -> { status:"published", task_ids:[...] }
 
-# 3. From here it's the normal loop — a funded dev's runner checks them out.
+# From here it's the normal loop — a funded dev's runner checks them out.
 ```
 
-Inbound requests default to `sensitive` and find-or-create a provisional
-(unverified) nonprofit keyed by sender, so repeat emails map to one org.
+#### Testing the email path locally
+
+The whole inbound-email flow — parse → DMARC gate → allowlist → decompose — runs
+without any email infrastructure. Two ways:
+
+```bash
+export DATABASE_URL='postgres://postgres:postgres@localhost:5433/givework'  # local DB only
+
+# 1. Pipe a raw .eml through the exact code the Worker's email() handler uses.
+#    --seed adds a verified nonprofit so the sender is allowlisted; --dmarc
+#    simulates Cloudflare's verdict (default pass). The script refuses any
+#    non-local DATABASE_URL since it writes rows.
+npm run intake-email -- message.eml --seed director@helpful.org     # -> accepted
+npm run intake-email -- message.eml --seed director@helpful.org --dmarc fail  # -> unauthenticated
+npm run intake-email -- message.eml                                 # -> sender_not_approved
+```
+
+```bash
+# 2. Full Worker runtime via wrangler dev, hitting the real email() binding.
+#    Point Hyperdrive at the local DB, then POST a raw message to the email
+#    handler endpoint (include an Authentication-Results line so DMARC passes).
+export WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="$DATABASE_URL"
+npm run cf:dev   # wrangler dev, serves on :8787
+curl -X POST 'http://localhost:8787/cdn-cgi/handler/email' \
+  --url-query 'from=director@helpful.org' --url-query 'to=intake@givework.dev' \
+  --data-binary @message.eml
+```
+
+Inbound requests default to `sensitive`. Allowlisted email attaches to the
+matched verified nonprofit; the manual admin path find-or-creates a provisional
+org keyed by sender, so repeat requests map to one org.
 
 ### Decomposer (`src/intake/decompose.ts`)
 
@@ -187,11 +233,12 @@ can take a minute; `// STAGE 6:` marks moving it off the request path (ack
 
 ## HTTP surface
 
-`Authorization: Bearer <token>` required on every route except `POST /intake`.
-`D` = dev token, `A` = admin token, `—` = public.
+`Authorization: Bearer <token>` required on every route below.
+`D` = dev token, `A` = admin token, `—` = public. (Inbound intake is email, not
+HTTP — see above; `POST /admin/intake` is the admin manual/replay path.)
 
 ```
-—  POST /intake               { from_email, subject?, body, attachments? }
+A  POST /admin/intake          { from_email, subject?, body, attachments?, nonprofit_id? }
 A  GET  /admin/intake?status=
 A  GET  /admin/intake/:id
 A  POST /admin/intake/:id/decompose
@@ -229,8 +276,9 @@ src/admin.ts              admin-only seed routes
 src/mcp.ts                MCP server wrapping operations.ts (stdio)
 src/runner.ts             dev runner — MCP client loop (checkout -> work -> submit)
 src/intake/decompose.ts   Decomposer interface + deterministic StubDecomposer
-src/intake/operations.ts  receive / decompose / publish — HTTP-free
-src/intake/routes.ts      public POST /intake + admin review/publish routes
+src/intake/operations.ts  receive / decompose / publish + sender allowlist — HTTP-free
+src/intake/email.ts       Cloudflare Email Worker — inbound mail → allowlist → intake
+src/intake/routes.ts      admin intake routes (manual submit + review/publish)
 test/operations.test.ts   happy path, budget gate, expiry, release, clamp, 404
 test/concurrency.test.ts  double-checkout race + same-dev concurrent spend (the FOR UPDATE tests)
 test/invariant.test.ts    100-op randomized fuzz: ledger vs budgets never disagree

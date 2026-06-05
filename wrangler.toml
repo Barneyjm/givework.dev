@@ -45,11 +45,22 @@ id = "4654b8779705462c84ca7e02440c8da6"
 [observability]
 enabled = true
 
+# Inbound nonprofit intake arrives as email, not HTTP. The Worker's `email`
+# handler (src/worker.ts → src/intake/email.ts) is invoked by Cloudflare Email
+# Routing. Wiring is a one-time dashboard/DNS step, NOT configured in this file:
+#   1. Zone → Email → Email Routing: enable it (adds the MX + SPF records).
+#   2. Add custom address `intake@givework.dev`, action "Send to a Worker" →
+#      this Worker (givework).
+#   3. (recommended) Route `hello@givework.dev` to your real inbox for first
+#      contact / onboarding — that address is intentionally NOT the Worker.
+# Only mail from an allowlisted (verified) nonprofit is processed; everything
+# else is rejected at SMTP time. See src/intake/email.ts for the security model.
+
 # Serve the static landing page from this same Worker. A request that matches a
 # file in ./site (i.e. `/` -> index.html) is served directly as an asset; anything
-# that doesn't match falls through to the Worker — so the API routes (/intake,
-# /budget, /checkout, /release, /submit, /tasks/open, /auth/*, /devs/*, /admin/*)
-# keep working.
+# that doesn't match falls through to the Worker — so the API routes (/budget,
+# /checkout, /release, /submit, /tasks/open, /auth/*, /devs/*, /admin/*) keep
+# working.
 # Default not_found_handling keeps non-asset paths going to the Worker (no SPA mode).
 # Local preview: `npm run cf:dev` (wrangler dev) serves these assets like prod;
 # `npm run dev` (raw Node) runs the API only and does NOT serve the landing page.

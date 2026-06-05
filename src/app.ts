@@ -14,7 +14,7 @@ import { requireDev, requireAdmin, type Principal } from './auth.js';
 import { adminRoutes } from './admin.js';
 import { devRoutes } from './devs.js';
 import { oauthRoutes } from './oauth.js';
-import { publicIntakeRoutes, adminIntakeRoutes } from './intake/routes.js';
+import { adminIntakeRoutes } from './intake/routes.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -164,6 +164,3 @@ app.route('/admin', adminIntakeRoutes);
 // dev's own profile/budget endpoints (dev-token gated, mounted internally).
 app.route('/auth', oauthRoutes);
 app.route('/devs', devRoutes);
-
-// Public inbound intake (unauthenticated — simulates an email webhook).
-app.route('/', publicIntakeRoutes);
