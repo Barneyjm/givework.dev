@@ -32,6 +32,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "hono": "^4.6.14",
     "jose": "^6.2.3",
+    "mimetext": "^3.0.28",
     "pg": "^8.13.1",
     "postal-mime": "^2.7.4",
     "zod": "^4.4.3"
