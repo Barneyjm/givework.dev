@@ -14,10 +14,19 @@ CREATE TABLE nonprofit_identifiers (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- One (kind, value) maps to at most one org, case-insensitively: two orgs can't
--- both claim the same domain, and re-adding the same identifier is a no-op.
-CREATE UNIQUE INDEX nonprofit_identifiers_kind_value
-  ON nonprofit_identifiers (kind, lower(value));
+-- Allow identifiers (email/domain) are GLOBALLY unique per kind: two orgs must
+-- not both claim the same address/domain, or a sender would match ambiguously.
+CREATE UNIQUE INDEX nonprofit_identifiers_allow_kind_value
+  ON nonprofit_identifiers (kind, lower(value))
+  WHERE kind IN ('email', 'domain');
+
+-- Deny identifiers are scoped to the owning org (the gate applies a deny only to
+-- that org), so uniqueness is PER-ORG: different orgs may each block the same
+-- address/domain for themselves, but one org can't list the same deny twice.
+CREATE UNIQUE INDEX nonprofit_identifiers_deny_np_kind_value
+  ON nonprofit_identifiers (nonprofit_id, kind, lower(value))
+  WHERE kind IN ('email_deny', 'domain_deny');
+
 CREATE INDEX nonprofit_identifiers_np ON nonprofit_identifiers (nonprofit_id);
 
 -- Opt-in public listing. Only orgs explicitly marked `listed` appear on the

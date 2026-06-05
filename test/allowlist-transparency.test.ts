@@ -109,6 +109,28 @@ describe('admin nonprofit management', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('lets two orgs deny the same value (per-org) but keeps allow domains globally unique', async () => {
+    const orgA = await createVerifiedNonprofit('a@orga.org', 'Org A');
+    const orgB = await createVerifiedNonprofit('b@orgb.org', 'Org B');
+    const deny = (id: string) =>
+      req(`/admin/nonprofits/${id}/identifiers`, {
+        method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'domain_deny', value: 'spammer.com' }),
+      });
+    // Deny is org-scoped, so both orgs can block the same domain.
+    expect((await deny(orgA)).status).toBe(200);
+    expect((await deny(orgB)).status).toBe(200);
+    // But the same org can't list the identical deny twice.
+    expect((await deny(orgA)).status).toBe(409);
+
+    // Allow domains stay globally unique — a second org can't claim orgA's.
+    const allow = (id: string) =>
+      req(`/admin/nonprofits/${id}/identifiers`, {
+        method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'domain', value: 'shared-claim.org' }),
+      });
+    expect((await allow(orgA)).status).toBe(200);
+    expect((await allow(orgB)).status).toBe(409);
+  });
+
   it('overrides fields: verify and list a nonprofit', async () => {
     const id = await createNonprofit('Hope House'); // starts unverified, unlisted
     const res = await req(`/admin/nonprofits/${id}`, {
