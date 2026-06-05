@@ -727,6 +727,11 @@ export interface DevStats {
  * "running tally" the runner can show. Scoped to the caller's dev_id. SUM over
  * BIGINT yields NUMERIC (returned as a string by node-postgres), so the money
  * sums are cast back to ::bigint to land as JS numbers via the OID-20 parser.
+ *
+ * LEFT JOIN tasks (like getDevLedger): the counts and dates depend only on
+ * ledger columns, so a deleted task must not drop those rows — it only nulls
+ * that task's max_cost_cents, omitting its donated contribution (SUM/COALESCE
+ * skip the null) rather than corrupting the whole aggregate.
  */
 export async function getDevStats(devId: string): Promise<DevStats> {
   const summaryP = query<{
@@ -746,15 +751,15 @@ export async function getDevStats(devId: string): Promise<DevStats> {
           FILTER (WHERE l.event_type IN ('submit', 'accept')) AS nonprofits_helped,
         MIN(l.created_at) FILTER (WHERE l.event_type = 'submit') AS first_contribution_at,
         MAX(l.created_at) FILTER (WHERE l.event_type = 'submit') AS last_contribution_at
-       FROM ledger l JOIN tasks t ON t.id = l.task_id
+       FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id
       WHERE l.dev_id = $1`,
     [devId],
   );
   const monthsP = query<{ month: string; donated_cents: number; tasks: number }>(
     `SELECT to_char(date_trunc('month', l.created_at), 'YYYY-MM') AS month,
-            SUM(l.delta_cents + t.max_cost_cents)::bigint AS donated_cents,
+            COALESCE(SUM(l.delta_cents + t.max_cost_cents), 0)::bigint AS donated_cents,
             COUNT(DISTINCT l.task_id) AS tasks
-       FROM ledger l JOIN tasks t ON t.id = l.task_id
+       FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id
       WHERE l.dev_id = $1 AND l.event_type = 'submit'
       GROUP BY 1
       ORDER BY 1 DESC`,

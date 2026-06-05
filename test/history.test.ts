@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { checkoutTask, submitResult, releaseTask, acceptTask } from '../src/operations.js';
 import { app } from '../src/server.js';
-import { closePool } from '../src/db.js';
+import { pool, closePool } from '../src/db.js';
 import {
   resetDb,
   createDev,
@@ -136,6 +136,22 @@ describe('GET /devs/me/stats', () => {
 
     const s = await getJson('/devs/me/stats', aliceTok);
     expect(s.total_donated_cents).toBe(500);
+  });
+
+  it('keeps ledger-only aggregates when a row has no matching task (LEFT JOIN)', async () => {
+    // Simulate an orphaned ledger row (task gone / task_id nulled). With an
+    // INNER JOIN this submit would vanish from every aggregate; the LEFT JOIN
+    // must preserve the counts/dates and only omit its donated contribution.
+    const t = await createTask(np, { max: 500 });
+    await contribute(alice, t, 380);
+    await pool.query(`UPDATE ledger SET task_id = NULL WHERE dev_id = $1`, [alice]);
+
+    const s = await getJson('/devs/me/stats', aliceTok);
+    expect(s.nonprofits_helped).toBe(1); // the submit row survives the join
+    expect(s.first_contribution_at).toBeTruthy();
+    expect(s.last_contribution_at).toBeTruthy();
+    expect(s.total_donated_cents).toBe(0); // no task → no max_cost → omitted, not crashed
+    expect(s.by_month[0]).toMatchObject({ donated_cents: 0 });
   });
 
   it('zeroes out for a dev with no history', async () => {
