@@ -110,6 +110,9 @@ describe('completedRequestForTask (completion trigger)', () => {
     const target = await completedRequestForTask(ids.at(-1)!);
     expect(target).toMatchObject({ request_id: r.intake_id, from_email: 'director@shelter.org' });
     expect(target?.org).toBeTruthy();
+
+    // Idempotent: a second call (e.g. a concurrent accept) claims nothing.
+    expect(await completedRequestForTask(ids[0])).toBeNull();
   });
 
   it('is null for a task that has no intake request (admin-created)', async () => {

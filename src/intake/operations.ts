@@ -252,34 +252,31 @@ export interface CompletionTarget {
 }
 
 /**
- * If the task's intake request is now fully accepted (every task accepted),
- * return who to notify; else null. Tasks created outside intake (no
- * intake_request_id) return null. Call this right after accepting a task: a
- * non-null result means *this* acceptance completed the request, so it's the
- * single point at which the completion email should fire.
+ * Atomically claim the completion notification for the task's intake request:
+ * if every task is now accepted AND it hasn't been claimed yet, flip
+ * completed_notified_at and return who to notify; otherwise null. The flip is a
+ * single UPDATE, so two concurrent accepts of the final tasks can't both win —
+ * only the first to commit returns a row, the rest get null (no double-send).
+ * Tasks with no intake_request_id (admin-created) return null.
  */
 export async function completedRequestForTask(taskId: string): Promise<CompletionTarget | null> {
-  const { rows } = await query<{
-    request_id: string;
-    from_email: string;
-    org: string;
-    total: number;
-    done: number;
-  }>(
-    `SELECT r.id AS request_id, r.from_email, n.name AS org,
-            count(t.*)::int AS total,
-            count(t.*) FILTER (WHERE t.status = 'accepted')::int AS done
-       FROM tasks src
-       JOIN intake_requests r ON r.id = src.intake_request_id
-       JOIN nonprofits n ON n.id = r.nonprofit_id
-       JOIN tasks t ON t.intake_request_id = r.id
-      WHERE src.id = $1
-      GROUP BY r.id, r.from_email, n.name`,
+  const { rows } = await query<{ request_id: string; from_email: string; org: string }>(
+    `WITH claimed AS (
+       UPDATE intake_requests r
+          SET completed_notified_at = now()
+        WHERE r.id = (SELECT intake_request_id FROM tasks WHERE id = $1)
+          AND r.completed_notified_at IS NULL
+          AND EXISTS (SELECT 1 FROM tasks t WHERE t.intake_request_id = r.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks t WHERE t.intake_request_id = r.id AND t.status <> 'accepted'
+          )
+        RETURNING r.id, r.from_email, r.nonprofit_id
+     )
+     SELECT c.id AS request_id, c.from_email, n.name AS org
+       FROM claimed c JOIN nonprofits n ON n.id = c.nonprofit_id`,
     [taskId],
   );
-  const r = rows[0];
-  if (!r || r.total === 0 || r.done < r.total) return null;
-  return { request_id: r.request_id, from_email: r.from_email, org: r.org };
+  return rows[0] ?? null;
 }
 
 /** Re-run the decomposer on a request, replacing the draft. */
