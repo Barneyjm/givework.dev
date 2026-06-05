@@ -44,7 +44,8 @@ function collectRecords(results: TaskResult[]): Record_[] | null {
         const rec: Record_ = { task: r.title };
         for (const [k, v] of Object.entries(item)) {
           if (!isPrimitive(v)) return null; // nested → not tabular
-          rec[k] = v as Primitive;
+          // Don't let a result's own "task" key clobber the context column.
+          rec[k === 'task' ? 'task_result' : k] = v as Primitive;
         }
         records.push(rec);
       } else if (isPrimitive(item)) {

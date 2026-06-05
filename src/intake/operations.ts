@@ -269,13 +269,9 @@ export async function getRequestResults(requestId: string): Promise<TaskResult[]
 export async function getRequestResultsForToken(token: string): Promise<TaskResult[] | null> {
   const status = await getRequestStatus(token);
   if (!status || status.stage !== 'complete') return null;
-  // getRequestStatus validated the token is a real, complete request; fetch by id.
-  const { rows } = await query<{ id: string }>(
-    `SELECT id FROM intake_requests WHERE id = $1`,
-    [token],
-  );
-  if (!rows[0]) return null;
-  return getRequestResults(rows[0].id);
+  // getRequestStatus already validated the token is a real, complete request,
+  // and the token IS the request id — fetch directly, no extra lookup.
+  return getRequestResults(token);
 }
 
 export interface CompletionTarget {

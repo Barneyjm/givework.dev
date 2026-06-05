@@ -8,7 +8,7 @@ import {
   completionEmail,
   statusUrlFor,
 } from '../src/intake/email.js';
-import { buildMime, FROM_ADDRESS } from '../src/mailer.js';
+import { buildMime, brandedHtml, FROM_ADDRESS } from '../src/mailer.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
 import { pool, closePool } from '../src/db.js';
 import { resetDb, createVerifiedNonprofit } from './helpers.js';
@@ -255,6 +255,12 @@ describe('buildMime (mailer)', () => {
     const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'x' });
     expect(raw).not.toContain('In-Reply-To:');
     expect(raw).not.toContain('References:');
+  });
+
+  it('brandedHtml escapes quotes so a crafted URL cannot break out of href', () => {
+    const html = brandedHtml('Visit https://evil.example/x"onmouseover="alert(1)');
+    expect(html).toContain('&quot;'); // the quote was entity-escaped
+    expect(html).not.toContain('"onmouseover="alert'); // no raw attribute breakout
   });
 
   it('includes an attachment when provided', () => {

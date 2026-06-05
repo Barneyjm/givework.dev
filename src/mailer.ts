@@ -31,7 +31,12 @@ export interface OutboundEmail {
 const C = { paper: '#f4f1e6', ink: '#161310', red: '#e1342b', blue: '#21449c', yellow: '#f3c20a' };
 
 const esc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
 /** Render the plain-text body into branded HTML: paragraphs, <br>, linkified URLs. */
 function bodyToHtml(text: string): string {

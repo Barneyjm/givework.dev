@@ -28,6 +28,12 @@ describe('resultsToFile', () => {
     expect(f.content).toContain('"a, b ""c""\nd"');
   });
 
+  it('does not let a result "task" key clobber the title column', () => {
+    const f = resultsToFile([{ title: 'Batch 1', result: { task: 'categorize', need: 'food' } }]);
+    expect(f.content.split('\r\n')[0]).toBe('task,task_result,need');
+    expect(f.content).toContain('Batch 1,categorize,food');
+  });
+
   it('falls back to JSON when results are nested / non-tabular', () => {
     const f = resultsToFile([{ title: 'T', result: { summary: 'x', tags: ['a', 'b'] } }]);
     expect(f.filename).toBe('givework-results.json');
