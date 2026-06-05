@@ -258,15 +258,42 @@ function userMessage(input: IntakeInput): string {
 // color codes and spinners into stdout, which would otherwise poison the JSON.
 const ANSI_RE = /[\u001B\u009B](?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
+/**
+ * From the opening bracket at `start`, return the index of its matching close,
+ * tracking nesting depth and ignoring brackets inside strings. This beats a
+ * whole-string lastIndexOf, which would swallow trailing prose containing a
+ * stray `}`/`]` (e.g. `{…valid json…}\n\nNote: see {debug:true}`) into the
+ * region and corrupt the parse. Returns -1 if unterminated.
+ */
+function matchingClose(s: string, start: number): number {
+  const open = s[start];
+  const close = open === '[' ? ']' : '}';
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === open) depth++;
+    else if (ch === close && --depth === 0) return i;
+  }
+  return -1;
+}
+
 export function extractTasks(text: string): unknown[] {
   let s = text.replace(ANSI_RE, '').trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();
   const start = s.search(/[[{]/);
   if (start === -1) throw new Error('no JSON found in model output');
-  const open = s[start];
-  const end = s.lastIndexOf(open === '[' ? ']' : '}');
-  if (end <= start) throw new Error('unterminated JSON in model output');
+  const end = matchingClose(s, start);
+  if (end === -1) throw new Error('unterminated JSON in model output');
   const region = s.slice(start, end + 1);
   let parsed: any;
   try {

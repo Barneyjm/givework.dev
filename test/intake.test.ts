@@ -233,6 +233,18 @@ describe('extractTasks (tolerant JSON extraction)', () => {
     expect(extractTasks('{"tasks":[{"title":"A","spec":{"prompt":"x"}},]}')).toHaveLength(1); // trailing comma
     expect(extractTasks('{"tasks":[{"title":"A" "spec":{"prompt":"x"}}]}')).toHaveLength(1); // missing comma
   });
+  it('ignores trailing prose containing stray braces (depth-matched close, not lastIndexOf)', () => {
+    // A chatty CLI appends a note with its own `}` after the JSON. A naive
+    // lastIndexOf('}') would swallow it into the region and corrupt the parse.
+    const out = extractTasks(JSON.stringify({ tasks: one }) + '\n\nNote: see config {debug:true} for more.') as any[];
+    expect(out).toHaveLength(1);
+    expect(out[0].title).toBe('T');
+  });
+  it('does not treat brackets inside string values as structure', () => {
+    const out = extractTasks('{"tasks":[{"title":"has } brace","spec":{"prompt":"x"}}]} trailing') as any[];
+    expect(out).toHaveLength(1);
+    expect(out[0].title).toBe('has } brace');
+  });
   it('throws when there is no JSON', () => {
     expect(() => extractTasks('the model said no')).toThrow();
   });

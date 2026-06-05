@@ -277,9 +277,15 @@ async function adminDecompose(args: string[]): Promise<void> {
   }
   console.log(`admin decompose → ${base}  (engine: ${engine})`);
 
+  // IDs the model couldn't upgrade this run. Re-running them every tick would
+  // re-invoke a minute-long model on intake it will keep failing, so we skip
+  // them for the life of the process (a restart re-attempts — the failure may
+  // be transient, e.g. the model was briefly down).
+  const skip = new Set<string>();
+
   async function pass(): Promise<number> {
     const list = await apiRequest<any[]>(base, { path: '/admin/intake?status=decomposed', token });
-    const pending = list.filter((r) => r.triaged_by === 'stub'); // not yet upgraded off-Worker
+    const pending = list.filter((r) => r.triaged_by === 'stub' && !skip.has(r.id)); // not yet upgraded off-Worker
     let done = 0;
     for (const r of pending) {
       const full = await apiRequest<any>(base, { path: `/admin/intake/${encodeURIComponent(r.id)}`, token });
@@ -290,7 +296,8 @@ async function adminDecompose(args: string[]): Promise<void> {
         attachment_count: Array.isArray(full.attachments) ? full.attachments.length : 0,
       });
       if (triagedBy !== 'local') {
-        console.log(`  · ${r.id}  model unavailable (fell back to stub) — left as-is`);
+        skip.add(r.id);
+        console.log(`  · ${r.id}  model unavailable (fell back to stub) — skipping this run`);
         continue;
       }
       await apiRequest(base, {

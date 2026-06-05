@@ -7,7 +7,12 @@ import { spawn } from 'node:child_process';
 // only run on Node (e.g. CliDecomposer), never at the top of a Worker-bundled
 // file.
 
-/** Spawn `cmd args…`, write `input` to stdin, resolve stdout. Throws on non-zero exit / spawn error / timeout. */
+// Hard cap on captured stdout. A decomposition draft is a few KB of JSON; a CLI
+// streaming far more than this is runaway/hostile, so we kill it rather than let
+// `out` grow until the (long-lived) watcher process OOMs.
+const MAX_STDOUT_BYTES = 8 * 1024 * 1024; // 8 MiB
+
+/** Spawn `cmd args…`, write `input` to stdin, resolve stdout. Throws on non-zero exit / spawn error / timeout / oversized output. */
 export function spawnCli(
   cmd: string,
   args: string[],
@@ -22,7 +27,14 @@ export function spawnCli(
       child.kill('SIGKILL');
       reject(new Error(`${cmd} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    child.stdout.on('data', (d) => (out += d));
+    child.stdout.on('data', (d) => {
+      out += d;
+      if (out.length > MAX_STDOUT_BYTES) {
+        clearTimeout(timer);
+        child.kill('SIGKILL');
+        reject(new Error(`${cmd} produced more than ${MAX_STDOUT_BYTES} bytes — aborted`));
+      }
+    });
     child.stderr.on('data', (d) => (err += d));
     child.on('error', (e) => {
       clearTimeout(timer);
