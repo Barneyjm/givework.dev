@@ -208,4 +208,11 @@ describe('buildOnboardingReply', () => {
     expect(raw).not.toContain('In-Reply-To:');
     expect(raw).not.toContain('References:');
   });
+
+  it('does not stack Re: when the subject is already a reply', () => {
+    const raw = buildOnboardingReply({ to: 'x@org.org', subject: 'Re: Need help', inReplyTo: null });
+    const subj = decodeWord(raw);
+    expect(subj).toContain('Re: Need help');
+    expect(subj).not.toContain('Re: Re:');
+  });
 });

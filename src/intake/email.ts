@@ -229,7 +229,13 @@ export function buildOnboardingReply(opts: {
   const msg = createMimeMessage();
   msg.setSender({ name: 'Givework', addr: INTAKE_ADDRESS });
   msg.setRecipient(opts.to);
-  msg.setSubject(opts.subject ? `Re: ${opts.subject}` : 'Getting started with Givework');
+  // Reply subject: prefix Re: but don't stack it (avoid "Re: Re: …").
+  const subject = opts.subject
+    ? /^re:/i.test(opts.subject.trim())
+      ? opts.subject.trim()
+      : `Re: ${opts.subject}`
+    : 'Getting started with Givework';
+  msg.setSubject(subject);
   if (opts.inReplyTo) {
     msg.setHeader('In-Reply-To', opts.inReplyTo);
     msg.setHeader('References', opts.inReplyTo);
@@ -279,6 +285,10 @@ export async function emailHandler(
     try {
       // @ts-ignore - 'cloudflare:email' is a Workers-runtime built-in module
       const { EmailMessage } = await import('cloudflare:email');
+      // Reply recipient is message.from (the envelope sender) — Cloudflare only
+      // permits replying to the original sender, so we can't target the parsed
+      // header From if they differ. For DMARC-aligned mail (which is the only
+      // mail that reaches here) they share the authenticated domain anyway.
       const raw = buildOnboardingReply({
         to: message.from,
         subject: result.reply?.subject ?? null,
