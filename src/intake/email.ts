@@ -24,6 +24,13 @@ export interface ParsedEmail {
   subject: string | null;
   text: string | null;
   attachments: { uri: string; filename?: string; content_type?: string }[];
+  /**
+   * The top-most Authentication-Results header from the raw message. Cloudflare
+   * prepends its SPF/DKIM/DMARC verdict here on receipt, so the first occurrence
+   * is the trusted one. Read from the raw because message.headers (the Worker's
+   * Headers view) does not reliably surface the verdict Cloudflare added.
+   */
+  authResults: string | null;
 }
 
 /** Strip tags from an HTML body as a last resort when there's no text/plain part. */
@@ -51,11 +58,16 @@ export async function parseInboundEmail(
     filename: a.filename ?? undefined,
     content_type: a.mimeType ?? undefined,
   }));
+  // First (top-most) Authentication-Results = the one Cloudflare prepended. keys
+  // are lowercased by postal-mime, so an exact compare is fine.
+  const authResults =
+    email.headers?.find((h) => h.key === 'authentication-results')?.value ?? null;
   return {
     from: email.from?.address?.toLowerCase() ?? null,
     subject: email.subject ?? null,
     text,
     attachments,
+    authResults,
   };
 }
 
@@ -94,19 +106,32 @@ export interface InboundEmailMeta {
  * the expected "rejected" cases, so the Worker handler can map them to a clean
  * SMTP reject. Genuine failures (DB down, decomposer crash) still throw.
  *
- * The DMARC gate runs first — before even parsing — so unauthenticated mail
- * (the bulk of hostile inbound) is rejected without paying for a full MIME
- * parse, and we only ever trust `from` once its domain is authenticated, so a
- * spoofed `From: x@<partner-domain>` can't match.
+ * We only ever trust `from` once its domain is DMARC-authenticated, so a spoofed
+ * `From: x@<partner-domain>` can't match. The verdict comes from the raw message
+ * (Cloudflare's prepended Authentication-Results), preferring an explicit
+ * meta.authResults (message.headers) when the caller supplies one.
  */
 export async function ingestInboundEmail(
   raw: ArrayBuffer | Uint8Array | string,
   meta: InboundEmailMeta = {},
 ): Promise<IngestResult> {
-  if (!dmarcPassed(meta.authResults)) return { accepted: false, reason: 'unauthenticated' };
-
   const parsed = await parseInboundEmail(raw);
+  const authResults = meta.authResults ?? parsed.authResults;
+  const passed = dmarcPassed(authResults);
+  // Diagnostic (visible via `wrangler tail`): which source carried the verdict
+  // and the decision. Logs auth metadata + sender domain only — never the body.
+  console.log(
+    'intake-email',
+    JSON.stringify({
+      from_domain: parsed.from?.split('@')[1] ?? null,
+      header_ar: meta.authResults ? meta.authResults.slice(0, 200) : null,
+      raw_ar: parsed.authResults ? parsed.authResults.slice(0, 200) : null,
+      dmarc_pass: passed,
+    }),
+  );
+
   if (!parsed.from) return { accepted: false, reason: 'no_sender' };
+  if (!passed) return { accepted: false, reason: 'unauthenticated' };
 
   const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
   if (!nonprofitId) return { accepted: false, reason: 'sender_not_approved' };
