@@ -192,7 +192,7 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
   if (!UUID_RE.test(token)) return null;
   const { rows } = await query<{
     status: string;
-    created_at: string;
+    created_at: string | Date; // pg parses timestamptz to a Date at runtime
     org: string;
     total: number;
     done: number;
@@ -236,7 +236,8 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
 
   return {
     org: r.org,
-    submitted_at: r.created_at,
+    // Normalize to an ISO string so the type is honest regardless of the driver.
+    submitted_at: new Date(r.created_at).toISOString(),
     stage,
     label,
     note,

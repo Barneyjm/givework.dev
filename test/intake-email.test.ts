@@ -238,8 +238,12 @@ describe('buildConfirmationReply', () => {
     expect(url).toBe('https://givework.dev/status?task_id=abc-123');
   });
 
-  it('uses a default subject when the original had none', () => {
-    const raw = buildConfirmationReply({ to: 'x@org.org', subject: null, inReplyTo: null, statusUrl: 'https://givework.dev/status.html?t=1' });
-    expect(decodeWord(raw)).toContain('We got your request');
+  it('uses a default subject when the original had none or was blank', () => {
+    for (const subject of [null, '   ']) {
+      const raw = buildConfirmationReply({ to: 'x@org.org', subject, inReplyTo: null, statusUrl: 'https://givework.dev/status?task_id=1' });
+      const subj = decodeWord(raw);
+      expect(subj).toContain('We got your request');
+      expect(subj).not.toContain('Re: '); // no "Re: " with an empty subject
+    }
   });
 });

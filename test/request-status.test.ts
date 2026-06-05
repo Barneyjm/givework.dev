@@ -24,6 +24,9 @@ describe('getRequestStatus stage mapping', () => {
     expect(s?.label).toBe('Received');
     expect(s?.org).toBeTruthy();
     expect(s?.progress).toEqual({ done: 0, total: 0 });
+    // submitted_at is a normalized ISO string, not a Date.
+    expect(typeof s?.submitted_at).toBe('string');
+    expect(s?.submitted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('reports "in_progress" with progress once published', async () => {

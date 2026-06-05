@@ -253,8 +253,8 @@ Questions? Just reply to this email.
 
 /** Prefix "Re:" without stacking it; fall back to a default subject. */
 function replySubject(subject: string | null, fallback: string): string {
-  if (!subject) return fallback;
-  const s = subject.trim();
+  const s = subject?.trim();
+  if (!s) return fallback;
   return /^re:/i.test(s) ? s : `Re: ${s}`;
 }
 

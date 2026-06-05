@@ -98,6 +98,7 @@
     const ORDER = ['received', 'in_progress', 'complete'];
 
     function fmtDate(iso) {
+      if (!iso) return '';
       try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }); }
       catch { return ''; }
     }
