@@ -165,6 +165,85 @@ export async function receiveIntake(input: ReceiveInput) {
   return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
 }
 
+// ---------------------------------------------------------------------------
+// public request status (the shareable status page)
+// ---------------------------------------------------------------------------
+
+export interface RequestStatus {
+  org: string;
+  submitted_at: string;
+  stage: 'received' | 'in_progress' | 'complete' | 'closed';
+  label: string;
+  note: string;
+  progress: { done: number; total: number };
+}
+
+/** Match a v4-style UUID, so a junk token is a clean 404 rather than a 22P02 → 500. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A nonprofit-facing status for one intake request, keyed by the request id —
+ * an unguessable gen_random_uuid() that doubles as the share-link capability
+ * (knowing it grants nothing: every admin route is token-gated regardless).
+ * Plain language only — no task content, models, costs, prompts. Returns null
+ * for an unknown/invalid id. Drives GET /requests/:id and the status page.
+ */
+export async function getRequestStatus(token: string): Promise<RequestStatus | null> {
+  if (!UUID_RE.test(token)) return null;
+  const { rows } = await query<{
+    status: string;
+    created_at: string;
+    org: string;
+    total: number;
+    done: number;
+  }>(
+    `SELECT r.status, r.created_at, n.name AS org,
+            (SELECT count(*)::int FROM tasks t WHERE t.intake_request_id = r.id) AS total,
+            (SELECT count(*)::int FROM tasks t WHERE t.intake_request_id = r.id AND t.status = 'accepted') AS done
+       FROM intake_requests r
+       JOIN nonprofits n ON n.id = r.nonprofit_id
+      WHERE r.id = $1`,
+    [token],
+  );
+  const r = rows[0];
+  if (!r) return null;
+
+  // Map internal status → a friendly, non-technical stage.
+  let stage: RequestStatus['stage'];
+  let label: string;
+  let note: string;
+  if (r.status === 'rejected' || r.status === 'closed') {
+    stage = 'closed';
+    label = 'Closed';
+    note = 'This request was closed. Reply to your confirmation email or write hello@givework.dev with any questions.';
+  } else if (r.status === 'published' && r.total > 0 && r.done >= r.total) {
+    stage = 'complete';
+    label = 'Complete';
+    note = 'The work is finished — your results are on the way back to you.';
+  } else if (r.status === 'published') {
+    stage = 'in_progress';
+    label = 'In progress';
+    note =
+      r.total > 0
+        ? `Volunteers are working on it — ${r.done} of ${r.total} pieces done so far.`
+        : 'Volunteers are picking this up now.';
+  } else {
+    // received | decomposed → still being scoped on our side.
+    stage = 'received';
+    label = 'Received';
+    note = "We've got your request and are scoping the work. You'll see this move soon.";
+  }
+
+  return {
+    org: r.org,
+    submitted_at: r.created_at,
+    stage,
+    label,
+    note,
+    progress: { done: r.done, total: r.total },
+  };
+}
+
 /** Re-run the decomposer on a request, replacing the draft. */
 export async function redecompose(intakeId: string) {
   const r = await query<{ from_email: string; subject: string | null; raw_body: string; status: string }>(

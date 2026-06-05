@@ -277,6 +277,7 @@ A  POST /admin/intake/:id/publish   { tasks? }   -- defaults to the AI draft
 A  POST /admin/intake/:id/reject
 
 —  GET  /transparency                                   -- public: listed orgs + task counts
+—  GET  /requests/:id                                    -- public: plain-language status (id = the share-link token)
 
 D  POST /checkout            { task_id }
 D  POST /submit              { task_id, result, actual_cost_cents, raw_usage }
