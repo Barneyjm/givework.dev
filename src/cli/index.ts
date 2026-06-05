@@ -1,5 +1,5 @@
 import { login } from './login.js';
-import { whoami, budget, history, stats, version, run, admin, status } from './commands.js';
+import { whoami, budget, history, stats, version, run, admin, status, tasks } from './commands.js';
 import { ApiError } from './api.js';
 import { CONFIG_PATH } from './config.js';
 
@@ -15,6 +15,7 @@ Dev:
   login                      sign in with GitHub (opens your browser)
   whoami                     show your handle, verification, and budget
   budget set <cents>         set how much of your own Claude credit to donate this month
+  tasks                      browse the open task pool [--max <cents>] [--sensitivity <s>] [--limit <n>]
   run [--once|--watch]       do work: poll → checkout → claude -p → submit
                              [--interval <s>] [--max <n>] [--stop-on-error]
   stats                      your all-time donated total and per-month breakdown
@@ -42,6 +43,7 @@ async function main(argv: string[]): Promise<void> {
     case 'login': return login();
     case 'whoami': return whoami();
     case 'budget': return budget(args);
+    case 'tasks': return tasks(args);
     case 'stats': return stats();
     case 'history': return history(args);
     case 'run': return run(args);
