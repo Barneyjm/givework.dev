@@ -4,7 +4,7 @@ A build target for Claude Code. This is the **backend ledger core only** — no 
 
 ## Context (for the agent)
 
-Givework is a marketplace where developers donate AI inference capacity to nonprofits ("Agentic Volunteering"). Nonprofits post verifiable tasks; a developer's local runner checks out a task, executes it against the developer's Anthropic Agent SDK credit, and submits the result. The platform tracks budgets and maintains an append-only ledger that gives each developer a verifiable record of what they contributed.
+Givework is a marketplace where developers donate AI inference capacity to nonprofits ("Agentic Volunteering"). Nonprofits post verifiable tasks; a developer's local runner checks out a task, executes it against the developer's Anthropic Agent SDK credit, and submits the result. The platform tracks budgets and maintains a ledger that gives each developer a verifiable record of what they contributed.
 
 Stage 1 builds the part everything else depends on: the budget accounting and task state machine. If the atomic checkout/submit/expire transactions aren't bulletproof, nothing built on top will be. So this stage is small on purpose and heavy on correctness.
 
@@ -23,7 +23,7 @@ Stage 1 builds the part everything else depends on: the budget accounting and ta
 - Real Anthropic / Agent SDK calls
 - OAuth or any auth (endpoints are unauthenticated; assume trusted caller)
 - The Go runner (a stub that prints "would call Claude here" is fine if needed for an end-to-end smoke test, but is not required)
-- Receipt PDF generation
+- Contribution-summary PDF generation
 - EIN verification
 - Web UI / dashboards
 - Rate limiting, strike system, gifting, rollover, leaky-bucket fairness
@@ -115,7 +115,7 @@ CREATE TABLE tasks (
 CREATE INDEX idx_tasks_open ON tasks (est_cost_cents) WHERE status = 'open';
 CREATE INDEX idx_tasks_expiry ON tasks (lock_expires_at) WHERE status = 'locked';
 
--- Append-only audit trail. Source of truth for receipts. Never UPDATE or DELETE rows here.
+-- Audit trail of every budget change. Insert-only by convention — don't UPDATE or DELETE rows here.
 CREATE TABLE ledger (
   id BIGSERIAL PRIMARY KEY,
   task_id UUID REFERENCES tasks(id),
@@ -230,7 +230,7 @@ The build is done when all of these pass as automated tests against a real Postg
 9. **Actual exceeds reservation**: submit with `actual_cost_cents > max_cost_cents` → spend clamped, CHECK constraint never violated, overage flagged in ledger `raw_usage`.
 10. **Invariant fuzz**: run 100 randomized checkout/submit/release/expire operations across a few devs and tasks; after every operation assert `reserved + spent <= budget` holds for every dev_budgets row and that the sum of ledger deltas per dev equals `reserved + spent`.
 
-Criterion 10 is the one that matters most. If the ledger and the budget rows ever disagree, the receipts will be wrong, and wrong receipts are worse than no product.
+Criterion 10 is the one that matters most. If the ledger and the budget rows ever disagree, the tracked totals will be wrong, and wrong totals are worse than no product.
 
 ## Project layout (suggested)
 

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Givework for Volunteers — Put your idle agent to work</title>
+<meta name="description" content="Your Claude plan already includes a free, dedicated agent for headless work — and most of it sits idle. Lend it to nonprofits: real tasks, run on your own machine, hard budget caps, a clear tally of everything you give." />
+
+<link rel="canonical" href="https://givework.dev/volunteers" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Givework" />
+<meta property="og:url" content="https://givework.dev/volunteers" />
+<meta property="og:title" content="Givework for Volunteers — Put your idle agent to work" />
+<meta property="og:description" content="Lend the included Agent SDK credit you already have. Your machine, your budget, a clear tally of everything you give." />
+<meta property="og:image" content="https://givework.dev/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Givework for Volunteers" />
+<meta name="twitter:description" content="Point your idle, already-included agent credit at work that matters." />
+<meta name="twitter:image" content="https://givework.dev/og.png" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<!-- Shared styles: chrome (base) + persona-page layout. Page-specific rules below. -->
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  /* Volunteer hero accent is blue (nonprofit's is red — the persona.css default). */
+  .subhero h1 .u { color: var(--blue); }
+
+  /* Volunteer-only: the three-command quickstart. */
+  .quickstart { border-top: var(--line); border-bottom: var(--line); background: var(--blue); color: #fff; }
+  .quickstart .wrap { padding: clamp(2.6rem,6vw,4rem) var(--gut); display:grid; grid-template-columns: 1fr 1.25fr; gap: clamp(1.5rem,4vw,3rem); align-items:center; }
+  .quickstart .wrap > * { min-width: 0; }
+  .quickstart .eyebrow { color: var(--yellow); }
+  .quickstart h3 { font-size: clamp(1.7rem,3.4vw,2.6rem); text-transform:uppercase; letter-spacing:-.02em; margin:.6rem 0 .8rem; font-weight:700; }
+  .quickstart p { font-weight:300; max-width: 38ch; margin:0; }
+  .quickstart .note { font-size:.9rem; margin-top:1rem; }
+  .quickstart .note .mono { background: rgba(0,0,0,.22); padding:0 .25rem; border-radius:3px; }
+  pre.cli { font-size:.78rem; padding:1rem 1.1rem; }  /* shared look in base.css */
+
+  @media (max-width: 820px) {
+    .quickstart .wrap { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body id="top">
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/>
+        <circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/>
+        <polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/nonprofits">For nonprofits</a>
+      <a class="navlink" href="#how">How it works</a>
+      <a class="cta mono" href="https://api.givework.dev/auth/github/login">Become a volunteer</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="subhero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">For developers</span>
+        <h1>Put your <span class="u">idle</span> agent to work.</h1>
+        <p class="lede">Your Claude plan already includes a free, dedicated agent credit built for headless <span class="mono">claude&nbsp;-p</span> work — separate from your normal usage, and mostly left on the table. Point it at vetted nonprofit tasks. Your machine, your budget, no new spend.</p>
+        <div class="actions">
+          <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a volunteer &nbsp;→</a>
+          <a class="btn btn--ghost" href="#how">How it works &nbsp;→</a>
+        </div>
+      </div>
+      <div class="art" aria-hidden="true">
+        <svg viewBox="0 0 320 240" preserveAspectRatio="xMidYMid meet">
+          <rect x="40" y="40" width="150" height="150" fill="#21449c"/>
+          <circle cx="210" cy="90" r="62" fill="#e1342b"/>
+          <polygon points="90,220 175,120 260,220" fill="#f3c20a"/>
+          <line x1="0" y1="120" x2="320" y2="120" stroke="#161310" stroke-width="3"/>
+          <circle cx="270" cy="190" r="26" fill="none" stroke="#161310" stroke-width="3"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- STRIP -->
+  <div class="strip" aria-hidden="true">
+    <div class="run">
+      <span>No new spend</span><b>◆</b>
+      <span>Runs on your machine</span><b>◆</b>
+      <span>Hard budget caps</span><b>◆</b>
+      <span>No API keys, ever</span><b>◆</b>
+      <span>A running tally of everything you give</span><b>◆</b>
+      <span>No new spend</span><b>◆</b>
+      <span>Runs on your machine</span><b>◆</b>
+      <span>Hard budget caps</span><b>◆</b>
+      <span>No API keys, ever</span><b>◆</b>
+      <span>A running tally of everything you give</span><b>◆</b>
+    </div>
+  </div>
+
+  <!-- QUICKSTART -->
+  <section class="quickstart">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">Three commands</span>
+        <h3>Up and running in minutes.</h3>
+        <p>Sign in with GitHub, decide how much of your included credit to donate, and start the runner. It claims work, does it locally, and submits the result.</p>
+        <p class="note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
+      </div>
+      <pre class="cli"><span class="cli-c"># sign in with GitHub (opens your browser)</span>
+npx github:Barneyjm/givework.dev login
+<span class="cli-c"># set how much of your own credit to donate (¢/mo)</span>
+npx github:Barneyjm/givework.dev budget set 2000
+<span class="cli-c"># do donated work on your own claude -p</span>
+EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="pad" id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">How it works</span>
+        <h3>What actually happens.</h3>
+      </div>
+      <div class="steps-wrap">
+        <div class="step"><div class="n n--square">01</div><div><h4>Sign in &amp; set a budget</h4><p>Sign in with GitHub and set a monthly cap, in cents, that you're willing to donate. That number is a ceiling the system can't cross.</p></div></div>
+        <div class="step"><div class="n n--tri">02</div><div><h4>The runner checks out a task</h4><p>Your runner claims an open task and reserves its hard cap against your budget. A database invariant — <span class="mono">reserved&nbsp;+&nbsp;spent&nbsp;≤&nbsp;budget</span> — means a run can never overspend, even under races.</p></div></div>
+        <div class="step"><div class="n n--circle">03</div><div><h4>It runs locally on your agent</h4><p>The work happens with <span class="mono">claude -p</span> on your own machine, using your logged-in session. Inputs stay on your computer; there's no API key anywhere in the system.</p></div></div>
+        <div class="step"><div class="n n--square">04</div><div><h4>Submit &amp; keep a record</h4><p>Actual cost — read from the CLI's own metering — replaces the reservation. Every checkout and submission is tracked, so you can always point to exactly what you gave.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTROL / TRUST -->
+  <section class="band">
+    <div class="wrap">
+      <span class="eyebrow">You stay in control</span>
+      <h3>Donate the idle capacity — not your peace of mind.</h3>
+      <div class="band-grid">
+        <div class="item"><div class="k">Your machine, your session</div><p>Work runs locally on your logged-in <span class="mono">claude</span> CLI. Nothing is centralized; nothing leaves your control.</p></div>
+        <div class="item"><div class="k">Hard caps, enforced in the database</div><p>The budget you set is a real ceiling — backed by a row-level lock and a <span class="mono">CHECK</span> invariant, not a polite suggestion.</p></div>
+        <div class="item"><div class="k">No API keys, anywhere</div><p>The executor never holds an API key. The donated capacity is your CLI session — never a shared or pooled key.</p></div>
+        <div class="item"><div class="k">A record of everything</div><p>Each checkout and submission is tracked, so your impact is easy to see — for you, and for anyone you choose to show.</p></div>
+        <div class="item"><div class="k">Only vetted work</div><p>Tasks come from established nonprofits we partner with and are reviewed by a human before they ever enter the pool.</p></div>
+        <div class="item"><div class="k">Stop anytime</div><p>Drop a task back to the pool, lower your budget, or just stop the runner. You're never on the hook for work in flight.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VERIFICATION -->
+  <section class="pad">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Verification</span>
+        <h3>Signing in is the trust step.</h3>
+      </div>
+      <p class="callout">Completing <b>GitHub sign-in is the verification</b> — no separate application. You can pick up <b>public</b> tasks right away. Work flagged as internal or sensitive unlocks once your account clears a light bar (account age and a real public footprint), or an admin verifies you by hand. A real account is spoofable but accountable — it keeps a human behind every contribution.</p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="pad" style="border-top: var(--line);">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Questions</span>
+        <h3>The honest answers.</h3>
+      </div>
+      <div class="qa"><h4>Will this eat into my normal usage?</h4><p>It draws on the dedicated Agent SDK credit included with your plan — a separate allowance meant for exactly this kind of headless <span class="mono">claude -p</span> work, on top of your normal limits. <a href="https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan" target="_blank" rel="noopener noreferrer">Anthropic supports it explicitly.</a> You also cap the spend yourself.</p></div>
+      <div class="qa"><h4>What runs on my machine?</h4><p>A small runner you start with one command. It checks out a reviewed task, runs it with your local <span class="mono">claude -p</span>, and submits the result. Inputs stay local; nothing is uploaded to a third party by us.</p></div>
+      <div class="qa"><h4>Is this against the rules?</h4><p>No. The included Agent SDK credit is a benefit you're given for headless work, and every volunteer donates their own individual, logged-in session — never a shared or pooled key. The work is personal, not shared production automation.</p></div>
+      <div class="qa"><h4>How is the cost measured?</h4><p>From the CLI's own metering at submit time — actual cost replaces the reservation, and it's tracked. You see real numbers, not estimates.</p></div>
+      <div class="qa"><h4>Can I stop or change my budget?</h4><p>Anytime. Run <span class="mono">budget set</span> with a new number, release a task back to the pool, or stop the runner. Nothing keeps running without you.</p></div>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing">
+    <div class="wrap">
+      <span class="eyebrow">Get started</span>
+      <h3>The intelligence is already running. Aim it somewhere good.</h3>
+      <div class="actions">
+        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Volunteer your agent &nbsp;→</a>
+        <a class="btn btn--ghost" href="/">Back to home &nbsp;→</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Built for nonprofits · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

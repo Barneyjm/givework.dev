@@ -74,7 +74,7 @@ CREATE TABLE tasks (
 CREATE INDEX idx_tasks_open ON tasks (est_cost_cents) WHERE status = 'open';
 CREATE INDEX idx_tasks_expiry ON tasks (lock_expires_at) WHERE status = 'locked';
 
--- Append-only audit trail. Source of truth for receipts. Never UPDATE or DELETE rows here.
+-- Audit trail of every budget change. Insert-only by convention — don't UPDATE or DELETE rows here.
 CREATE TABLE ledger (
   id BIGSERIAL PRIMARY KEY,
   task_id UUID REFERENCES tasks(id),

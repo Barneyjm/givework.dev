@@ -226,8 +226,8 @@ export interface SubmitResult {
  * could push reserved + spent over budget and fail the CHECK constraint. We
  * never let that happen: we clamp the spend increment to max_cost_cents and flag
  * the overage in the ledger's raw_usage. The platform eats the difference in
- * Stage 1 rather than failing the transaction — a wrong receipt is worse than a
- * capped one, and the budget invariant is sacred.
+ * Stage 1 rather than failing the transaction — a wrong tracked total is worse
+ * than a capped one, and the budget invariant is sacred.
  */
 export async function submitResult(
   devId: string,
