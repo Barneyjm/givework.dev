@@ -43,12 +43,10 @@
   .quickstart p { font-weight:300; max-width: 38ch; margin:0; }
   .quickstart .note { font-size:.9rem; margin-top:1rem; }
   .quickstart .note .mono { background: rgba(0,0,0,.22); padding:0 .25rem; border-radius:3px; }
-  pre.cli { background: var(--ink); color: var(--paper); border:2px solid var(--ink); font-family:'Space Mono', ui-monospace, monospace; font-size:.78rem; line-height:1.7; margin:0; padding:1rem 1.1rem; overflow-x:auto; white-space:pre; }
-  pre.cli .c { color: var(--yellow); }
+  pre.cli { font-size:.78rem; padding:1rem 1.1rem; }  /* shared look in base.css */
 
   @media (max-width: 820px) {
     .quickstart .wrap { grid-template-columns: 1fr; }
-    pre.cli { white-space: pre-wrap; overflow-wrap: anywhere; }
   }
 </style>
 </head>
@@ -125,11 +123,11 @@
         <p>Sign in with GitHub, decide how much of your included credit to donate, and start the runner. It claims work, does it locally, and submits the result.</p>
         <p class="note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
       </div>
-      <pre class="cli"><span class="c"># sign in with GitHub (opens your browser)</span>
+      <pre class="cli"><span class="cli-c"># sign in with GitHub (opens your browser)</span>
 npx github:Barneyjm/givework.dev login
-<span class="c"># set how much of your own credit to donate (¢/mo)</span>
+<span class="cli-c"># set how much of your own credit to donate (¢/mo)</span>
 npx github:Barneyjm/givework.dev budget set 2000
-<span class="c"># do donated work on your own claude -p</span>
+<span class="cli-c"># do donated work on your own claude -p</span>
 EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
     </div>
   </section>

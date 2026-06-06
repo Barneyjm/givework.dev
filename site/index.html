@@ -82,12 +82,7 @@
   .path--dev .btn--blue:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink);}
   .path--dev li::before { background: var(--yellow); }
   .cli-lead { font-family:'Space Mono',monospace; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; font-weight:700; margin:1.4rem 0 .5rem; }
-  pre.cli {
-    background: var(--ink); color: var(--paper); border:2px solid var(--ink);
-    font-family:'Space Mono', ui-monospace, monospace; font-size:.74rem; line-height:1.7;
-    margin:0; padding:.85rem 1rem; overflow-x:auto; white-space:pre;
-  }
-  pre.cli .cli-c { color: var(--yellow); }
+  pre.cli { font-size:.74rem; padding:.85rem 1rem; }  /* shared look in base.css */
   .cli-note { font-size:.82rem; font-weight:300; margin:.7rem 0 0; }
   .cli-note .mono { background: rgba(0,0,0,.18); padding:0 .25rem; border-radius:3px; }
   .path--np   { background: var(--red); color: #fff; }
@@ -157,8 +152,7 @@
     .codecard { position: static; }
     /* Wrap the code on narrow screens so its long lines can't widen the page
        (a fixed `white-space: pre` line would force <body> past the viewport). */
-    .codecard pre,
-    pre.cli { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .codecard pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     .ledger .wrap { grid-template-columns: 1fr; }
   }
 

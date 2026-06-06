@@ -117,9 +117,22 @@ footer .mono { font-size:.74rem; letter-spacing:.1em; text-transform:uppercase; 
 footer a { text-decoration:none; }
 footer a.mail { border-bottom:2px solid var(--red); }
 
+/* ---------- CLI code block (shared by the homepage dev card + volunteer quickstart) ---------- */
+/* Common look lives here; each page sets only its own font-size/padding inline,
+   since the homepage card sits in a narrower column than the quickstart. */
+pre.cli {
+  background: var(--ink); color: var(--paper); border: 2px solid var(--ink);
+  font-family: 'Space Mono', ui-monospace, monospace; line-height: 1.7;
+  margin: 0; overflow-x: auto; white-space: pre;
+}
+pre.cli .cli-c { color: var(--yellow); }
+
 /* ---------- responsive: tablet ---------- */
 @media (max-width: 820px) {
   nav .navlink { display: none; }
+  /* Wrap CLI lines on narrow screens so a fixed `white-space: pre` line can't
+     push <body> past the viewport. */
+  pre.cli { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 
 /* ---------- responsive: phone ---------- */
