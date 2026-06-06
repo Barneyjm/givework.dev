@@ -1,4 +1,4 @@
-import { withTransaction, query, type Client } from './db.js';
+import { type Client, query, withTransaction } from './db.js';
 
 /**
  * Domain error carrying the HTTP status the server layer should surface. Lets
@@ -103,10 +103,7 @@ export interface CheckoutResult {
  * Order matters: lock the budget row first (serialization point), then claim
  * the task, then mutate budget, then write the ledger row.
  */
-export async function checkoutTask(
-  devId: string,
-  taskId: string,
-): Promise<CheckoutResult> {
+export async function checkoutTask(devId: string, taskId: string): Promise<CheckoutResult> {
   return withTransaction(async (client) => {
     // 1. Lock the dev's current-period budget row.
     const budget = await lockDevBudget(client, devId);
@@ -155,8 +152,7 @@ export async function checkoutTask(
     }
 
     // 2. Budget gate.
-    const available =
-      budget.budget_cents - budget.reserved_cents - budget.spent_cents;
+    const available = budget.budget_cents - budget.reserved_cents - budget.spent_cents;
     if (available < task.max_cost_cents) {
       throw new OpError(
         RESERVE_INSUFFICIENT_BUDGET,
@@ -178,11 +174,7 @@ export async function checkoutTask(
       [taskId, devId],
     );
     if (claim.rowCount === 0) {
-      throw new OpError(
-        CONFLICT,
-        'task_not_open',
-        'Task already claimed or not open',
-      );
+      throw new OpError(CONFLICT, 'task_not_open', 'Task already claimed or not open');
     }
     const claimed = claim.rows[0];
 
@@ -278,11 +270,7 @@ export async function submitResult(
       [taskId, devId, actualCostCents, result],
     );
     if (upd.rowCount === 0) {
-      throw new OpError(
-        CONFLICT,
-        'not_locked',
-        'Task not locked to you or already moved on',
-      );
+      throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you or already moved on');
     }
     const reserved = upd.rows[0].max_cost_cents;
 
@@ -341,10 +329,7 @@ export interface ReleaseResult {
 }
 
 /** Voluntarily abandon a locked task, returning it to the pool and freeing the reservation. */
-export async function releaseTask(
-  devId: string,
-  taskId: string,
-): Promise<ReleaseResult> {
+export async function releaseTask(devId: string, taskId: string): Promise<ReleaseResult> {
   return withTransaction(async (client) => {
     const period = await reservedPeriodOf(client, taskId);
     const budget = await lockDevBudget(client, devId, period);
@@ -560,10 +545,9 @@ export async function getBudget(devId: string): Promise<BudgetView | null> {
 
 /** Whether a dev is verified (trusted with non-public work). Missing dev -> false. */
 export async function isDevVerified(devId: string): Promise<boolean> {
-  const { rows } = await query<{ verified: boolean }>(
-    `SELECT verified FROM devs WHERE id = $1`,
-    [devId],
-  );
+  const { rows } = await query<{ verified: boolean }>(`SELECT verified FROM devs WHERE id = $1`, [
+    devId,
+  ]);
   return rows[0]?.verified ?? false;
 }
 
@@ -592,10 +576,7 @@ export async function getDevProfile(devId: string): Promise<DevProfile | null> {
  * already reserved+spent would violate the dev_budgets CHECK; we surface that as a
  * clean 409 rather than letting the constraint error become a 500.
  */
-export async function setOwnBudget(
-  devId: string,
-  budgetCents: number,
-): Promise<BudgetView> {
+export async function setOwnBudget(devId: string, budgetCents: number): Promise<BudgetView> {
   if (!Number.isInteger(budgetCents) || budgetCents < 0) {
     throw new OpError(BAD_INPUT, 'bad_input', 'budget_cents must be a non-negative integer');
   }
@@ -791,8 +772,7 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   }
   // An unverified dev is pinned to public tasks: ignore a broader requested
   // sensitivity rather than honour it.
-  const effectiveSensitivity =
-    filter.devVerified === false ? 'public' : filter.sensitivity;
+  const effectiveSensitivity = filter.devVerified === false ? 'public' : filter.sensitivity;
   if (effectiveSensitivity !== undefined) {
     params.push(effectiveSensitivity);
     conditions.push(`sensitivity = $${params.length}`);

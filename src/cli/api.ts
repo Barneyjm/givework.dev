@@ -3,7 +3,11 @@
 // 4xx/5xx for OpErrors, which we surface as a thrown ApiError(code, message).
 
 export class ApiError extends Error {
-  constructor(public code: string, message: string, public status: number) {
+  constructor(
+    public code: string,
+    message: string,
+    public status: number,
+  ) {
     super(message);
   }
 }
@@ -35,7 +39,11 @@ export async function apiRequest<T>(baseUrl: string, opts: RequestOpts): Promise
     }
   }
   if (!res.ok) {
-    throw new ApiError(payload?.error ?? `http_${res.status}`, payload?.message ?? text, res.status);
+    throw new ApiError(
+      payload?.error ?? `http_${res.status}`,
+      payload?.message ?? text,
+      res.status,
+    );
   }
   // A 2xx with an empty body parses to null; hand callers {} so property access
   // doesn't throw.

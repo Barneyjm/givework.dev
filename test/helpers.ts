@@ -1,8 +1,8 @@
 // Ensure a signing secret exists before anything in src/auth touches it.
 process.env.JWT_SECRET ??= 'test-secret-do-not-use-in-prod';
 
+import { signAdminToken, signDevToken } from '../src/auth.js';
 import { pool } from '../src/db.js';
-import { signDevToken, signAdminToken } from '../src/auth.js';
 
 export const mintDevToken = (devId: string) => signDevToken(devId);
 export const mintAdminToken = () => signAdminToken();
@@ -29,10 +29,9 @@ export async function resetDb(): Promise<void> {
 }
 
 export async function createDev(handle: string): Promise<string> {
-  const { rows } = await pool.query(
-    `INSERT INTO devs (github_handle) VALUES ($1) RETURNING id`,
-    [handle],
-  );
+  const { rows } = await pool.query(`INSERT INTO devs (github_handle) VALUES ($1) RETURNING id`, [
+    handle,
+  ]);
   return rows[0].id;
 }
 
@@ -157,8 +156,7 @@ export async function getLedger(devId: string) {
 
 /** Force a locked task's lock into the past so /expire will collect it. */
 export async function expireLockNow(taskId: string): Promise<void> {
-  await pool.query(
-    `UPDATE tasks SET lock_expires_at = now() - interval '1 second' WHERE id=$1`,
-    [taskId],
-  );
+  await pool.query(`UPDATE tasks SET lock_expires_at = now() - interval '1 second' WHERE id=$1`, [
+    taskId,
+  ]);
 }

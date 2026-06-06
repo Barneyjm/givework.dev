@@ -1,6 +1,6 @@
-import { describe, it, expect, afterAll } from 'vitest';
-import { app } from '../src/server.js';
+import { afterAll, describe, expect, it } from 'vitest';
 import { closePool } from '../src/db.js';
+import { app } from '../src/server.js';
 
 afterAll(closePool);
 

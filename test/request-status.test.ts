@@ -1,14 +1,14 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
 import {
-  receiveIntake,
-  publishIntake,
-  getRequestStatus,
   completedRequestForTask,
   getRequestResultsForToken,
+  getRequestStatus,
+  publishIntake,
+  receiveIntake,
 } from '../src/intake/operations.js';
 import { app } from '../src/server.js';
-import { pool, closePool } from '../src/db.js';
-import { resetDb, createNonprofit, createTask } from './helpers.js';
+import { createNonprofit, createTask, resetDb } from './helpers.js';
 
 afterAll(closePool);
 beforeEach(resetDb);
@@ -48,7 +48,9 @@ describe('getRequestStatus stage mapping', () => {
   it('reports "complete" when every task is accepted', async () => {
     const r = await newRequest();
     await publishIntake(r.intake_id, undefined, 'admin');
-    await pool.query(`UPDATE tasks SET status = 'accepted' WHERE intake_request_id = $1`, [r.intake_id]);
+    await pool.query(`UPDATE tasks SET status = 'accepted' WHERE intake_request_id = $1`, [
+      r.intake_id,
+    ]);
     const s = await getRequestStatus(r.intake_id);
     expect(s?.stage).toBe('complete');
     expect(s?.progress.done).toBe(s?.progress.total);
@@ -99,11 +101,15 @@ describe('completedRequestForTask (completion trigger)', () => {
     const r = await newRequest();
     await publishIntake(r.intake_id, undefined, 'admin');
     const ids = (
-      await pool.query(`SELECT id FROM tasks WHERE intake_request_id = $1 ORDER BY created_at`, [r.intake_id])
+      await pool.query(`SELECT id FROM tasks WHERE intake_request_id = $1 ORDER BY created_at`, [
+        r.intake_id,
+      ])
     ).rows.map((x) => x.id);
 
     // Accept all but the last → not complete yet.
-    await pool.query(`UPDATE tasks SET status='accepted' WHERE id = ANY($1::uuid[])`, [ids.slice(0, -1)]);
+    await pool.query(`UPDATE tasks SET status='accepted' WHERE id = ANY($1::uuid[])`, [
+      ids.slice(0, -1),
+    ]);
     expect(await completedRequestForTask(ids[0])).toBeNull();
 
     // Accept the last → completing acceptance returns the target.
@@ -157,12 +163,14 @@ describe('results (token-gated, complete-only)', () => {
   it('GET /requests/:id/results: 404 in progress, JSON + CSV download when complete', async () => {
     const open = await newRequest();
     await publishIntake(open.intake_id, undefined, 'admin');
-    expect((await app.fetch(new Request(`http://test/requests/${open.intake_id}/results`))).status).toBe(404);
+    expect(
+      (await app.fetch(new Request(`http://test/requests/${open.intake_id}/results`))).status,
+    ).toBe(404);
 
     const id = await completeWithResults();
     const json = await app.fetch(new Request(`http://test/requests/${id}/results`));
     expect(json.status).toBe(200);
-    expect((await json.json() as any).results.length).toBeGreaterThan(0);
+    expect(((await json.json()) as any).results.length).toBeGreaterThan(0);
 
     const csv = await app.fetch(new Request(`http://test/requests/${id}/results?download=csv`));
     expect(csv.headers.get('content-type')).toMatch(/text\/csv/);

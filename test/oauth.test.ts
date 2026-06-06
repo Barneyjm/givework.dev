@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
+import { shouldAutoVerify } from '../src/oauth.js';
+import { app } from '../src/server.js';
 import {
-  resetDb,
   createDev,
   createNonprofit,
   createTask,
+  getBudgetRow,
+  mintAdminToken,
+  mintDevToken,
+  resetDb,
   setBudget,
   setVerified,
-  mintDevToken,
-  mintAdminToken,
-  getBudgetRow,
 } from './helpers.js';
-import { app } from '../src/server.js';
-import { closePool, pool } from '../src/db.js';
-import { shouldAutoVerify } from '../src/oauth.js';
 
 afterAll(closePool);
 
@@ -42,7 +42,10 @@ describe('shouldAutoVerify (GitHub-signal policy)', () => {
 function req(path: string, init?: RequestInit) {
   return app.fetch(new Request(`http://test${path}`, init));
 }
-const bearer = (t: string) => ({ authorization: `Bearer ${t}`, 'content-type': 'application/json' });
+const bearer = (t: string) => ({
+  authorization: `Bearer ${t}`,
+  'content-type': 'application/json',
+});
 
 beforeEach(async () => {
   await resetDb();
@@ -96,7 +99,9 @@ async function signInWithGitHub(ghUser: {
     }
     if (url.endsWith('/user/emails')) {
       return new Response(
-        JSON.stringify([{ email: `${ghUser.login}@users.noreply.github.com`, primary: true, verified: true }]),
+        JSON.stringify([
+          { email: `${ghUser.login}@users.noreply.github.com`, primary: true, verified: true },
+        ]),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }
@@ -137,12 +142,16 @@ describe('GitHub OAuth sign-in', () => {
     const token = tokenFromPage(html);
     const me = await req('/devs/me', { headers: bearer(token) });
     expect(me.status).toBe(200);
-    expect((await me.json() as any).github_handle).toBe('octocat');
+    expect(((await me.json()) as any).github_handle).toBe('octocat');
   });
 
   it('auto-verifies an established GitHub account on sign-in', async () => {
     await signInWithGitHub({
-      id: 777, login: 'veteran', created_at: '2014-05-01T00:00:00Z', public_repos: 12, followers: 30,
+      id: 777,
+      login: 'veteran',
+      created_at: '2014-05-01T00:00:00Z',
+      public_repos: 12,
+      followers: 30,
     });
     const { rows } = await pool.query(`SELECT verified FROM devs WHERE github_id = 777`);
     expect(rows[0].verified).toBe(true); // GitHub identity is the verification
@@ -150,7 +159,13 @@ describe('GitHub OAuth sign-in', () => {
 
   it('does not auto-verify a brand-new throwaway account', async () => {
     const recent = new Date(Date.now() - 2 * 86_400_000).toISOString(); // 2 days old
-    await signInWithGitHub({ id: 888, login: 'throwaway', created_at: recent, public_repos: 0, followers: 0 });
+    await signInWithGitHub({
+      id: 888,
+      login: 'throwaway',
+      created_at: recent,
+      public_repos: 0,
+      followers: 0,
+    });
     const { rows } = await pool.query(`SELECT verified FROM devs WHERE github_id = 888`);
     expect(rows[0].verified).toBe(false);
   });
@@ -235,13 +250,13 @@ describe('sensitivity trust gate', () => {
       body: JSON.stringify({ task_id: sensitiveTask }),
     });
     expect(res.status).toBe(403);
-    expect((await res.json() as any).error).toBe('not_verified');
+    expect(((await res.json()) as any).error).toBe('not_verified');
   });
 
   it('allows a verified dev to see and check out a sensitive task', async () => {
     await setVerified(dev);
     const list = await req('/tasks/open', { headers: bearer(tok) });
-    expect((await list.json() as any[]).map((t) => t.id)).toContain(sensitiveTask);
+    expect(((await list.json()) as any[]).map((t) => t.id)).toContain(sensitiveTask);
 
     const res = await req('/checkout', {
       method: 'POST',
@@ -255,7 +270,7 @@ describe('sensitivity trust gate', () => {
     const admin = await mintAdminToken();
     const v = await req(`/admin/devs/${dev}/verify`, { method: 'POST', headers: bearer(admin) });
     expect(v.status).toBe(200);
-    expect((await v.json() as any).verified).toBe(true);
+    expect(((await v.json()) as any).verified).toBe(true);
 
     const res = await req('/checkout', {
       method: 'POST',
@@ -286,10 +301,10 @@ describe('self-serve budget', () => {
       body: JSON.stringify({ budget_cents: 2500 }),
     });
     expect(res.status).toBe(200);
-    expect((await res.json() as any).budget_cents).toBe(2500);
+    expect(((await res.json()) as any).budget_cents).toBe(2500);
 
     const me = await req('/devs/me', { headers: bearer(tok) });
-    expect((await me.json() as any).budget.budget_cents).toBe(2500);
+    expect(((await me.json()) as any).budget.budget_cents).toBe(2500);
   });
 
   it('rejects a budget below what is already reserved (409)', async () => {
@@ -310,7 +325,7 @@ describe('self-serve budget', () => {
       body: JSON.stringify({ budget_cents: 400 }),
     });
     expect(res.status).toBe(409);
-    expect((await res.json() as any).error).toBe('budget_below_committed');
+    expect(((await res.json()) as any).error).toBe('budget_below_committed');
   });
 
   it('rejects a negative budget (400)', async () => {
@@ -334,20 +349,27 @@ function stubGitHubFetch(ghUser: { id: number; login: string }) {
     const url = String(typeof input === 'string' ? input : input.url);
     if (url.includes('login/oauth/access_token')) {
       return new Response(JSON.stringify({ access_token: 'gho_test' }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     if (url.endsWith('/user')) {
       return new Response(JSON.stringify({ id: ghUser.id, login: ghUser.login, email: null }), {
-        status: 200, headers: { 'content-type': 'application/json' },
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
     }
     if (url.endsWith('/user/emails')) {
-      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
     throw new Error(`unexpected fetch: ${url}`);
   }) as typeof fetch;
-  return () => { globalThis.fetch = realFetch; };
+  return () => {
+    globalThis.fetch = realFetch;
+  };
 }
 
 describe('GitHub OAuth — CLI (loopback) mode', () => {
@@ -366,7 +388,9 @@ describe('GitHub OAuth — CLI (loopback) mode', () => {
         headers: { cookie: `gw_oauth_state=${state}; gw_cli_port=49160` },
       });
       expect(cb.status).toBe(302);
-      expect(cb.headers.get('location') ?? '').toMatch(/^http:\/\/127\.0\.0\.1:49160\/callback\?token=.+/);
+      expect(cb.headers.get('location') ?? '').toMatch(
+        /^http:\/\/127\.0\.0\.1:49160\/callback\?token=.+/,
+      );
     } finally {
       restore();
     }

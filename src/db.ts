@@ -34,9 +34,11 @@ async function acquire(): Promise<{ client: Client; release: () => Promise<void>
     // Prefer the Hyperdrive binding (edge-pooled, low-latency) when present;
     // fall back to the direct DATABASE_URL secret. The dynamic import resolves
     // only in the Workers runtime and is never reached on Node.
-    // @ts-ignore - 'cloudflare:workers' is a Workers-runtime built-in module
+    // @ts-expect-error - 'cloudflare:workers' is a Workers-runtime built-in module
     const { env } = await import('cloudflare:workers');
-    const cs = (env as Record<string, { connectionString?: string }>).HYPERDRIVE?.connectionString ?? connectionString;
+    const cs =
+      (env as Record<string, { connectionString?: string }>).HYPERDRIVE?.connectionString ??
+      connectionString;
     // Cap query time so a slow/cold origin (e.g. a Neon free-tier compute waking
     // from autosuspend) can't hang a Worker request indefinitely. statement_timeout
     // makes Postgres cancel the query; query_timeout is a client-side backstop in
@@ -63,9 +65,7 @@ async function acquire(): Promise<{ client: Client; release: () => Promise<void>
  * thrown error and re-throws. The one well-factored transaction helper — every
  * state-changing operation goes through this rather than scattering BEGIN/COMMIT.
  */
-export async function withTransaction<T>(
-  fn: (client: Client) => Promise<T>,
-): Promise<T> {
+export async function withTransaction<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   const { client, release } = await acquire();
   try {
     await client.query('BEGIN');

@@ -1,4 +1,4 @@
-import type { Executor, ExecTask } from './executor.js';
+import type { ExecTask, Executor } from './executor.js';
 
 // The transport-agnostic runner core: the Backend abstraction, the production
 // HTTP transport, and the poll→checkout→execute→submit loop. Deliberately free of
@@ -42,7 +42,10 @@ export interface ApiVersion {
 
 /** A tool/op error surfaced by the platform (e.g. task_not_open, insufficient_budget, no_budget). */
 export class ToolError extends Error {
-  constructor(public code: string, message: string) {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -55,7 +58,11 @@ export interface Backend {
   /** Control-plane build info, if the transport exposes it (HTTP only). */
   version?(): Promise<ApiVersion>;
   getBudget(): Promise<Budget>;
-  listOpenTasks(args: { max_cost_cents?: number; limit?: number; sensitivity?: string }): Promise<OpenTask[]>;
+  listOpenTasks(args: {
+    max_cost_cents?: number;
+    limit?: number;
+    sensitivity?: string;
+  }): Promise<OpenTask[]>;
   checkout(taskId: string): Promise<CheckoutResult>;
   submit(args: SubmitArgs): Promise<SubmitResult>;
   release(taskId: string): Promise<void>;
@@ -66,7 +73,10 @@ export interface Backend {
 export class HttpBackend implements Backend {
   readonly kind = 'http';
   private readonly baseUrl: string;
-  constructor(baseUrl: string, private readonly token: string) {
+  constructor(
+    baseUrl: string,
+    private readonly token: string,
+  ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
@@ -112,7 +122,7 @@ export class HttpBackend implements Backend {
     if (args.limit != null) qs.set('limit', String(args.limit));
     if (args.sensitivity) qs.set('sensitivity', args.sensitivity);
     const q = qs.toString();
-    return this.req<OpenTask[]>('GET', '/tasks/open' + (q ? `?${q}` : ''));
+    return this.req<OpenTask[]>('GET', `/tasks/open${q ? `?${q}` : ''}`);
   }
   checkout(taskId: string) {
     return this.req<CheckoutResult>('POST', '/checkout', { task_id: taskId });
@@ -207,16 +217,20 @@ export async function runLoop(
         throw err;
       }
 
-      console.log(`▶ checked out ${checkout.task_id.slice(0, 8)} — "${checkout.title}" (cap ${checkout.max_cost_cents}¢)`);
+      console.log(
+        `▶ checked out ${checkout.task_id.slice(0, 8)} — "${checkout.title}" (cap ${checkout.max_cost_cents}¢)`,
+      );
 
       // Run the work. If execution fails (e.g. the real Claude call errors), do
       // NOT submit — release the task so another volunteer can pick it up.
       // Submitting fabricated output would corrupt the ledger and the deliverable.
-      let exec;
+      let exec: Awaited<ReturnType<typeof executor.execute>>;
       try {
         exec = await executor.execute(checkout as ExecTask);
       } catch (err) {
-        console.error(`  ✗ execution failed for ${checkout.task_id.slice(0, 8)}: ${(err as Error).message} — releasing`);
+        console.error(
+          `  ✗ execution failed for ${checkout.task_id.slice(0, 8)}: ${(err as Error).message} — releasing`,
+        );
         await backend.release(checkout.task_id).catch(() => {});
         failed.add(checkout.task_id);
         consecutiveFailures++;

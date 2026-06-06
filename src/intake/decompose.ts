@@ -171,7 +171,10 @@ export function normalizeTask(raw: any): ProposedTask {
         spec.output_schema && typeof spec.output_schema === 'object'
           ? spec.output_schema
           : { result: 'string' },
-      acceptance: String(spec.acceptance ?? 'The request is fulfilled per the description.').slice(0, 1000),
+      acceptance: String(spec.acceptance ?? 'The request is fulfilled per the description.').slice(
+        0,
+        1000,
+      ),
       unit_count: clampInt(spec.unit_count ?? raw?.unit_count, 1, 1),
     },
     est_cost_cents: est,
@@ -256,6 +259,7 @@ function userMessage(input: IntakeInput): string {
  */
 // Strip ANSI / terminal escape sequences — `ollama run` and similar CLIs emit
 // color codes and spinners into stdout, which would otherwise poison the JSON.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ESC/CSI control bytes is the point — this strips ANSI escapes.
 const ANSI_RE = /[\u001B\u009B](?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 /**
@@ -303,8 +307,11 @@ export function extractTasks(text: string): unknown[] {
   }
   // claude -p --output-format json wrapper: the real content is in `.result`.
   if (
-    parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
-    typeof parsed.result === 'string' && !parsed.tasks
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    typeof parsed.result === 'string' &&
+    !parsed.tasks
   ) {
     return extractTasks(parsed.result);
   }
@@ -317,7 +324,10 @@ export function extractTasks(text: string): unknown[] {
 
 /** Normalize + cap a raw task list, dropping empties. Shared by the model decomposers. */
 function finalizeTasks(raw: unknown[]): ProposedTask[] {
-  return raw.slice(0, MAX_TASKS).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
+  return raw
+    .slice(0, MAX_TASKS)
+    .map(normalizeTask)
+    .filter((t) => t.spec.prompt.length > 0);
 }
 
 /**
@@ -339,14 +349,18 @@ export class LocalLLMDecomposer implements Decomposer {
   ) {}
 
   async decompose(input: IntakeInput): Promise<DecomposeResult> {
-    const baseUrl = this.opts.baseUrl ?? process.env.DECOMPOSER_BASE_URL ?? 'http://localhost:11434/v1';
+    const baseUrl =
+      this.opts.baseUrl ?? process.env.DECOMPOSER_BASE_URL ?? 'http://localhost:11434/v1';
     const model = this.opts.model ?? process.env.DECOMPOSER_MODEL ?? 'glm-4.7-flash:latest';
     const doFetch = this.opts.fetchFn ?? fetch;
     const controller = new AbortController();
     // Generous default: a local model can take a minute+ warm, plus cold load.
     // STAGE 6: ack POST /intake immediately and decompose async/queued so a slow
     // local model doesn't block the request; admin polls for the draft.
-    const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs ?? Number(process.env.DECOMPOSER_TIMEOUT_MS ?? 240_000));
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.opts.timeoutMs ?? Number(process.env.DECOMPOSER_TIMEOUT_MS ?? 240_000),
+    );
 
     try {
       const res = await doFetch(`${baseUrl}/chat/completions`, {
@@ -361,7 +375,10 @@ export class LocalLLMDecomposer implements Decomposer {
           temperature: 0.2,
           // Structured output: constrain the model to our exact schema at decode
           // time. The primitive that makes a local model reliable — no field drift.
-          response_format: { type: 'json_schema', json_schema: { name: 'draft', schema: DRAFT_JSON_SCHEMA } },
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'draft', schema: DRAFT_JSON_SCHEMA },
+          },
           stream: false,
         }),
         signal: controller.signal,
@@ -396,7 +413,11 @@ export type CliRun = (cmd: string, args: string[], input: string) => Promise<str
 function defaultCliArgs(cmd: string, model: string): string[] {
   const envArgs = process.env.DECOMPOSER_ARGS;
   // Substitute {model} anywhere in a token, so `--model={model}` works too.
-  if (envArgs) return envArgs.split(/\s+/).filter(Boolean).map((a) => a.split('{model}').join(model));
+  if (envArgs)
+    return envArgs
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((a) => a.split('{model}').join(model));
   const base = cmd.split('/').pop();
   if (base === 'ollama') return ['run', model];
   if (base === 'claude') return ['-p'];
@@ -416,7 +437,13 @@ export class CliDecomposer implements Decomposer {
   private fallback = new StubDecomposer();
 
   constructor(
-    private opts: { cmd?: string; args?: string[]; model?: string; timeoutMs?: number; run?: CliRun } = {},
+    private opts: {
+      cmd?: string;
+      args?: string[];
+      model?: string;
+      timeoutMs?: number;
+      run?: CliRun;
+    } = {},
   ) {}
 
   async decompose(input: IntakeInput): Promise<DecomposeResult> {

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { parseInboundEmail, ingestInboundEmail } from '../src/intake/email.js';
-import { pool, closePool } from '../src/db.js';
+import { closePool, pool } from '../src/db.js';
+import { ingestInboundEmail, parseInboundEmail } from '../src/intake/email.js';
 
 // Drive the inbound-email intake locally, end to end, against your DATABASE_URL
 // (point it at the podman test DB, never prod). This runs the SAME code path the
@@ -25,7 +25,9 @@ function arg(name: string): string | undefined {
 }
 
 function readRaw(): string {
-  const file = process.argv.slice(2).find((a) => !a.startsWith('--') && !/^(pass|fail|none)$/.test(a));
+  const file = process.argv
+    .slice(2)
+    .find((a) => !a.startsWith('--') && !/^(pass|fail|none)$/.test(a));
   if (file) return readFileSync(file, 'utf8');
   // No file given — read the whole of stdin.
   return readFileSync(0, 'utf8');
@@ -38,8 +40,10 @@ function readRaw(): string {
 function assertLocalDb() {
   const url = process.env.DATABASE_URL ?? '';
   if (!url) {
-    console.error('DATABASE_URL is not set. Point it at your local DB, e.g.\n' +
-      "  export DATABASE_URL='postgres://postgres:postgres@localhost:5433/givework'");
+    console.error(
+      'DATABASE_URL is not set. Point it at your local DB, e.g.\n' +
+        "  export DATABASE_URL='postgres://postgres:postgres@localhost:5433/givework'",
+    );
     process.exit(1);
   }
   const looksLocal = /@(localhost|127\.0\.0\.1|postgres)[:/]/.test(url);

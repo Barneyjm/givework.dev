@@ -97,7 +97,11 @@ export function resultsToJson(results: TaskResult[]): string {
 export function resultsToFile(results: TaskResult[]): ResultFile {
   const records = collectRecords(results);
   if (records) {
-    return { filename: 'givework-results.csv', contentType: 'text/csv; charset=utf-8', content: toCsv(records) };
+    return {
+      filename: 'givework-results.csv',
+      contentType: 'text/csv; charset=utf-8',
+      content: toCsv(records),
+    };
   }
   return {
     filename: 'givework-results.json',

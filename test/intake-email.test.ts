@@ -1,17 +1,17 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
 import {
-  parseInboundEmail,
-  ingestInboundEmail,
-  dmarcPassed,
-  onboardingEmail,
-  confirmationEmail,
   completionEmail,
+  confirmationEmail,
+  dmarcPassed,
+  ingestInboundEmail,
+  onboardingEmail,
+  parseInboundEmail,
   statusUrlFor,
 } from '../src/intake/email.js';
-import { buildMime, brandedHtml, FROM_ADDRESS } from '../src/mailer.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
-import { pool, closePool } from '../src/db.js';
-import { resetDb, createVerifiedNonprofit } from './helpers.js';
+import { brandedHtml, buildMime, FROM_ADDRESS } from '../src/mailer.js';
+import { createVerifiedNonprofit, resetDb } from './helpers.js';
 
 afterAll(closePool);
 
@@ -38,7 +38,11 @@ const PASS = { authResults: 'mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass'
 describe('parseInboundEmail', () => {
   it('extracts a lowercased from, subject, and text body', async () => {
     const p = await parseInboundEmail(
-      rawEmail({ from: 'Jane Doe <Jane@Helpful.ORG>', subject: 'Need help', body: 'Categorize 50 forms.' }),
+      rawEmail({
+        from: 'Jane Doe <Jane@Helpful.ORG>',
+        subject: 'Need help',
+        body: 'Categorize 50 forms.',
+      }),
     );
     expect(p.from).toBe('jane@helpful.org');
     expect(p.subject).toBe('Need help');
@@ -109,9 +113,9 @@ describe('dmarcPassed', () => {
       'dmarc=pass header.from=southendsolutions.com policy.dmarc=quarantine; spf=none';
     expect(dmarcPassed(ar)).toBe(true);
     // A real fail with a quarantine policy still fails (policy token ignored).
-    expect(
-      dmarcPassed('mx.cloudflare.net; dmarc=fail header.from=x.org policy.dmarc=reject'),
-    ).toBe(false);
+    expect(dmarcPassed('mx.cloudflare.net; dmarc=fail header.from=x.org policy.dmarc=reject')).toBe(
+      false,
+    );
   });
 });
 
@@ -119,7 +123,11 @@ describe('ingestInboundEmail', () => {
   it('accepts DMARC-authenticated mail from an allowlisted sender and links it', async () => {
     const npId = await createVerifiedNonprofit('intake@helpful.org', 'Helpful Org');
     const res = await ingestInboundEmail(
-      rawEmail({ from: 'intake@helpful.org', subject: 'Cleanup', body: 'Please dedupe our donor list.' }),
+      rawEmail({
+        from: 'intake@helpful.org',
+        subject: 'Cleanup',
+        body: 'Please dedupe our donor list.',
+      }),
       PASS,
     );
 
@@ -167,7 +175,11 @@ describe('ingestInboundEmail', () => {
     // the case that gets a friendly onboarding auto-reply, so ingest hands back
     // the threading context rather than a bare reject.
     const res = await ingestInboundEmail(
-      rawEmail({ from: 'hello@newcharity.org', subject: 'Can you help us?', body: 'We need data cleanup.' }),
+      rawEmail({
+        from: 'hello@newcharity.org',
+        subject: 'Can you help us?',
+        body: 'We need data cleanup.',
+      }),
       PASS,
     );
     expect(res).toMatchObject({
@@ -182,7 +194,10 @@ describe('ingestInboundEmail', () => {
 
   it('rejects an allowlisted sender with an empty body', async () => {
     await createVerifiedNonprofit('intake@helpful.org');
-    const res = await ingestInboundEmail(rawEmail({ from: 'intake@helpful.org', body: '   ' }), PASS);
+    const res = await ingestInboundEmail(
+      rawEmail({ from: 'intake@helpful.org', body: '   ' }),
+      PASS,
+    );
     expect(res).toMatchObject({ accepted: false, reason: 'empty_body' });
     const n = await pool.query(`SELECT count(*)::int AS n FROM intake_requests`);
     expect(n.rows[0].n).toBe(0);
@@ -195,7 +210,11 @@ const decodeWord = (s: string) =>
 
 describe('email content builders', () => {
   it('onboardingEmail: threaded reply subject + onboarding CTA', () => {
-    const e = onboardingEmail({ to: 'hello@newcharity.org', subject: 'Can you help us?', inReplyTo: '<abc@mail>' });
+    const e = onboardingEmail({
+      to: 'hello@newcharity.org',
+      subject: 'Can you help us?',
+      inReplyTo: '<abc@mail>',
+    });
     expect(e.to).toBe('hello@newcharity.org');
     expect(e.subject).toBe('Re: Can you help us?');
     expect(e.inReplyTo).toBe('<abc@mail>');
@@ -207,12 +226,19 @@ describe('email content builders', () => {
       const e = onboardingEmail({ to: 'x@org.org', subject, inReplyTo: null });
       expect(e.subject).toBe('Getting started with Givework');
     }
-    expect(onboardingEmail({ to: 'x@org.org', subject: 'Re: Hi', inReplyTo: null }).subject).toBe('Re: Hi');
+    expect(onboardingEmail({ to: 'x@org.org', subject: 'Re: Hi', inReplyTo: null }).subject).toBe(
+      'Re: Hi',
+    );
   });
 
   it('confirmationEmail: status link in the body + threaded subject', () => {
     const url = statusUrlFor('abc-123');
-    const e = confirmationEmail({ to: 'director@helpful.org', subject: 'Need help', inReplyTo: '<m@id>', statusUrl: url });
+    const e = confirmationEmail({
+      to: 'director@helpful.org',
+      subject: 'Need help',
+      inReplyTo: '<m@id>',
+      statusUrl: url,
+    });
     expect(e.subject).toBe('Re: Need help');
     expect(e.inReplyTo).toBe('<m@id>');
     expect(e.body).toContain(url);
@@ -231,7 +257,11 @@ describe('email content builders', () => {
     const withFile = completionEmail({
       to: 'x@org.org',
       statusUrl: url,
-      attachment: { filename: 'givework-results.csv', contentType: 'text/csv', content: 'task,summary\nA,done' },
+      attachment: {
+        filename: 'givework-results.csv',
+        contentType: 'text/csv',
+        content: 'task,summary\nA,done',
+      },
     });
     expect(withFile.attachment?.filename).toBe('givework-results.csv');
   });
@@ -239,7 +269,12 @@ describe('email content builders', () => {
 
 describe('buildMime (mailer)', () => {
   it('renders From/To/Subject, threading headers, the text body, and branded HTML', () => {
-    const raw = buildMime({ to: 'a@b.org', subject: 'Hello', body: 'Body text', inReplyTo: '<m@id>' });
+    const raw = buildMime({
+      to: 'a@b.org',
+      subject: 'Hello',
+      body: 'Body text',
+      inReplyTo: '<m@id>',
+    });
     expect(raw).toMatch(new RegExp(`From:.*${FROM_ADDRESS.replace('.', '\\.')}`));
     expect(raw).toMatch(/To:.*a@b\.org/);
     expect(decodeWord(raw)).toContain('Hello');
@@ -258,7 +293,9 @@ describe('buildMime (mailer)', () => {
   });
 
   it('brandedHtml reflows hard-wrapped lines but keeps breaks before bullets and links', () => {
-    const html = brandedHtml('one\ntwo three\nfour\n\n• bullet a\n• bullet b\n\nLink:\nhttps://givework.dev/x');
+    const html = brandedHtml(
+      'one\ntwo three\nfour\n\n• bullet a\n• bullet b\n\nLink:\nhttps://givework.dev/x',
+    );
     expect(html).toMatch(/one two three four/); // mid-paragraph wraps → spaces
     expect(html).toContain('<br>• bullet b'); // bullets keep their break
     expect(html).toContain('<br><a href="https://givework.dev/x"'); // link on its own line
@@ -275,7 +312,11 @@ describe('buildMime (mailer)', () => {
       to: 'a@b.org',
       subject: 'Done',
       body: 'see attached',
-      attachment: { filename: 'givework-results.csv', contentType: 'text/csv', content: 'task,summary\nA,done' },
+      attachment: {
+        filename: 'givework-results.csv',
+        contentType: 'text/csv',
+        content: 'task,summary\nA,done',
+      },
     });
     expect(raw).toContain('givework-results.csv');
     expect(raw).toMatch(/Content-Disposition:.*attachment/i);

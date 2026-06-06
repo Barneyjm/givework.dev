@@ -1,14 +1,14 @@
-import { pool, closePool } from '../src/db.js';
-import { signDevToken, signAdminToken } from '../src/auth.js';
+import { signAdminToken, signDevToken } from '../src/auth.js';
+import { closePool, pool } from '../src/db.js';
 
 // Creates a dev, a nonprofit, and a few open tasks for manual curl-ing.
 // Mirrors acceptance criterion 1 (a $5-max task against a $20 budget).
 async function main() {
   const dev = (
-    await pool.query(
-      `INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id`,
-      ['demo-dev', 'demo@example.com'],
-    )
+    await pool.query(`INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id`, [
+      'demo-dev',
+      'demo@example.com',
+    ])
   ).rows[0];
 
   const np = (

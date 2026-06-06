@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  StubExecutor,
   ClaudeCliExecutor,
-  getExecutor,
-  usageToCents,
   type ExecTask,
+  getExecutor,
+  StubExecutor,
+  usageToCents,
 } from '../src/executor.js';
 
 const task: ExecTask = {
@@ -18,9 +18,13 @@ const task: ExecTask = {
 describe('usageToCents', () => {
   it('meters input+output tokens into rounded-up cents per model pricing', () => {
     // sonnet: $3/$15 per 1M → 0.0003 / 0.0015 cents per token
-    expect(usageToCents('claude-sonnet-4-6', { input_tokens: 100_000, output_tokens: 5_000 })).toBe(38); // 30 + 7.5
+    expect(usageToCents('claude-sonnet-4-6', { input_tokens: 100_000, output_tokens: 5_000 })).toBe(
+      38,
+    ); // 30 + 7.5
     // opus: $5/$25
-    expect(usageToCents('claude-opus-4-8', { input_tokens: 100_000, output_tokens: 5_000 })).toBe(63); // 50 + 12.5
+    expect(usageToCents('claude-opus-4-8', { input_tokens: 100_000, output_tokens: 5_000 })).toBe(
+      63,
+    ); // 50 + 12.5
   });
 
   it('bills cache reads at ~0.1x input and writes at ~1.25x input', () => {
@@ -42,7 +46,12 @@ describe('ClaudeCliExecutor', () => {
   const cliReply = (obj: any) => async () => JSON.stringify(obj);
 
   it('parses the CLI JSON result and takes cost from total_cost_usd', async () => {
-    const run = cliReply({ result: '{"summary":"done"}', total_cost_usd: 0.0123, usage: { output_tokens: 50 }, duration_ms: 900 });
+    const run = cliReply({
+      result: '{"summary":"done"}',
+      total_cost_usd: 0.0123,
+      usage: { output_tokens: 50 },
+      duration_ms: 900,
+    });
     const r = await new ClaudeCliExecutor({ run }).execute(task);
     expect(r.result).toEqual({ summary: 'done' });
     expect(r.actual_cost_cents).toBe(2); // ceil(0.0123 * 100)
@@ -85,7 +94,9 @@ describe('ClaudeCliExecutor', () => {
 
   it('throws on an error result (no fabricated output)', async () => {
     const run = cliReply({ is_error: true, result: 'usage limit reached' });
-    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('usage limit reached');
+    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow(
+      'usage limit reached',
+    );
   });
 
   it('throws on non-JSON CLI output', async () => {

@@ -1,5 +1,5 @@
-import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import type { Context, Next } from 'hono';
+import { type JWTPayload, jwtVerify, SignJWT } from 'jose';
 import { OpError } from './operations.js';
 
 // Stateless auth: HS256 JWTs signed with JWT_SECRET. No token table — identity

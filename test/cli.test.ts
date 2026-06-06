@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ApiError, apiRequest } from '../src/cli/api.js';
 import { arg, boolArg } from '../src/cli/commands.js';
-import { apiRequest, ApiError } from '../src/cli/api.js';
 
 // CLI unit tests — pure pieces only (arg parsing, API error mapping, config
 // round-trip). The browser/loopback login is exercised manually, not in CI.
@@ -26,7 +26,9 @@ describe('boolArg()', () => {
 
 describe('apiRequest error mapping', () => {
   const realFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = realFetch; });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
 
   it('maps a 4xx { error, message } into a thrown ApiError(code)', async () => {
     globalThis.fetch = (async () =>
@@ -34,8 +36,9 @@ describe('apiRequest error mapping', () => {
         status: 409,
         headers: { 'content-type': 'application/json' },
       })) as typeof fetch;
-    await expect(apiRequest('http://x', { path: '/devs/budget', method: 'POST' }))
-      .rejects.toMatchObject({ code: 'budget_below_committed', status: 409 });
+    await expect(
+      apiRequest('http://x', { path: '/devs/budget', method: 'POST' }),
+    ).rejects.toMatchObject({ code: 'budget_below_committed', status: 409 });
   });
 
   it('returns the parsed body on 200', async () => {
@@ -51,8 +54,7 @@ describe('apiRequest error mapping', () => {
   it('wraps non-JSON error bodies (e.g. a 502 HTML page) as ApiError', async () => {
     globalThis.fetch = (async () =>
       new Response('<html>502</html>', { status: 502 })) as typeof fetch;
-    await expect(apiRequest('http://x', { path: '/budget' }))
-      .rejects.toBeInstanceOf(ApiError);
+    await expect(apiRequest('http://x', { path: '/budget' })).rejects.toBeInstanceOf(ApiError);
   });
 });
 
@@ -70,8 +72,10 @@ describe('config store', () => {
   });
   afterEach(() => {
     process.env.HOME = savedHome;
-    if (savedApi === undefined) delete process.env.GIVEWORK_API_URL; else process.env.GIVEWORK_API_URL = savedApi;
-    if (savedTok === undefined) delete process.env.GIVEWORK_TOKEN; else process.env.GIVEWORK_TOKEN = savedTok;
+    if (savedApi === undefined) delete process.env.GIVEWORK_API_URL;
+    else process.env.GIVEWORK_API_URL = savedApi;
+    if (savedTok === undefined) delete process.env.GIVEWORK_TOKEN;
+    else process.env.GIVEWORK_TOKEN = savedTok;
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -82,7 +86,8 @@ describe('config store', () => {
     const c = loadConfig();
     expect(c.token).toBe('tok-123');
     // File is written private (0600).
-    const mode = (await import('node:fs')).statSync(join(home, '.givework', 'config.json')).mode & 0o777;
+    const mode =
+      (await import('node:fs')).statSync(join(home, '.givework', 'config.json')).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 

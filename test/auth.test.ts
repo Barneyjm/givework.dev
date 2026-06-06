@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool } from '../src/db.js';
+import { app } from '../src/server.js';
 import {
-  resetDb,
   createDev,
   createNonprofit,
-  setBudget,
   createTask,
   getBudgetRow,
-  mintDevToken,
   mintAdminToken,
+  mintDevToken,
+  resetDb,
+  setBudget,
 } from './helpers.js';
-import { app } from '../src/server.js';
-import { closePool } from '../src/db.js';
 
 afterAll(closePool);
 
@@ -18,7 +18,10 @@ afterAll(closePool);
 function req(path: string, init?: RequestInit) {
   return app.fetch(new Request(`http://test${path}`, init));
 }
-const bearer = (t: string) => ({ authorization: `Bearer ${t}`, 'content-type': 'application/json' });
+const bearer = (t: string) => ({
+  authorization: `Bearer ${t}`,
+  'content-type': 'application/json',
+});
 
 let alice: string;
 let aliceTok: string;
@@ -79,7 +82,7 @@ describe('impersonation is closed', () => {
     expect((await getBudgetRow(bob)).reserved_cents).toBe(0);
   });
 
-  it('budget reads return the caller\'s own budget', async () => {
+  it("budget reads return the caller's own budget", async () => {
     const res = await req('/budget', { headers: bearer(aliceTok) });
     const b = (await res.json()) as any;
     expect(b.budget_cents).toBe(2000);

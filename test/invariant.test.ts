@@ -1,19 +1,13 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
+import { checkoutTask, expire, OpError, releaseTask, submitResult } from '../src/operations.js';
 import {
-  checkoutTask,
-  submitResult,
-  releaseTask,
-  expire,
-  OpError,
-} from '../src/operations.js';
-import { pool, closePool } from '../src/db.js';
-import {
-  resetDb,
   createDev,
   createNonprofit,
-  setBudget,
   createTask,
   expireLockNow,
+  resetDb,
+  setBudget,
 } from './helpers.js';
 
 afterAll(closePool);

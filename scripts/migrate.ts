@@ -1,7 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pool, closePool, withTransaction } from '../src/db.js';
+import { fileURLToPath } from 'node:url';
+import { closePool, pool, withTransaction } from '../src/db.js';
 
 // Minimal migration runner: tracks applied files in schema_migrations and
 // applies every migrations/*.sql not yet recorded, in filename order, each in
@@ -17,9 +17,7 @@ async function main() {
      )`,
   );
 
-  const { rows } = await pool.query<{ filename: string }>(
-    `SELECT filename FROM schema_migrations`,
-  );
+  const { rows } = await pool.query<{ filename: string }>(`SELECT filename FROM schema_migrations`);
   const applied = new Set(rows.map((r) => r.filename));
 
   const files = readdirSync(migrationsDir)

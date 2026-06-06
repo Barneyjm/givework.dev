@@ -1,21 +1,24 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool } from '../src/db.js';
 import { app } from '../src/server.js';
-import { pool, closePool } from '../src/db.js';
 import {
-  resetDb,
   createDev,
   createNonprofit,
   createTask,
+  getTaskRow,
+  mintAdminToken,
+  mintDevToken,
+  resetDb,
   setBudget,
   setVerified,
-  mintDevToken,
-  mintAdminToken,
-  getTaskRow,
 } from './helpers.js';
 
 afterAll(closePool);
 
-const bearer = (t: string) => ({ authorization: `Bearer ${t}`, 'content-type': 'application/json' });
+const bearer = (t: string) => ({
+  authorization: `Bearer ${t}`,
+  'content-type': 'application/json',
+});
 function req(path: string, init?: RequestInit) {
   return app.fetch(new Request(`http://test${path}`, init));
 }
@@ -28,7 +31,11 @@ beforeEach(async () => {
 
 /** Drive a dev through checkout → submit on a public task via the HTTP routes. */
 async function checkoutAndSubmit(token: string, taskId: string) {
-  const co = await req('/checkout', { method: 'POST', headers: bearer(token), body: JSON.stringify({ task_id: taskId }) });
+  const co = await req('/checkout', {
+    method: 'POST',
+    headers: bearer(token),
+    body: JSON.stringify({ task_id: taskId }),
+  });
   expect(co.status).toBe(200);
   return req('/submit', {
     method: 'POST',
@@ -69,12 +76,16 @@ describe('GET /admin/tasks (review queue)', () => {
     const task = await createTask(np, { max: 200, title: 'Tag emails' });
     await checkoutAndSubmit(await mintDevToken(dev), task); // → submitted (unverified)
 
-    const ok = await req('/admin/tasks?status=submitted', { headers: { authorization: `Bearer ${adminTok}` } });
+    const ok = await req('/admin/tasks?status=submitted', {
+      headers: { authorization: `Bearer ${adminTok}` },
+    });
     expect(ok.status).toBe(200);
     const rows = (await ok.json()) as any[];
     expect(rows.some((t) => t.id === task && t.title === 'Tag emails')).toBe(true);
 
-    const bad = await req('/admin/tasks?status=nope', { headers: { authorization: `Bearer ${adminTok}` } });
+    const bad = await req('/admin/tasks?status=nope', {
+      headers: { authorization: `Bearer ${adminTok}` },
+    });
     expect(bad.status).toBe(400);
 
     // Still admin-gated.

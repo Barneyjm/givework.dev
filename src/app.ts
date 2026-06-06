@@ -1,25 +1,25 @@
 import { Hono } from 'hono';
+import { adminRoutes } from './admin.js';
+import { type Principal, requireAdmin, requireDev } from './auth.js';
+import { query } from './db.js';
+import { devRoutes } from './devs.js';
+import { getRequestResultsForToken, getRequestStatus } from './intake/operations.js';
+import { adminIntakeRoutes } from './intake/routes.js';
+import type { SendEmailBinding } from './mailer.js';
+import { oauthRoutes } from './oauth.js';
 import {
   checkoutTask,
-  submitResult,
-  releaseTask,
   expire,
   getBudget,
-  listOpenTasks,
-  isDevVerified,
   getPublicTransparency,
+  isDevVerified,
+  listOpenTasks,
   OpError,
+  releaseTask,
+  submitResult,
 } from './operations.js';
-import { getRequestStatus, getRequestResultsForToken } from './intake/operations.js';
 import { resultsToCsv, resultsToJson } from './results.js';
 import { acceptTaskAndNotify } from './review.js';
-import { type SendEmailBinding } from './mailer.js';
-import { query } from './db.js';
-import { requireDev, requireAdmin, type Principal } from './auth.js';
-import { adminRoutes } from './admin.js';
-import { devRoutes } from './devs.js';
-import { oauthRoutes } from './oauth.js';
-import { adminIntakeRoutes } from './intake/routes.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -212,7 +212,11 @@ app.get('/tasks/open', requireDev, async (c) => {
 
 // --- Admin (requires an admin token) ---
 
-app.post('/admin/expire', requireAdmin, handle(() => expire()));
+app.post(
+  '/admin/expire',
+  requireAdmin,
+  handle(() => expire()),
+);
 
 app.route('/admin', adminRoutes);
 app.route('/admin', adminIntakeRoutes);

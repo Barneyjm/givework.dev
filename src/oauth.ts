@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { withTransaction } from './db.js';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { signDevToken } from './auth.js';
+import { withTransaction } from './db.js';
 import { OpError } from './operations.js';
 
 // Self-serve developer sign-in via GitHub OAuth (web flow). Two public routes:
@@ -14,7 +14,7 @@ import { OpError } from './operations.js';
 //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET  — the OAuth app credentials
 //   OAUTH_REDIRECT_URI (optional)           — the callback URL registered with
 //     GitHub; if unset we derive it from the incoming request origin.
-type Env = { Variables: {} };
+type Env = { Variables: Record<string, never> };
 
 const STATE_COOKIE = 'gw_oauth_state';
 const CLI_PORT_COOKIE = 'gw_cli_port';
@@ -96,7 +96,11 @@ export async function exchangeCode(code: string, cfg: OAuthConfig): Promise<stri
   });
   const data = (await res.json().catch(() => ({}))) as { access_token?: string; error?: string };
   if (!res.ok || !data.access_token) {
-    throw new OpError(502, 'oauth_exchange_failed', `GitHub code exchange failed: ${data.error ?? res.status}`);
+    throw new OpError(
+      502,
+      'oauth_exchange_failed',
+      `GitHub code exchange failed: ${data.error ?? res.status}`,
+    );
   }
   return data.access_token;
 }
@@ -128,7 +132,11 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
   if (!email) {
     const emailRes = await fetch(`${GH_API}/user/emails`, { headers });
     if (emailRes.ok) {
-      const emails = (await emailRes.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+      const emails = (await emailRes.json()) as Array<{
+        email: string;
+        primary: boolean;
+        verified: boolean;
+      }>;
       email = emails.find((e) => e.primary && e.verified)?.email ?? null;
     }
   }
@@ -249,7 +257,10 @@ oauthRoutes.get('/github/callback', async (c) => {
     // The URL is built ONLY from the validated integer port + a fixed 127.0.0.1
     // host — never a caller-supplied URL — so this can't be an open redirect.
     if (cliPort) {
-      return c.redirect(`http://127.0.0.1:${cliPort}/callback?token=${encodeURIComponent(token)}`, 302);
+      return c.redirect(
+        `http://127.0.0.1:${cliPort}/callback?token=${encodeURIComponent(token)}`,
+        302,
+      );
     }
 
     const apiOrigin = new URL(c.req.url).origin;
@@ -300,7 +311,8 @@ function errorPage(message: string): string {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (ch) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!,
+  return s.replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!,
   );
 }
