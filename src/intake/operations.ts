@@ -446,6 +446,34 @@ export async function listIntake(status?: string) {
   return rows;
 }
 
+/**
+ * Store a draft decomposed *off-Worker* — the `admin decompose` watcher running a
+ * real local model (Ollama/CLI) posts its proposed tasks here. Normalizes every
+ * task (so a bad model draft can't reach publish) and records the engine in
+ * triaged_by. Guarded on status so it can't clobber an already-published request.
+ */
+export async function uploadDraft(intakeId: string, proposed: unknown, triagedBy: string) {
+  if (!Array.isArray(proposed)) {
+    throw new OpError(400, 'bad_input', 'proposed must be an array');
+  }
+  const tasks = (proposed as ProposedTask[]).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
+  if (tasks.length === 0) {
+    throw new OpError(400, 'nothing_to_draft', 'No usable proposed tasks');
+  }
+  const tb = ['stub', 'local', 'cli'].includes(triagedBy) ? triagedBy : 'local';
+  const upd = await query(
+    `UPDATE intake_requests
+        SET proposed = $2, triaged_by = $3, status = 'decomposed', updated_at = now()
+      WHERE id = $1 AND status <> 'published'
+      RETURNING id`,
+    [intakeId, JSON.stringify(tasks), tb],
+  );
+  if (upd.rowCount === 0) {
+    throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
+  }
+  return { intake_id: intakeId, status: 'decomposed', triaged_by: tb, count: tasks.length };
+}
+
 export async function getIntake(intakeId: string) {
   const { rows } = await query(
     `SELECT * FROM intake_requests WHERE id = $1`,

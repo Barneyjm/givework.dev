@@ -28,6 +28,8 @@ Admin (needs an admin token — see 'admin login'):
   admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
   admin review               list submitted work awaiting accept
   admin accept <taskId>      accept a submission (releases it to the nonprofit)
+  admin decompose [--watch]  run a local model on stub-drafted intake, post drafts back
+                             (DECOMPOSER=cli|local; [--interval <s>])
   admin budget <devId> <cents>
   admin task create --json '{…}'
   admin nonprofit list                       list orgs + their allowlist/task counts

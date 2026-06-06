@@ -4,6 +4,7 @@ import { requireAdmin, type Principal } from '../auth.js';
 import {
   receiveIntake,
   redecompose,
+  uploadDraft,
   publishIntake,
   rejectIntake,
   listIntake,
@@ -46,6 +47,13 @@ adminIntakeRoutes.get('/intake/:id', (c) => handle(() => getIntake(c.req.param('
 adminIntakeRoutes.post('/intake/:id/decompose', (c) =>
   handle(() => redecompose(c.req.param('id')))(c),
 );
+
+// Upload a draft decomposed off-Worker (the `admin decompose` watcher running a
+// real local model posts here).
+adminIntakeRoutes.post('/intake/:id/draft', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return handle(() => uploadDraft(c.req.param('id'), body.proposed, String(body.triaged_by ?? 'local')))(c);
+});
 
 adminIntakeRoutes.post('/intake/:id/publish', async (c) => {
   const body = await c.req.json().catch(() => ({}));

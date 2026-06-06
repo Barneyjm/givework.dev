@@ -3,6 +3,7 @@ import { apiRequest } from './api.js';
 import { apiUrl, loadConfig, saveConfig, requireToken, requireAdminToken } from './config.js';
 import { HttpBackend, runLoop } from '../run-loop.js';
 import { StubExecutor, ClaudeCliExecutor, type Executor } from '../executor.js';
+import { getDecomposer } from '../intake/decompose.js';
 
 // The CLI supports the two executors a volunteer actually uses: the deterministic
 // stub (default) and the production `claude -p` path (EXECUTOR=claude). It does
@@ -246,9 +247,84 @@ export async function admin(args: string[]): Promise<void> {
       return;
     }
     case 'nonprofit': return adminNonprofit(rest);
+    case 'decompose': return adminDecompose(rest);
     default:
-      console.error('Admin commands: login | verify <devId> | review | accept <taskId> | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
+      console.error('Admin commands: login | verify <devId> | review | accept <taskId> | decompose [--watch] | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
       process.exit(1);
+  }
+}
+
+/**
+ * Run the decomposer locally (a real model via DECOMPOSER=cli|local) against the
+ * platform's stub-drafted intake, posting the better drafts back. This is how the
+ * "admin reviewer runs on Ollama locally" — the Worker drafts with the stub on
+ * receipt; this upgrades those drafts off-Worker. --watch polls on an interval.
+ */
+async function adminDecompose(args: string[]): Promise<void> {
+  const engine = process.env.DECOMPOSER;
+  if (engine !== 'cli' && engine !== 'local') {
+    console.error('Set DECOMPOSER=cli (or local) to run a real model, e.g.:\n  DECOMPOSER=cli DECOMPOSER_CMD=ollama givework admin decompose --watch');
+    process.exit(1);
+  }
+  const token = requireAdminToken();
+  const base = apiUrl();
+  const decomposer = getDecomposer();
+  const intervalArg = arg(args, '--interval');
+  const intervalSec = intervalArg ? Number(intervalArg) : 30;
+  if (!Number.isFinite(intervalSec) || intervalSec <= 0) {
+    console.error('--interval must be a positive number of seconds');
+    process.exit(1);
+  }
+  console.log(`admin decompose → ${base}  (engine: ${engine})`);
+
+  // IDs the model couldn't upgrade this run. Re-running them every tick would
+  // re-invoke a minute-long model on intake it will keep failing, so we skip
+  // them for the life of the process (a restart re-attempts — the failure may
+  // be transient, e.g. the model was briefly down).
+  const skip = new Set<string>();
+
+  async function pass(): Promise<number> {
+    const list = await apiRequest<any[]>(base, { path: '/admin/intake?status=decomposed', token });
+    const pending = list.filter((r) => r.triaged_by === 'stub' && !skip.has(r.id)); // not yet upgraded off-Worker
+    let done = 0;
+    for (const r of pending) {
+      const full = await apiRequest<any>(base, { path: `/admin/intake/${encodeURIComponent(r.id)}`, token });
+      const { triagedBy, tasks } = await decomposer.decompose({
+        from_email: full.from_email,
+        subject: full.subject ?? undefined,
+        body: full.raw_body,
+        attachment_count: Array.isArray(full.attachments) ? full.attachments.length : 0,
+      });
+      if (triagedBy !== 'local') {
+        skip.add(r.id);
+        console.log(`  · ${r.id}  model unavailable (fell back to stub) — skipping this run`);
+        continue;
+      }
+      await apiRequest(base, {
+        method: 'POST',
+        path: `/admin/intake/${encodeURIComponent(r.id)}/draft`,
+        token,
+        body: { proposed: tasks, triaged_by: triagedBy },
+      });
+      console.log(`  ✓ ${r.id}  ${tasks.length} task${tasks.length === 1 ? '' : 's'}  (${full.subject ?? full.from_email})`);
+      done++;
+    }
+    return done;
+  }
+
+  if (!has(args, '--watch')) {
+    const n = await pass();
+    console.log(n ? `decomposed ${n} request(s)` : 'nothing to decompose');
+    return;
+  }
+  console.log(`watching every ${intervalSec}s (Ctrl-C to stop)…`);
+  for (;;) {
+    try {
+      await pass();
+    } catch (err: any) {
+      console.error('pass failed:', err?.message ?? err);
+    }
+    await new Promise((res) => setTimeout(res, intervalSec * 1000));
   }
 }
 
