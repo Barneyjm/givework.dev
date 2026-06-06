@@ -1,0 +1,52 @@
+/* Givework — persona landing pages (volunteers, nonprofits). Loaded on top of
+   base.css. Holds the layout these two pages share: the sub-page hero, the dark
+   "band" (the trust / you-stay-in-control section), the Q&A list, the verification
+   callout, and the closing CTA. Anything unique to one page (the nonprofit example
+   cards, the volunteer quickstart) stays inline on that page. */
+
+/* ---------- sub-page hero ---------- */
+.subhero { border-bottom: var(--line); position: relative; overflow: hidden; }
+.subhero .wrap { display: grid; grid-template-columns: 1.5fr 1fr; gap: 2rem; padding-top: clamp(2.5rem,6vw,4.5rem); padding-bottom: clamp(2.5rem,6vw,4.5rem); align-items: center; }
+.subhero h1 { font-size: clamp(2.1rem, 6vw, 4.4rem); line-height: .98; font-weight: 700; letter-spacing: -.03em; margin: .8rem 0 0; text-transform: uppercase; max-width: 15ch; }
+.subhero h1 .u { color: var(--red); } /* default accent; volunteers overrides to blue */
+.subhero p.lede { font-size: clamp(1.05rem, 1.6vw, 1.3rem); max-width: 46ch; margin: 1.4rem 0 0; font-weight: 300; }
+.subhero .actions { margin-top: 1.9rem; display: flex; flex-wrap: wrap; gap: .9rem; }
+.subhero .art { position: relative; min-height: 220px; }
+.subhero .art svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* ---------- generic vertical padding for plain sections ---------- */
+.pad { padding: clamp(2.6rem,6vw,4.5rem) 0; }
+.steps-wrap { max-width: 760px; }
+
+/* ---------- dark "band": trust / control panels ---------- */
+.band { background: var(--ink); color: var(--paper); border-bottom: var(--line); }
+.band .wrap { padding: clamp(2.6rem,6vw,4.5rem) var(--gut); }
+.band .eyebrow { color: var(--yellow); }
+.band h3 { font-size: clamp(1.7rem,3.4vw,2.6rem); text-transform:uppercase; letter-spacing:-.02em; margin:.6rem 0 0; font-weight:700; max-width: 20ch; }
+.band-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr)); gap: 1.8rem 2.2rem; margin-top: 2.2rem; }
+.band .item .k { font-family:'Space Mono',monospace; font-weight:700; text-transform:uppercase; letter-spacing:.1em; font-size:.78rem; color: var(--yellow); }
+.band .item p { font-weight:300; margin:.5rem 0 0; max-width: 40ch; }
+
+/* ---------- verification callout ---------- */
+.callout { border-left: 6px solid var(--yellow); padding: 1.4rem 0 1.4rem 1.4rem; max-width: 720px; font-weight:300; }
+.callout b { font-weight:600; }
+
+/* ---------- Q&A ---------- */
+.qa { border-top: 1px solid rgba(22,19,16,.18); padding: 1.4rem 0; max-width: 760px; }
+.qa:first-of-type { border-top: none; }
+.qa h4 { margin:0 0 .45rem; font-size:1.15rem; font-weight:600; letter-spacing:-.01em; }
+.qa p { margin:0; font-weight:300; }
+
+/* ---------- closing CTA ---------- */
+.closing { padding: clamp(3rem,7vw,5.5rem) 0; }
+.closing h3 { font-size: clamp(1.9rem,5.5vw,3.8rem); line-height:.98; text-transform:uppercase; letter-spacing:-.03em; margin:0; font-weight:700; max-width: 18ch; }
+.closing .actions { margin-top: 2rem; display:flex; flex-wrap:wrap; gap:.9rem; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 820px) {
+  .subhero .wrap { grid-template-columns: 1fr; gap: 1.2rem; }
+  .subhero .art { min-height: 170px; order: -1; }
+}
+@media (max-width: 560px) {
+  .subhero .actions .btn, .closing .actions .btn { flex: 1 1 100%; justify-content: center; }
+}
