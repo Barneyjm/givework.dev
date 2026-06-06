@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
 import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
 import { app } from '../src/server.js';
-import { pool, closePool } from '../src/db.js';
 import {
-  resetDb,
-  createVerifiedNonprofit,
   createNonprofit,
   createTask,
+  createVerifiedNonprofit,
   mintAdminToken,
+  resetDb,
 } from './helpers.js';
 
 afterAll(closePool);
@@ -18,7 +18,10 @@ beforeEach(async () => {
   adminTok = await mintAdminToken();
 });
 
-const bearer = (t: string) => ({ authorization: `Bearer ${t}`, 'content-type': 'application/json' });
+const bearer = (t: string) => ({
+  authorization: `Bearer ${t}`,
+  'content-type': 'application/json',
+});
 function req(path: string, init?: RequestInit) {
   return app.fetch(new Request(`http://test${path}`, init));
 }
@@ -84,27 +87,35 @@ describe('admin nonprofit management', () => {
 
     // Bad kind / shape are rejected.
     const badKind = await req(`/admin/nonprofits/${id}/identifiers`, {
-      method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'nope', value: 'x' }),
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify({ kind: 'nope', value: 'x' }),
     });
     expect(badKind.status).toBe(400);
     const emailNoAt = await req(`/admin/nonprofits/${id}/identifiers`, {
-      method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'email', value: 'helpful.org' }),
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify({ kind: 'email', value: 'helpful.org' }),
     });
     expect(emailNoAt.status).toBe(400);
 
     // Duplicate (same kind+value) -> 409.
     const dup = await req(`/admin/nonprofits/${id}/identifiers`, {
-      method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'domain', value: 'helpful-foundation.org' }),
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify({ kind: 'domain', value: 'helpful-foundation.org' }),
     });
     expect(dup.status).toBe(409);
 
     // Remove it.
     const del = await req(`/admin/nonprofits/${id}/identifiers/${created.id}`, {
-      method: 'DELETE', headers: bearer(adminTok),
+      method: 'DELETE',
+      headers: bearer(adminTok),
     });
     expect(del.status).toBe(200);
     const gone = await req(`/admin/nonprofits/${id}/identifiers/${created.id}`, {
-      method: 'DELETE', headers: bearer(adminTok),
+      method: 'DELETE',
+      headers: bearer(adminTok),
     });
     expect(gone.status).toBe(404);
   });
@@ -114,7 +125,9 @@ describe('admin nonprofit management', () => {
     const orgB = await createVerifiedNonprofit('b@orgb.org', 'Org B');
     const deny = (id: string) =>
       req(`/admin/nonprofits/${id}/identifiers`, {
-        method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'domain_deny', value: 'spammer.com' }),
+        method: 'POST',
+        headers: bearer(adminTok),
+        body: JSON.stringify({ kind: 'domain_deny', value: 'spammer.com' }),
       });
     // Deny is org-scoped, so both orgs can block the same domain.
     expect((await deny(orgA)).status).toBe(200);
@@ -125,7 +138,9 @@ describe('admin nonprofit management', () => {
     // Allow domains stay globally unique — a second org can't claim orgA's.
     const allow = (id: string) =>
       req(`/admin/nonprofits/${id}/identifiers`, {
-        method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ kind: 'domain', value: 'shared-claim.org' }),
+        method: 'POST',
+        headers: bearer(adminTok),
+        body: JSON.stringify({ kind: 'domain', value: 'shared-claim.org' }),
       });
     expect((await allow(orgA)).status).toBe(200);
     expect((await allow(orgB)).status).toBe(409);
@@ -134,7 +149,9 @@ describe('admin nonprofit management', () => {
   it('overrides fields: verify and list a nonprofit', async () => {
     const id = await createNonprofit('Hope House'); // starts unverified, unlisted
     const res = await req(`/admin/nonprofits/${id}`, {
-      method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ verified: true, listed: true }),
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify({ verified: true, listed: true }),
     });
     expect(res.status).toBe(200);
     const body: any = await res.json();
@@ -142,7 +159,9 @@ describe('admin nonprofit management', () => {
 
     // Partial update keeps untouched fields (verified stays true).
     const res2 = await req(`/admin/nonprofits/${id}`, {
-      method: 'POST', headers: bearer(adminTok), body: JSON.stringify({ name: 'Hope House Inc' }),
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify({ name: 'Hope House Inc' }),
     });
     const body2: any = await res2.json();
     expect(body2).toMatchObject({ name: 'Hope House Inc', verified: true, listed: true });
@@ -151,7 +170,9 @@ describe('admin nonprofit management', () => {
   it('requires an admin token', async () => {
     const id = await createNonprofit();
     const res = await req(`/admin/nonprofits/${id}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ listed: true }),
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ listed: true }),
     });
     expect(res.status).toBe(401);
   });

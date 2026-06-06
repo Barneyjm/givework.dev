@@ -1,4 +1,4 @@
-import { pool, closePool } from '../src/db.js';
+import { closePool, pool } from '../src/db.js';
 
 // One-off: drop a single PUBLIC test task into the database so a self-serve
 // (unverified) dev can claim it with `givework run`. Self-guards against writing
@@ -48,13 +48,22 @@ async function main() {
     `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
      VALUES ($1, $2, $3, $4, $5, $6, 'public')
      RETURNING id`,
-    [nonprofitId, 'Summarize a short note (test)', JSON.stringify(spec), 20, 100, 'claude-sonnet-4-6'],
+    [
+      nonprofitId,
+      'Summarize a short note (test)',
+      JSON.stringify(spec),
+      20,
+      100,
+      'claude-sonnet-4-6',
+    ],
   );
 
   console.log(`\n✓ Seeded PUBLIC task ${task.rows[0].id}`);
   console.log(`  title: "Summarize a short note (test)"  cap: 100¢  model: claude-sonnet-4-6`);
   console.log(`\nClaim it:`);
-  console.log(`  npx github:Barneyjm/givework.dev run --once               # stub executor (no credit)`);
+  console.log(
+    `  npx github:Barneyjm/givework.dev run --once               # stub executor (no credit)`,
+  );
   console.log(`  EXECUTOR=claude npx github:Barneyjm/givework.dev run --once  # real claude -p`);
 }
 

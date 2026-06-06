@@ -1,0 +1,19 @@
+#!/bin/sh
+# Givework pre-commit hook — lint & format-check staged files with Biome.
+#
+# Enabled via `git config core.hooksPath .githooks` (run once per clone; the
+# npm "prepare" script does this automatically after `npm install`).
+#
+# Checks only the files staged for this commit. To auto-fix issues:
+#   npm run lint:fix
+# To bypass in an emergency:
+#   git commit --no-verify
+
+# --no-errors-on-unmatched: don't fail when no staged file is lint-relevant.
+if ! npx biome check --staged --no-errors-on-unmatched; then
+  echo ""
+  echo "✗ Biome found issues in staged files."
+  echo "  Fix with:  npm run lint:fix   (then re-stage and commit)"
+  echo "  Bypass:    git commit --no-verify"
+  exit 1
+fi

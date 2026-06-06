@@ -1,7 +1,7 @@
-import { login } from './login.js';
-import { whoami, budget, history, stats, version, run, admin, status, tasks } from './commands.js';
 import { ApiError } from './api.js';
+import { admin, budget, history, run, stats, status, tasks, version, whoami } from './commands.js';
 import { CONFIG_PATH } from './config.js';
+import { login } from './login.js';
 
 // The `givework` CLI entrypoint. A flat arg router — argv[2] is the command, the
 // rest is passed to the handler. Kept dependency-light (no commander/yargs) so the
@@ -44,16 +44,26 @@ Tip: run tasks on your donated capacity with:  EXECUTOR=claude givework run`;
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
   switch (cmd) {
-    case 'login': return login();
-    case 'whoami': return whoami();
-    case 'budget': return budget(args);
-    case 'tasks': return tasks(args);
-    case 'stats': return stats();
-    case 'history': return history(args);
-    case 'run': return run(args);
-    case 'version': return version();
-    case 'status': return status();
-    case 'admin': return admin(args);
+    case 'login':
+      return login();
+    case 'whoami':
+      return whoami();
+    case 'budget':
+      return budget(args);
+    case 'tasks':
+      return tasks(args);
+    case 'stats':
+      return stats();
+    case 'history':
+      return history(args);
+    case 'run':
+      return run(args);
+    case 'version':
+      return version();
+    case 'status':
+      return status();
+    case 'admin':
+      return admin(args);
     case undefined:
     case '-h':
     case '--help':

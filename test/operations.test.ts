@@ -1,23 +1,23 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool } from '../src/db.js';
 import {
   checkoutTask,
-  submitResult,
-  releaseTask,
   expire,
   getBudget,
   OpError,
+  releaseTask,
+  submitResult,
 } from '../src/operations.js';
-import { closePool } from '../src/db.js';
 import {
-  resetDb,
   createDev,
   createNonprofit,
-  setBudget,
   createTask,
-  getBudgetRow,
-  getTaskRow,
-  getLedger,
   expireLockNow,
+  getBudgetRow,
+  getLedger,
+  getTaskRow,
+  resetDb,
+  setBudget,
 } from './helpers.js';
 
 let dev: string;
@@ -221,8 +221,8 @@ describe('actual exceeds reservation (criterion 9)', () => {
 describe('unknown ids (404)', () => {
   it('checkout of unknown task -> 404', async () => {
     await setBudget(dev, 2000);
-    await expect(
-      checkoutTask(dev, '00000000-0000-0000-0000-000000000000'),
-    ).rejects.toMatchObject({ status: 404 });
+    await expect(checkoutTask(dev, '00000000-0000-0000-0000-000000000000')).rejects.toMatchObject({
+      status: 404,
+    });
   });
 });

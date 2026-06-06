@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { getDevProfile, setOwnBudget, getDevLedger, getDevStats, OpError } from './operations.js';
-import { requireDev, type Principal } from './auth.js';
+import { type Principal, requireDev } from './auth.js';
+import { getDevLedger, getDevProfile, getDevStats, OpError, setOwnBudget } from './operations.js';
 
 // A dev's own self-serve surface. Every route is dev-token gated and acts only
 // on the caller: dev_id always comes from the token `sub`, never the body or

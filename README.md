@@ -1,19 +1,79 @@
-# Givework — budget ledger core (Stages 1–4)
+<div align="center">
 
-A budget-and-task state machine you can drive with `curl` or over MCP. See
-`BUILD.md` for the original Stage 1 spec.
+<img src="brand/givework-logo-512.png" alt="Givework" width="140" />
 
-The core invariant is `reserved_cents + spent_cents <= budget_cents`, enforced by
-both a DB `CHECK` constraint and the `dev_budgets` row being locked `FOR UPDATE`
-at the start of every state change. The append-only `ledger` is the source of
-truth for receipts: the sum of a dev's ledger deltas always equals their live
-`reserved + spent`.
+# Givework
 
-**Stage 1** — the ledger core: atomic checkout / submit / release / expire.
-**Stage 2** — JWT auth (identity from the token, not the body), cross-month
-reservation accounting, and an MCP server wrapping the same core for the runner.
-**Stage 3** — the dev runner: an MCP-client loop (checkout → work → submit).
-**Stage 4** — intake & decomposition: plain-language need → structured tasks.
+**Agentic volunteering** — developers lend their AI agents to nonprofits.
+
+[![CI](https://github.com/Barneyjm/givework.dev/actions/workflows/ci.yml/badge.svg)](https://github.com/Barneyjm/givework.dev/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Barneyjm/givework.dev/actions/workflows/deploy.yml/badge.svg)](https://github.com/Barneyjm/givework.dev/actions/workflows/deploy.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
+[![Linted with Biome](https://img.shields.io/badge/lint-biome-60a5fa?logo=biome&logoColor=white)](https://biomejs.dev)
+
+</div>
+
+> Your Claude plan already includes a free, dedicated agent for headless work — and
+> most of it sits idle. Lend it to nonprofits: real tasks, run on the subscription
+> you already pay for. Free for nonprofits, fully accounted for.
+
+## What is Givework?
+
+A nonprofit emails a plain-language need to `intake@givework.dev`. Givework
+decomposes it into small, well-scoped tasks and publishes them to an open pool. A
+volunteer developer's **runner** checks out a task, executes it with their *own*
+Claude Code agent (`claude -p` — donated capacity from a subscription they already
+pay for), and submits the result, which is delivered back to the nonprofit. Every
+task carries a budget, and a locked append-only ledger guarantees no volunteer ever
+overspends.
+
+Nonprofits never see costs or model names. Volunteers never expose an API key —
+work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
+
+## How it works
+
+```
+ nonprofit email ─▶ intake ─▶ decompose ─▶ admin review ─▶ published task pool
+   (plain text)    (DMARC +    (AI-drafted,                        │
+                   allowlist)   right-sized)                       ▼
+                                              volunteer runner:  checkout ─▶ claude -p ─▶ submit
+                                                                              │
+  results delivered to the nonprofit ◀──────── budget ledger accounts every cent
+```
+
+- **Intake is email, not an open API.** Cloudflare Email Routing delivers mail to a
+  Worker that gates on `dmarc=pass` and an allowlist of verified nonprofits — there
+  is no public endpoint to spoof or spam, and nothing inbound touches a volunteer
+  machine. ([details](#intake--decomposition))
+- **Decomposition** turns one fuzzy ask into right-sized tasks, each with a cost
+  estimate, a max budget, and a sensitivity level — drafted by a small local model
+  (schema-constrained), reviewed by an admin before publishing.
+- **Execution is donated, not billed.** The runner shells out to `claude -p`, so the
+  capacity is the volunteer's existing Claude Code credit. No API keys, no platform
+  spend per task.
+- **Fully accounted for.** The invariant `reserved_cents + spent_cents <= budget_cents`
+  is enforced by a DB `CHECK` plus a `FOR UPDATE` row lock on every state change, and
+  the append-only `ledger` is the receipt of record — the sum of a dev's deltas always
+  equals their live `reserved + spent`.
+
+## Architecture
+
+Two planes, deployed and operated separately:
+
+- **Control plane** — the Hono API, intake/decomposition, and the budget ledger. Ships
+  to **Cloudflare Workers** on every push to `main` (`.github/workflows/deploy.yml`),
+  backed by **Neon Postgres**. The same HTTP-free core (`src/operations.ts`) is also
+  wrapped by an **MCP** server for the runner to drive.
+- **Execution plane** — the dev runner and `claude -p` executor. Runs on **volunteer
+  machines**, never deployed; it polls the control plane over HTTP/MCP and executes on
+  local Claude credit.
+
+> Drive the whole thing with `curl` or over MCP. The repo was built in stages — ledger
+> core → JWT auth + MCP → dev runner → intake & decomposition; see `BUILD.md` for the
+> original Stage 1 spec and `git log` for the lineage.
 
 ## Stack
 
@@ -53,6 +113,23 @@ npm test            # full suite against $DATABASE_URL (sets its own JWT_SECRET)
 The migration runner records applied files in a `schema_migrations` table and
 only runs what's pending, so re-running is a no-op. The test suite shares one
 database and truncates between tests — point it at a throwaway DB, never prod.
+
+## Lint & format
+
+[Biome](https://biomejs.dev/) handles both linting and formatting (one fast
+tool, config in `biome.json`):
+
+```bash
+npm run lint        # check (what CI runs)
+npm run lint:fix    # lint + format, applying safe fixes
+npm run format      # format only
+```
+
+`npm install` also points git at the repo's hooks (`core.hooksPath` via the
+`prepare` script), so a **pre-commit hook** lints staged files and blocks the
+commit on any issue — run `npm run lint:fix` and re-stage, or `git commit
+--no-verify` to bypass. See [CONTRIBUTING.md](CONTRIBUTING.md) for details,
+including the Claude Code auto-format hook.
 
 ## Auth model
 
@@ -350,3 +427,26 @@ scripts/mint-token.ts     CLI to mint admin/dev tokens
 the MCP server wrap the same functions. Out-of-scope work carries a `// STAGE 3:`
 marker rather than being built (nonprofit-scoped tokens, token rotation/revocation,
 remote MCP transport, and the intake/decomposition layer).
+
+## Contributing
+
+Contributions welcome. The short version:
+
+```bash
+npm install          # also wires the git pre-commit hook
+npm run migrate      # against a local/throwaway Postgres
+npm run lint         # Biome
+npm run typecheck    # tsc --noEmit
+npm test             # full suite
+```
+
+All three of `lint`, `typecheck`, and `test` must pass — CI enforces them on every
+PR. Branch off `main`, keep mechanical reformats in their own commit, and see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (hooks, style, conventions).
+
+This is a **public** repo: never commit infrastructure IDs or secrets (Cloudflare
+account IDs, Neon project IDs, tokens) — CI injects them as secrets.
+
+## License
+
+[Apache License 2.0](LICENSE).

@@ -133,7 +133,7 @@ export async function sendEmail(
     return false;
   }
   const raw = buildMime(email);
-  // @ts-ignore - 'cloudflare:email' is a Workers-runtime built-in module
+  // @ts-expect-error - 'cloudflare:email' is a Workers-runtime built-in module
   const { EmailMessage } = await import('cloudflare:email');
   await binding.send(new EmailMessage(FROM_ADDRESS, email.to, raw));
   return true;

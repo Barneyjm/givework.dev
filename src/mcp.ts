@@ -1,15 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { verifyToken } from './auth.js';
 import {
   checkoutTask,
-  submitResult,
-  releaseTask,
   getBudget,
   listOpenTasks,
   OpError,
+  releaseTask,
+  submitResult,
 } from './operations.js';
-import { verifyToken } from './auth.js';
 
 // MCP wrapper around the HTTP-free operations core. This is the rail the dev
 // runner rides: it authenticates as one dev (GIVEWORK_TOKEN) and every tool acts
@@ -29,7 +29,10 @@ async function run(fn: () => Promise<unknown>) {
       return {
         isError: true,
         content: [
-          { type: 'text' as const, text: JSON.stringify({ error: err.code, message: err.message }) },
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ error: err.code, message: err.message }),
+          },
         ],
       };
     }
@@ -57,7 +60,11 @@ async function main() {
     {
       description: 'List open tasks you could pick up, oldest first.',
       inputSchema: {
-        max_cost_cents: z.number().int().positive().optional()
+        max_cost_cents: z
+          .number()
+          .int()
+          .positive()
+          .optional()
           .describe('Only tasks whose hard cap is <= this many cents.'),
         sensitivity: z.enum(['public', 'internal', 'sensitive']).optional(),
         limit: z.number().int().positive().max(100).optional(),
@@ -75,14 +82,18 @@ async function main() {
 
   server.registerTool(
     'get_budget',
-    { description: 'Your current-period budget: budget / reserved / spent / available cents.', inputSchema: {} },
+    {
+      description: 'Your current-period budget: budget / reserved / spent / available cents.',
+      inputSchema: {},
+    },
     () => run(() => getBudget(devId).then((b) => b ?? { error: 'no_budget' })),
   );
 
   server.registerTool(
     'checkout_task',
     {
-      description: 'Claim an open task for 10 minutes and reserve its hard cap against your budget.',
+      description:
+        'Claim an open task for 10 minutes and reserve its hard cap against your budget.',
       inputSchema: { task_id: z.string().uuid() },
     },
     (args) => run(() => checkoutTask(devId, args.task_id)),
@@ -91,7 +102,8 @@ async function main() {
   server.registerTool(
     'submit_result',
     {
-      description: 'Submit a result for a task locked to you; moves the reservation to actual spend.',
+      description:
+        'Submit a result for a task locked to you; moves the reservation to actual spend.',
       inputSchema: {
         task_id: z.string().uuid(),
         result: z.any().describe('The task output (any JSON).'),
@@ -100,13 +112,22 @@ async function main() {
       },
     },
     (args) =>
-      run(() => submitResult(devId, args.task_id, args.result ?? null, args.actual_cost_cents, args.raw_usage ?? null)),
+      run(() =>
+        submitResult(
+          devId,
+          args.task_id,
+          args.result ?? null,
+          args.actual_cost_cents,
+          args.raw_usage ?? null,
+        ),
+      ),
   );
 
   server.registerTool(
     'release_task',
     {
-      description: 'Abandon a task locked to you, returning it to the pool and freeing the reservation.',
+      description:
+        'Abandon a task locked to you, returning it to the pool and freeing the reservation.',
       inputSchema: { task_id: z.string().uuid() },
     },
     (args) => run(() => releaseTask(devId, args.task_id)),

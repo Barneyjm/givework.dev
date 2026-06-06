@@ -110,7 +110,11 @@ export class StubExecutor implements Executor {
     console.log(`     … would call Claude here (model ${task.model}) on: "${prompt}"`);
     const actual = Math.round(task.max_cost_cents * 0.8);
     return {
-      result: { stub: true, summary: `Stubbed completion for "${task.title}".`, echoed_prompt: prompt },
+      result: {
+        stub: true,
+        summary: `Stubbed completion for "${task.title}".`,
+        echoed_prompt: prompt,
+      },
       actual_cost_cents: actual,
       raw_usage: { stub: true, model: task.model, simulated_cost_cents: actual },
     };
@@ -143,7 +147,9 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
     child.stderr.on('data', (d) => (err += d));
     child.on('error', (e) => {
       clearTimeout(timer);
-      reject(new Error(`failed to spawn claude (is the CLI installed and logged in?): ${e.message}`));
+      reject(
+        new Error(`failed to spawn claude (is the CLI installed and logged in?): ${e.message}`),
+      );
     });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -197,14 +203,18 @@ export class ClaudeCliExecutor implements Executor {
       throw new Error(`claude -p returned non-JSON output: ${raw.slice(0, 200)}`);
     }
     if (data.is_error) {
-      throw new Error(`claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`);
+      throw new Error(
+        `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`,
+      );
     }
 
     // An empty result means the run produced no work. Throw so the runner RELEASES
     // the task instead of submitting a blank deliverable (and charging for it).
     const resultText = String(data.result ?? '').trim();
     if (!resultText) {
-      throw new Error('claude -p returned an empty result — releasing rather than submitting blank output');
+      throw new Error(
+        'claude -p returned an empty result — releasing rather than submitting blank output',
+      );
     }
     const result = coerceResult(resultText);
 

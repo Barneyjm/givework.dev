@@ -1,7 +1,7 @@
-import { withTransaction, query, type Client } from '../db.js';
+import { type Client, query, withTransaction } from '../db.js';
 import { OpError } from '../operations.js';
-import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
 import type { TaskResult } from '../results.js';
+import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -24,9 +24,23 @@ export interface ReceiveInput {
 // jane@gmail.com must NOT authorize the entire gmail.com domain. For these we
 // fall back to exact-address matching only. Org domains authorize by domain.
 const FREE_EMAIL_DOMAINS = new Set([
-  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com',
-  'hotmail.com', 'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com',
-  'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com',
+  'gmail.com',
+  'googlemail.com',
+  'yahoo.com',
+  'ymail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'gmx.com',
+  'mail.com',
+  'zoho.com',
 ]);
 
 /**
@@ -39,9 +53,7 @@ const FREE_EMAIL_DOMAINS = new Set([
  * email handler rejects when this returns null, so spam and strangers never
  * reach the decomposer.
  */
-export async function findApprovedNonprofitForSender(
-  email: string,
-): Promise<string | null> {
+export async function findApprovedNonprofitForSender(email: string): Promise<string | null> {
   const addr = email.trim().toLowerCase();
   const at = addr.lastIndexOf('@');
   if (at <= 0 || at === addr.length - 1) return null;
@@ -140,7 +152,11 @@ export async function receiveIntake(input: ReceiveInput) {
     }));
   } catch (err: any) {
     if (err?.code === '23503' || err?.code === '22P02') {
-      throw new OpError(400, 'bad_nonprofit_id', 'nonprofit_id does not reference a known nonprofit');
+      throw new OpError(
+        400,
+        'bad_nonprofit_id',
+        'nonprofit_id does not reference a known nonprofit',
+      );
     }
     throw err;
   }
@@ -216,7 +232,8 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
   if (r.status === 'rejected' || r.status === 'closed') {
     stage = 'closed';
     label = 'Closed';
-    note = 'This request was closed. Reply to your confirmation email or write hello@givework.dev with any questions.';
+    note =
+      'This request was closed. Reply to your confirmation email or write hello@givework.dev with any questions.';
   } else if (r.status === 'published' && r.total > 0 && r.done >= r.total) {
     stage = 'complete';
     label = 'Complete';
@@ -268,7 +285,7 @@ export async function getRequestResults(requestId: string): Promise<TaskResult[]
  */
 export async function getRequestResultsForToken(token: string): Promise<TaskResult[] | null> {
   const status = await getRequestStatus(token);
-  if (!status || status.stage !== 'complete') return null;
+  if (status?.stage !== 'complete') return null;
   // getRequestStatus already validated the token is a real, complete request,
   // and the token IS the request id — fetch directly, no extra lookup.
   return getRequestResults(token);
@@ -310,10 +327,12 @@ export async function completedRequestForTask(taskId: string): Promise<Completio
 
 /** Re-run the decomposer on a request, replacing the draft. */
 export async function redecompose(intakeId: string) {
-  const r = await query<{ from_email: string; subject: string | null; raw_body: string; status: string }>(
-    `SELECT from_email, subject, raw_body, status FROM intake_requests WHERE id = $1`,
-    [intakeId],
-  );
+  const r = await query<{
+    from_email: string;
+    subject: string | null;
+    raw_body: string;
+    status: string;
+  }>(`SELECT from_email, subject, raw_body, status FROM intake_requests WHERE id = $1`, [intakeId]);
   const row = r.rows[0];
   if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
   if (row.status === 'published') {
@@ -364,10 +383,9 @@ export async function publishIntake(
       status: string;
       nonprofit_id: string;
       proposed: ProposedTask[] | null;
-    }>(
-      `SELECT status, nonprofit_id, proposed FROM intake_requests WHERE id = $1 FOR UPDATE`,
-      [intakeId],
-    );
+    }>(`SELECT status, nonprofit_id, proposed FROM intake_requests WHERE id = $1 FOR UPDATE`, [
+      intakeId,
+    ]);
     const row = r.rows[0];
     if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
     if (row.status === 'published') {
@@ -456,7 +474,9 @@ export async function uploadDraft(intakeId: string, proposed: unknown, triagedBy
   if (!Array.isArray(proposed)) {
     throw new OpError(400, 'bad_input', 'proposed must be an array');
   }
-  const tasks = (proposed as ProposedTask[]).map(normalizeTask).filter((t) => t.spec.prompt.length > 0);
+  const tasks = (proposed as ProposedTask[])
+    .map(normalizeTask)
+    .filter((t) => t.spec.prompt.length > 0);
   if (tasks.length === 0) {
     throw new OpError(400, 'nothing_to_draft', 'No usable proposed tasks');
   }
@@ -475,10 +495,7 @@ export async function uploadDraft(intakeId: string, proposed: unknown, triagedBy
 }
 
 export async function getIntake(intakeId: string) {
-  const { rows } = await query(
-    `SELECT * FROM intake_requests WHERE id = $1`,
-    [intakeId],
-  );
+  const { rows } = await query(`SELECT * FROM intake_requests WHERE id = $1`, [intakeId]);
   if (!rows[0]) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
   const { rows: attachments } = await query(
     `SELECT id, uri, filename, content_type FROM intake_attachments WHERE intake_request_id = $1`,

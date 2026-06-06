@@ -1,6 +1,6 @@
-import { createServer, type Server } from 'node:http';
 import { spawn } from 'node:child_process';
-import { AddressInfo } from 'node:net';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { apiUrl, saveConfig } from './config.js';
 
 // `givework login` — browser-based OAuth with a loopback callback (no copy-paste).

@@ -19,11 +19,14 @@
     "runner": "node --env-file-if-exists=.env --import tsx src/runner.ts",
     "cli": "node --env-file-if-exists=.env --import tsx src/cli/index.ts",
     "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/givework.mjs --banner:js='#!/usr/bin/env node'",
-    "prepare": "npm run build:cli",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true && npm run build:cli",
     "mint-token": "node --env-file-if-exists=.env --import tsx scripts/mint-token.ts",
     "intake-email": "node --import tsx scripts/intake-email.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "format": "biome format --write",
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
@@ -39,6 +42,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.16",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "esbuild": "^0.24.2",

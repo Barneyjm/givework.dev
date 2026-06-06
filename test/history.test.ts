@@ -1,14 +1,14 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { checkoutTask, submitResult, releaseTask, acceptTask } from '../src/operations.js';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
+import { acceptTask, checkoutTask, releaseTask, submitResult } from '../src/operations.js';
 import { app } from '../src/server.js';
-import { pool, closePool } from '../src/db.js';
 import {
-  resetDb,
   createDev,
   createNonprofit,
-  setBudget,
   createTask,
   mintDevToken,
+  resetDb,
+  setBudget,
 } from './helpers.js';
 
 afterAll(closePool);
@@ -49,7 +49,7 @@ async function contribute(
 }
 
 describe('GET /devs/me/ledger', () => {
-  it('returns the caller\'s entries newest-first with task + nonprofit joined', async () => {
+  it("returns the caller's entries newest-first with task + nonprofit joined", async () => {
     const task = await createTask(np, { max: 500, title: 'Summarize intake' });
     await contribute(alice, task, 380);
 
@@ -88,7 +88,7 @@ describe('GET /devs/me/ledger', () => {
     expect(new Set(ids).size).toBe(6);
   });
 
-  it('is scoped to the caller — never another dev\'s entries', async () => {
+  it("is scoped to the caller — never another dev's entries", async () => {
     const bob = await createDev('bob');
     const bobTok = await mintDevToken(bob);
     await setBudget(bob, 5000);

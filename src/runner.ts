@@ -2,15 +2,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { getExecutor } from './executor.js';
 import {
-  HttpBackend,
-  runLoop,
-  ToolError,
   type Backend,
   type Budget,
-  type OpenTask,
   type CheckoutResult,
+  HttpBackend,
+  type OpenTask,
+  runLoop,
   type SubmitArgs,
   type SubmitResult,
+  ToolError,
 } from './run-loop.js';
 
 // The dev runner — a volunteer's local loop. The transport-agnostic core (the
@@ -92,7 +92,9 @@ async function createBackend(token: string): Promise<Backend> {
     // update landed. Best-effort: an old API without /version shouldn't block work.
     try {
       const v = await backend.version();
-      console.log(`Control plane: ${v.commit.slice(0, 8)} (${v.ref})${v.deployed_at ? `, deployed ${v.deployed_at}` : ''}`);
+      console.log(
+        `Control plane: ${v.commit.slice(0, 8)} (${v.ref})${v.deployed_at ? `, deployed ${v.deployed_at}` : ''}`,
+      );
     } catch {
       console.log('Control plane: version unknown (API predates /version).');
     }

@@ -1,6 +1,11 @@
 import PostalMime from 'postal-mime';
-import { sendEmail, type OutboundEmail, type SendEmailBinding, type EmailAttachment } from '../mailer.js';
-import { receiveIntake, findApprovedNonprofitForSender } from './operations.js';
+import {
+  type EmailAttachment,
+  type OutboundEmail,
+  type SendEmailBinding,
+  sendEmail,
+} from '../mailer.js';
+import { findApprovedNonprofitForSender, receiveIntake } from './operations.js';
 
 // Inbound email → intake. This is the production front door for nonprofit
 // requests: Cloudflare Email Routing delivers mail for intake@givework.dev to
@@ -63,8 +68,7 @@ export async function parseInboundEmail(
   }));
   // First (top-most) Authentication-Results = the one Cloudflare prepended. keys
   // are lowercased by postal-mime, so an exact compare is fine.
-  const authResults =
-    email.headers?.find((h) => h.key === 'authentication-results')?.value ?? null;
+  const authResults = email.headers?.find((h) => h.key === 'authentication-results')?.value ?? null;
   return {
     from: email.from?.address?.toLowerCase() ?? null,
     subject: email.subject ?? null,

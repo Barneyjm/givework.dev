@@ -1,9 +1,20 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { resetDb, createDev, setBudget, setVerified } from './helpers.js';
-import { pool, closePool } from '../src/db.js';
-import { receiveIntake, publishIntake, getIntake, listIntake, uploadDraft } from '../src/intake/operations.js';
-import { StubDecomposer, LocalLLMDecomposer, CliDecomposer, extractTasks } from '../src/intake/decompose.js';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { closePool, pool } from '../src/db.js';
+import {
+  CliDecomposer,
+  extractTasks,
+  LocalLLMDecomposer,
+  StubDecomposer,
+} from '../src/intake/decompose.js';
+import {
+  getIntake,
+  listIntake,
+  publishIntake,
+  receiveIntake,
+  uploadDraft,
+} from '../src/intake/operations.js';
 import { checkoutTask } from '../src/operations.js';
+import { createDev, resetDb, setBudget, setVerified } from './helpers.js';
 
 afterAll(closePool);
 beforeEach(resetDb);
@@ -101,20 +112,32 @@ describe('StubDecomposer sizing', () => {
   const d = new StubDecomposer();
 
   it('splits a quantity into batches of 10 and reports triagedBy stub', async () => {
-    const { tasks, triagedBy } = await d.decompose({ from_email: 'x', body: 'tag 23 emails', attachment_count: 0 });
+    const { tasks, triagedBy } = await d.decompose({
+      from_email: 'x',
+      body: 'tag 23 emails',
+      attachment_count: 0,
+    });
     expect(tasks.length).toBe(3); // 10 + 10 + 3
     expect(tasks[2].spec.unit_count).toBe(3);
     expect(triagedBy).toBe('stub');
   });
 
   it('makes a single task when there is no quantity', async () => {
-    const { tasks } = await d.decompose({ from_email: 'x', body: 'write a thank-you note', attachment_count: 0 });
+    const { tasks } = await d.decompose({
+      from_email: 'x',
+      body: 'write a thank-you note',
+      attachment_count: 0,
+    });
     expect(tasks.length).toBe(1);
     expect(tasks[0].spec.unit_count).toBe(1);
   });
 
   it('caps the number of tasks for huge quantities', async () => {
-    const { tasks } = await d.decompose({ from_email: 'x', body: 'process 100000 records', attachment_count: 0 });
+    const { tasks } = await d.decompose({
+      from_email: 'x',
+      body: 'process 100000 records',
+      attachment_count: 0,
+    });
     expect(tasks.length).toBeLessThanOrEqual(20);
   });
 });
@@ -133,7 +156,14 @@ describe('LocalLLMDecomposer', () => {
         JSON.stringify({
           tasks: [
             // deliberately messy: max < est, bad model, bad sensitivity, float cents
-            { title: 'T', spec: { prompt: 'do it', unit_count: 3.7 }, est_cost_cents: 200.5, max_cost_cents: 50, model: 'gpt-4', sensitivity: 'spicy' },
+            {
+              title: 'T',
+              spec: { prompt: 'do it', unit_count: 3.7 },
+              est_cost_cents: 200.5,
+              max_cost_cents: 50,
+              model: 'gpt-4',
+              sensitivity: 'spicy',
+            },
           ],
         }),
       )) as unknown as typeof fetch;
@@ -153,7 +183,20 @@ describe('LocalLLMDecomposer', () => {
     let sentBody: any;
     const fetchFn = (async (_url: string, init: any) => {
       sentBody = JSON.parse(init.body);
-      return reply(JSON.stringify({ tasks: [{ title: 'T', spec: { prompt: 'go' }, est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive' }] }));
+      return reply(
+        JSON.stringify({
+          tasks: [
+            {
+              title: 'T',
+              spec: { prompt: 'go' },
+              est_cost_cents: 50,
+              max_cost_cents: 75,
+              model: 'claude-sonnet-4-6',
+              sensitivity: 'sensitive',
+            },
+          ],
+        }),
+      );
     }) as unknown as typeof fetch;
     await new LocalLLMDecomposer({ fetchFn }).decompose(input);
     expect(sentBody.response_format.type).toBe('json_schema');
@@ -182,10 +225,16 @@ describe('LocalLLMDecomposer', () => {
 });
 
 describe('uploadDraft (off-Worker decompose watcher)', () => {
-  const draft = [{
-    title: 'Local draft', spec: { prompt: 'summarize the report', unit_count: 1 },
-    est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive',
-  }];
+  const draft = [
+    {
+      title: 'Local draft',
+      spec: { prompt: 'summarize the report', unit_count: 1 },
+      est_cost_cents: 50,
+      max_cost_cents: 75,
+      model: 'claude-sonnet-4-6',
+      sensitivity: 'sensitive',
+    },
+  ];
 
   it('replaces the stub draft and records the engine, normalizing tasks', async () => {
     const r = await receiveIntake({ from_email: 'a@b.org', body: 'do a thing' });
@@ -210,13 +259,26 @@ describe('uploadDraft (off-Worker decompose watcher)', () => {
 });
 
 describe('extractTasks (tolerant JSON extraction)', () => {
-  const one = [{ title: 'T', spec: { prompt: 'do it', unit_count: 1 }, est_cost_cents: 50, max_cost_cents: 75, model: 'x', sensitivity: 'public' }];
+  const one = [
+    {
+      title: 'T',
+      spec: { prompt: 'do it', unit_count: 1 },
+      est_cost_cents: 50,
+      max_cost_cents: 75,
+      model: 'x',
+      sensitivity: 'public',
+    },
+  ];
   it('reads a bare array, {tasks:[…]}, fenced JSON, and the claude -p wrapper', () => {
     expect(extractTasks(JSON.stringify(one))).toHaveLength(1);
     expect(extractTasks(JSON.stringify({ tasks: one }))).toHaveLength(1);
-    expect(extractTasks('Here you go:\n```json\n' + JSON.stringify({ tasks: one }) + '\n```\nthanks')).toHaveLength(1);
+    expect(
+      extractTasks(`Here you go:\n\`\`\`json\n${JSON.stringify({ tasks: one })}\n\`\`\`\nthanks`),
+    ).toHaveLength(1);
     // claude -p --output-format json: real content nested in `.result`.
-    expect(extractTasks(JSON.stringify({ type: 'result', result: JSON.stringify({ tasks: one }) }))).toHaveLength(1);
+    expect(
+      extractTasks(JSON.stringify({ type: 'result', result: JSON.stringify({ tasks: one }) })),
+    ).toHaveLength(1);
   });
   it('tolerates raw control chars inside strings (common in local-model output)', () => {
     // A literal newline inside a string value — invalid JSON until escaped.
@@ -236,12 +298,16 @@ describe('extractTasks (tolerant JSON extraction)', () => {
   it('ignores trailing prose containing stray braces (depth-matched close, not lastIndexOf)', () => {
     // A chatty CLI appends a note with its own `}` after the JSON. A naive
     // lastIndexOf('}') would swallow it into the region and corrupt the parse.
-    const out = extractTasks(JSON.stringify({ tasks: one }) + '\n\nNote: see config {debug:true} for more.') as any[];
+    const out = extractTasks(
+      `${JSON.stringify({ tasks: one })}\n\nNote: see config {debug:true} for more.`,
+    ) as any[];
     expect(out).toHaveLength(1);
     expect(out[0].title).toBe('T');
   });
   it('does not treat brackets inside string values as structure', () => {
-    const out = extractTasks('{"tasks":[{"title":"has } brace","spec":{"prompt":"x"}}]} trailing') as any[];
+    const out = extractTasks(
+      '{"tasks":[{"title":"has } brace","spec":{"prompt":"x"}}]} trailing',
+    ) as any[];
     expect(out).toHaveLength(1);
     expect(out[0].title).toBe('has } brace');
   });
@@ -258,10 +324,17 @@ describe('extractTasks (tolerant JSON extraction)', () => {
 
 describe('CliDecomposer', () => {
   const input = { from_email: 'x@y.org', body: 'summarize a report', attachment_count: 0 };
-  const goodTask = { title: 'Summarize', spec: { prompt: 'summarize the report', unit_count: 1 }, est_cost_cents: 50, max_cost_cents: 75, model: 'claude-sonnet-4-6', sensitivity: 'sensitive' };
+  const goodTask = {
+    title: 'Summarize',
+    spec: { prompt: 'summarize the report', unit_count: 1 },
+    est_cost_cents: 50,
+    max_cost_cents: 75,
+    model: 'claude-sonnet-4-6',
+    sensitivity: 'sensitive',
+  };
 
   it('runs the CLI, parses fenced output, and reports triagedBy local', async () => {
-    const run = async () => '```json\n' + JSON.stringify({ tasks: [goodTask] }) + '\n```';
+    const run = async () => `\`\`\`json\n${JSON.stringify({ tasks: [goodTask] })}\n\`\`\``;
     const { tasks, triagedBy } = await new CliDecomposer({ run }).decompose(input);
     expect(tasks).toHaveLength(1);
     expect(triagedBy).toBe('local');
@@ -298,7 +371,9 @@ describe('CliDecomposer', () => {
   });
 
   it('falls back to the stub when the CLI errors or returns junk', async () => {
-    const boom = async () => { throw new Error('command not found: ollama'); };
+    const boom = async () => {
+      throw new Error('command not found: ollama');
+    };
     expect((await new CliDecomposer({ run: boom }).decompose(input)).triagedBy).toBe('stub');
     const junk = async () => 'I could not do that';
     const r = await new CliDecomposer({ run: junk }).decompose(input);

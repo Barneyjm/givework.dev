@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
-import { query } from './db.js';
-import { rejectTask, OpError } from './operations.js';
-import { acceptTaskAndNotify } from './review.js';
-import { type SendEmailBinding } from './mailer.js';
 import { requireAdmin, signDevToken } from './auth.js';
+import { query } from './db.js';
+import type { SendEmailBinding } from './mailer.js';
+import { OpError, rejectTask } from './operations.js';
+import { acceptTaskAndNotify } from './review.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
 // tokens so a nonprofit can review its own tasks without an admin credential —
@@ -28,7 +28,7 @@ adminRoutes.post('/devs', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     if (!body.github_handle) throw new OpError(400, 'bad_input', 'Missing github_handle');
-    let rows;
+    let rows: Array<{ id: string; github_handle: string; email: string | null }>;
     try {
       ({ rows } = await query(
         `INSERT INTO devs (github_handle, email) VALUES ($1, $2) RETURNING id, github_handle, email`,
@@ -132,10 +132,16 @@ adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
   return adminHandle(async () => {
     const kind = String(body.kind ?? '');
     if (!IDENTIFIER_KINDS.has(kind)) {
-      throw new OpError(400, 'bad_input', `kind must be one of ${[...IDENTIFIER_KINDS].join(', ')}`);
+      throw new OpError(
+        400,
+        'bad_input',
+        `kind must be one of ${[...IDENTIFIER_KINDS].join(', ')}`,
+      );
     }
     // Normalize: lowercase, trim, and strip a leading '@' from bare domains.
-    let value = String(body.value ?? '').trim().toLowerCase();
+    let value = String(body.value ?? '')
+      .trim()
+      .toLowerCase();
     if (kind.startsWith('domain')) value = value.replace(/^@/, '');
     if (!value) throw new OpError(400, 'bad_input', 'value is required');
     const isEmail = kind.startsWith('email');
@@ -170,7 +176,8 @@ adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
       `DELETE FROM nonprofit_identifiers WHERE id = $1 AND nonprofit_id = $2`,
       [c.req.param('identifierId'), c.req.param('id')],
     );
-    if (rowCount === 0) throw new OpError(404, 'identifier_not_found', 'Unknown identifier for this nonprofit');
+    if (rowCount === 0)
+      throw new OpError(404, 'identifier_not_found', 'Unknown identifier for this nonprofit');
     return { deleted: true };
   })(c),
 );
@@ -178,7 +185,14 @@ adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
 adminRoutes.post('/tasks', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
-    for (const f of ['nonprofit_id', 'title', 'spec', 'est_cost_cents', 'max_cost_cents', 'model']) {
+    for (const f of [
+      'nonprofit_id',
+      'title',
+      'spec',
+      'est_cost_cents',
+      'max_cost_cents',
+      'model',
+    ]) {
       if (body[f] === undefined || body[f] === null) {
         throw new OpError(400, 'bad_input', `Missing field: ${f}`);
       }
@@ -265,6 +279,4 @@ adminRoutes.post('/tasks/:id/accept', (c) =>
   })(c),
 );
 
-adminRoutes.post('/tasks/:id/reject', (c) =>
-  adminHandle(() => rejectTask(c.req.param('id')))(c),
-);
+adminRoutes.post('/tasks/:id/reject', (c) => adminHandle(() => rejectTask(c.req.param('id')))(c));

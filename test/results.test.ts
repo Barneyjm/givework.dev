@@ -1,11 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { resultsToFile, resultsToCsv, resultsToJson } from '../src/results.js';
+import { describe, expect, it } from 'vitest';
+import { resultsToCsv, resultsToFile, resultsToJson } from '../src/results.js';
 
 describe('resultsToFile', () => {
   it('produces CSV for tabular results (objects / arrays of objects)', () => {
     const f = resultsToFile([
       { title: 'Batch 1', result: { name: 'Alvarez', need: 'food' } },
-      { title: 'Batch 2', result: [{ name: 'Brown', need: 'rent' }, { name: 'Cho', need: 'childcare' }] },
+      {
+        title: 'Batch 2',
+        result: [
+          { name: 'Brown', need: 'rent' },
+          { name: 'Cho', need: 'childcare' },
+        ],
+      },
     ]);
     expect(f.filename).toBe('givework-results.csv');
     expect(f.contentType).toMatch(/text\/csv/);

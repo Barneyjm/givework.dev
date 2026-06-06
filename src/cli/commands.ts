@@ -1,9 +1,9 @@
 import { createInterface } from 'node:readline';
-import { apiRequest } from './api.js';
-import { apiUrl, loadConfig, saveConfig, requireToken, requireAdminToken } from './config.js';
-import { HttpBackend, runLoop } from '../run-loop.js';
-import { StubExecutor, ClaudeCliExecutor, type Executor } from '../executor.js';
+import { ClaudeCliExecutor, type Executor, StubExecutor } from '../executor.js';
 import { getDecomposer } from '../intake/decompose.js';
+import { HttpBackend, runLoop } from '../run-loop.js';
+import { apiRequest } from './api.js';
+import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 
 // The CLI supports the two executors a volunteer actually uses: the deterministic
 // stub (default) and the production `claude -p` path (EXECUTOR=claude). It does
@@ -26,7 +26,12 @@ const has = (args: string[], name: string) => args.includes(name);
 /** Read a single line from stdin (for pasting a token). */
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => rl.question(question, (a) => { rl.close(); resolve(a.trim()); }));
+  return new Promise((resolve) =>
+    rl.question(question, (a) => {
+      rl.close();
+      resolve(a.trim());
+    }),
+  );
 }
 
 // --- dev commands ---
@@ -35,9 +40,13 @@ export async function whoami(): Promise<void> {
   const token = requireToken();
   const me = await apiRequest<any>(apiUrl(), { path: '/devs/me', token });
   const b = me.budget;
-  console.log(`@${me.github_handle}  (${me.verified ? 'verified' : 'unverified — public tasks only'})`);
+  console.log(
+    `@${me.github_handle}  (${me.verified ? 'verified' : 'unverified — public tasks only'})`,
+  );
   if (b) {
-    console.log(`budget: ${b.available_cents}¢ available of ${b.budget_cents}¢  (reserved ${b.reserved_cents}¢, spent ${b.spent_cents}¢)`);
+    console.log(
+      `budget: ${b.available_cents}¢ available of ${b.budget_cents}¢  (reserved ${b.reserved_cents}¢, spent ${b.spent_cents}¢)`,
+    );
   } else {
     console.log('budget: none set for this period — run:  givework budget set <cents>');
   }
@@ -71,7 +80,10 @@ export async function history(args: string[]): Promise<void> {
   if (limit) qs.set('limit', limit);
   if (before) qs.set('before', before);
   const q = qs.toString();
-  const page = await apiRequest<any>(apiUrl(), { path: `/devs/me/ledger${q ? `?${q}` : ''}`, token });
+  const page = await apiRequest<any>(apiUrl(), {
+    path: `/devs/me/ledger${q ? `?${q}` : ''}`,
+    token,
+  });
   if (!page.entries.length) {
     console.log('No contributions yet — run `givework run` to start.');
     return;
@@ -80,7 +92,9 @@ export async function history(args: string[]): Promise<void> {
     const when = new Date(e.created_at).toISOString().slice(0, 16).replace('T', ' ');
     const amount = `${e.delta_cents > 0 ? '+' : ''}${e.delta_cents}¢`;
     const label = e.task_title ?? e.task_id;
-    console.log(`${when}  ${e.event_type.padEnd(8)} ${amount.padStart(7)}  ${label}${e.nonprofit_name ? `  · ${e.nonprofit_name}` : ''}`);
+    console.log(
+      `${when}  ${e.event_type.padEnd(8)} ${amount.padStart(7)}  ${label}${e.nonprofit_name ? `  · ${e.nonprofit_name}` : ''}`,
+    );
   }
   if (page.next_before) {
     console.log(`\n… older entries:  givework history --before ${page.next_before}`);
@@ -99,14 +113,18 @@ export async function stats(): Promise<void> {
   if (s.by_month?.length) {
     console.log('\nby month:');
     for (const m of s.by_month) {
-      console.log(`  ${m.month}   ${String(m.donated_cents).padStart(7)}¢   ${m.tasks} task${m.tasks === 1 ? '' : 's'}`);
+      console.log(
+        `  ${m.month}   ${String(m.donated_cents).padStart(7)}¢   ${m.tasks} task${m.tasks === 1 ? '' : 's'}`,
+      );
     }
   }
 }
 
 export async function version(): Promise<void> {
   const v = await apiRequest<any>(apiUrl(), { path: '/version' });
-  console.log(`${v.service}  ${v.commit?.slice(0, 8)} (${v.ref})${v.deployed_at ? `  deployed ${v.deployed_at}` : ''}`);
+  console.log(
+    `${v.service}  ${v.commit?.slice(0, 8)} (${v.ref})${v.deployed_at ? `  deployed ${v.deployed_at}` : ''}`,
+  );
 }
 
 // Browse the open task pool — what `run` would pick from, without claiming any.
@@ -130,7 +148,9 @@ export async function tasks(args: string[]): Promise<void> {
   console.log(`${rows.length} open task${rows.length === 1 ? '' : 's'}:`);
   for (const t of rows) {
     console.log(`  ${t.id}`);
-    console.log(`    ${t.title}  ·  ${t.model}  ·  ~${t.est_cost_cents}¢ (cap ${t.max_cost_cents}¢)  ·  ${t.sensitivity}`);
+    console.log(
+      `    ${t.title}  ·  ${t.model}  ·  ~${t.est_cost_cents}¢ (cap ${t.max_cost_cents}¢)  ·  ${t.sensitivity}`,
+    );
   }
 }
 
@@ -180,13 +200,19 @@ export async function admin(args: string[]): Promise<void> {
   switch (sub) {
     case 'login': {
       const token = await prompt('Paste admin token: ');
-      if (!token) { console.error('No token entered.'); process.exit(1); }
+      if (!token) {
+        console.error('No token entered.');
+        process.exit(1);
+      }
       saveConfig({ apiUrl: apiUrl(), adminToken: token });
       console.log('✓ Admin token saved to ~/.givework/config.json');
       return;
     }
     case 'verify': {
-      if (!rest[0]) { console.error('Usage: givework admin verify <devId>'); process.exit(1); }
+      if (!rest[0]) {
+        console.error('Usage: givework admin verify <devId>');
+        process.exit(1);
+      }
       const adminToken = requireAdminToken();
       const r = await apiRequest<any>(apiUrl(), {
         method: 'POST',
@@ -200,8 +226,14 @@ export async function admin(args: string[]): Promise<void> {
       // The residual manual queue: submitted work awaiting accept (verified devs
       // auto-accept, so this is mostly unverified-dev public tasks).
       const adminToken = requireAdminToken();
-      const rows = await apiRequest<any[]>(apiUrl(), { path: '/admin/tasks?status=submitted', token: adminToken });
-      if (!rows.length) { console.log('Nothing awaiting review.'); return; }
+      const rows = await apiRequest<any[]>(apiUrl(), {
+        path: '/admin/tasks?status=submitted',
+        token: adminToken,
+      });
+      if (!rows.length) {
+        console.log('Nothing awaiting review.');
+        return;
+      }
       console.log(`${rows.length} task${rows.length === 1 ? '' : 's'} awaiting accept:`);
       for (const t of rows) {
         const preview = typeof t.result === 'string' ? t.result : JSON.stringify(t.result);
@@ -213,7 +245,10 @@ export async function admin(args: string[]): Promise<void> {
       return;
     }
     case 'accept': {
-      if (!rest[0]) { console.error('Usage: givework admin accept <taskId>'); process.exit(1); }
+      if (!rest[0]) {
+        console.error('Usage: givework admin accept <taskId>');
+        process.exit(1);
+      }
       const adminToken = requireAdminToken();
       const r = await apiRequest<any>(apiUrl(), {
         method: 'POST',
@@ -224,7 +259,10 @@ export async function admin(args: string[]): Promise<void> {
       return;
     }
     case 'budget': {
-      if (!rest[0] || !rest[1]) { console.error('Usage: givework admin budget <devId> <cents>'); process.exit(1); }
+      if (!rest[0] || !rest[1]) {
+        console.error('Usage: givework admin budget <devId> <cents>');
+        process.exit(1);
+      }
       const adminToken = requireAdminToken();
       const r = await apiRequest<any>(apiUrl(), {
         method: 'POST',
@@ -236,20 +274,42 @@ export async function admin(args: string[]): Promise<void> {
       return;
     }
     case 'task': {
-      if (rest[0] !== 'create') { console.error('Usage: givework admin task create --json \'{…}\''); process.exit(1); }
+      if (rest[0] !== 'create') {
+        console.error("Usage: givework admin task create --json '{…}'");
+        process.exit(1);
+      }
       const json = arg(rest, '--json');
-      if (!json) { console.error('Provide the task as --json \'{"nonprofit_id":…,"title":…,"spec":…,"est_cost_cents":…,"max_cost_cents":…,"model":…}\''); process.exit(1); }
+      if (!json) {
+        console.error(
+          'Provide the task as --json \'{"nonprofit_id":…,"title":…,"spec":…,"est_cost_cents":…,"max_cost_cents":…,"model":…}\'',
+        );
+        process.exit(1);
+      }
       let body: unknown;
-      try { body = JSON.parse(json); } catch { console.error('--json is not valid JSON'); process.exit(1); }
+      try {
+        body = JSON.parse(json);
+      } catch {
+        console.error('--json is not valid JSON');
+        process.exit(1);
+      }
       const adminToken = requireAdminToken();
-      const r = await apiRequest<any>(apiUrl(), { method: 'POST', path: '/admin/tasks', token: adminToken, body });
+      const r = await apiRequest<any>(apiUrl(), {
+        method: 'POST',
+        path: '/admin/tasks',
+        token: adminToken,
+        body,
+      });
       console.log(`✓ created task ${r.id} — "${r.title}" (${r.status})`);
       return;
     }
-    case 'nonprofit': return adminNonprofit(rest);
-    case 'decompose': return adminDecompose(rest);
+    case 'nonprofit':
+      return adminNonprofit(rest);
+    case 'decompose':
+      return adminDecompose(rest);
     default:
-      console.error('Admin commands: login | verify <devId> | review | accept <taskId> | decompose [--watch] | budget <devId> <cents> | task create --json \'{…}\' | nonprofit …');
+      console.error(
+        "Admin commands: login | verify <devId> | review | accept <taskId> | decompose [--watch] | budget <devId> <cents> | task create --json '{…}' | nonprofit …",
+      );
       process.exit(1);
   }
 }
@@ -263,7 +323,9 @@ export async function admin(args: string[]): Promise<void> {
 async function adminDecompose(args: string[]): Promise<void> {
   const engine = process.env.DECOMPOSER;
   if (engine !== 'cli' && engine !== 'local') {
-    console.error('Set DECOMPOSER=cli (or local) to run a real model, e.g.:\n  DECOMPOSER=cli DECOMPOSER_CMD=ollama givework admin decompose --watch');
+    console.error(
+      'Set DECOMPOSER=cli (or local) to run a real model, e.g.:\n  DECOMPOSER=cli DECOMPOSER_CMD=ollama givework admin decompose --watch',
+    );
     process.exit(1);
   }
   const token = requireAdminToken();
@@ -288,7 +350,10 @@ async function adminDecompose(args: string[]): Promise<void> {
     const pending = list.filter((r) => r.triaged_by === 'stub' && !skip.has(r.id)); // not yet upgraded off-Worker
     let done = 0;
     for (const r of pending) {
-      const full = await apiRequest<any>(base, { path: `/admin/intake/${encodeURIComponent(r.id)}`, token });
+      const full = await apiRequest<any>(base, {
+        path: `/admin/intake/${encodeURIComponent(r.id)}`,
+        token,
+      });
       const { triagedBy, tasks } = await decomposer.decompose({
         from_email: full.from_email,
         subject: full.subject ?? undefined,
@@ -306,7 +371,9 @@ async function adminDecompose(args: string[]): Promise<void> {
         token,
         body: { proposed: tasks, triaged_by: triagedBy },
       });
-      console.log(`  ✓ ${r.id}  ${tasks.length} task${tasks.length === 1 ? '' : 's'}  (${full.subject ?? full.from_email})`);
+      console.log(
+        `  ✓ ${r.id}  ${tasks.length} task${tasks.length === 1 ? '' : 's'}  (${full.subject ?? full.from_email})`,
+      );
       done++;
     }
     return done;
@@ -359,21 +426,35 @@ async function adminNonprofit(args: string[]): Promise<void> {
   switch (sub) {
     case 'list': {
       const rows = await apiRequest<any[]>(base, { path: '/admin/nonprofits', token });
-      if (!rows.length) { console.log('No nonprofits yet.'); return; }
+      if (!rows.length) {
+        console.log('No nonprofits yet.');
+        return;
+      }
       for (const n of rows) {
         const flags = `${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`;
-        console.log(`${n.id}  ${n.name}  <${n.contact_email}>  [${flags}]  ${n.identifier_count} ids · ${n.tasks_accepted}/${n.tasks_total} tasks`);
+        console.log(
+          `${n.id}  ${n.name}  <${n.contact_email}>  [${flags}]  ${n.identifier_count} ids · ${n.tasks_accepted}/${n.tasks_total} tasks`,
+        );
       }
       return;
     }
     case 'show': {
-      if (!rest[0]) { console.error('Usage: givework admin nonprofit show <id>'); process.exit(1); }
-      const n = await apiRequest<any>(base, { path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`, token });
+      if (!rest[0]) {
+        console.error('Usage: givework admin nonprofit show <id>');
+        process.exit(1);
+      }
+      const n = await apiRequest<any>(base, {
+        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`,
+        token,
+      });
       console.log(`${n.name}  <${n.contact_email}>${n.ein ? `  EIN ${n.ein}` : ''}`);
-      console.log(`  ${n.verified ? 'verified' : 'unverified'} · ${n.listed ? 'listed (public)' : 'unlisted'}`);
+      console.log(
+        `  ${n.verified ? 'verified' : 'unverified'} · ${n.listed ? 'listed (public)' : 'unlisted'}`,
+      );
       if (n.identifiers?.length) {
         console.log('  identifiers:');
-        for (const i of n.identifiers) console.log(`    ${i.id}  ${String(i.kind).padEnd(11)} ${i.value}`);
+        for (const i of n.identifiers)
+          console.log(`    ${i.id}  ${String(i.kind).padEnd(11)} ${i.value}`);
       } else {
         console.log('  identifiers: none (contact_email + its domain only)');
       }
@@ -382,41 +463,79 @@ async function adminNonprofit(args: string[]): Promise<void> {
     case 'create': {
       const name = arg(rest, '--name');
       const email = arg(rest, '--email');
-      if (!name || !email) { console.error('Usage: givework admin nonprofit create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]'); process.exit(1); }
+      if (!name || !email) {
+        console.error(
+          'Usage: givework admin nonprofit create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]',
+        );
+        process.exit(1);
+      }
       const body: any = { name, contact_email: email };
       const ein = arg(rest, '--ein');
       if (ein) body.ein = ein;
       if (has(rest, '--verified')) body.verified = true;
-      const n = await apiRequest<any>(base, { method: 'POST', path: '/admin/nonprofits', token, body });
+      const n = await apiRequest<any>(base, {
+        method: 'POST',
+        path: '/admin/nonprofits',
+        token,
+        body,
+      });
       console.log(`✓ created ${n.id} — ${n.name}`);
       // `listed` isn't on the create route; opt in with a follow-up update.
       if (has(rest, '--listed')) {
-        await apiRequest<any>(base, { method: 'POST', path: `/admin/nonprofits/${n.id}`, token, body: { listed: true } });
+        await apiRequest<any>(base, {
+          method: 'POST',
+          path: `/admin/nonprofits/${n.id}`,
+          token,
+          body: { listed: true },
+        });
         console.log('  listed = true');
       }
       return;
     }
     case 'set': {
-      if (!rest[0]) { console.error('Usage: givework admin nonprofit set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]'); process.exit(1); }
-      const body: any = {};
-      const name = arg(rest, '--name'); if (name) body.name = name;
-      const email = arg(rest, '--email'); if (email) body.contact_email = email;
-      const ein = arg(rest, '--ein'); if (ein) body.ein = ein;
-      const v = boolArg(rest, '--verified'); if (v !== undefined) body.verified = v;
-      const l = boolArg(rest, '--listed'); if (l !== undefined) body.listed = l;
-      if (Object.keys(body).length === 0) {
-        console.error('Nothing to set — provide at least one of --name/--email/--ein/--verified/--listed.');
+      if (!rest[0]) {
+        console.error(
+          'Usage: givework admin nonprofit set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]',
+        );
         process.exit(1);
       }
-      const n = await apiRequest<any>(base, { method: 'POST', path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`, token, body });
-      console.log(`✓ ${n.name}: ${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`);
+      const body: any = {};
+      const name = arg(rest, '--name');
+      if (name) body.name = name;
+      const email = arg(rest, '--email');
+      if (email) body.contact_email = email;
+      const ein = arg(rest, '--ein');
+      if (ein) body.ein = ein;
+      const v = boolArg(rest, '--verified');
+      if (v !== undefined) body.verified = v;
+      const l = boolArg(rest, '--listed');
+      if (l !== undefined) body.listed = l;
+      if (Object.keys(body).length === 0) {
+        console.error(
+          'Nothing to set — provide at least one of --name/--email/--ein/--verified/--listed.',
+        );
+        process.exit(1);
+      }
+      const n = await apiRequest<any>(base, {
+        method: 'POST',
+        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`,
+        token,
+        body,
+      });
+      console.log(
+        `✓ ${n.name}: ${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`,
+      );
       return;
     }
     case 'allow':
     case 'deny': {
-      if (!rest[0] || !rest[1]) { console.error(`Usage: givework admin nonprofit ${sub} <id> <email-or-domain>`); process.exit(1); }
+      if (!rest[0] || !rest[1]) {
+        console.error(`Usage: givework admin nonprofit ${sub} <id> <email-or-domain>`);
+        process.exit(1);
+      }
       const isEmail = rest[1].includes('@');
-      const kind = sub === 'allow' ? (isEmail ? 'email' : 'domain') : (isEmail ? 'email_deny' : 'domain_deny');
+      const kind =
+        sub === 'allow' ? (isEmail ? 'email' : 'domain') : isEmail ? 'email_deny' : 'domain_deny';
       const r = await apiRequest<any>(base, {
         method: 'POST',
         path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers`,
@@ -427,7 +546,10 @@ async function adminNonprofit(args: string[]): Promise<void> {
       return;
     }
     case 'rm-id': {
-      if (!rest[0] || !rest[1]) { console.error('Usage: givework admin nonprofit rm-id <nonprofitId> <identifierId>'); process.exit(1); }
+      if (!rest[0] || !rest[1]) {
+        console.error('Usage: givework admin nonprofit rm-id <nonprofitId> <identifierId>');
+        process.exit(1);
+      }
       await apiRequest<any>(base, {
         method: 'DELETE',
         path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers/${encodeURIComponent(rest[1])}`,

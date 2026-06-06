@@ -1,14 +1,13 @@
 import { Hono } from 'hono';
-import { OpError } from '../operations.js';
-import { requireAdmin, type Principal } from '../auth.js';
+import { type Principal, requireAdmin } from '../auth.js';
 import {
+  getIntake,
+  listIntake,
+  publishIntake,
   receiveIntake,
   redecompose,
-  uploadDraft,
-  publishIntake,
   rejectIntake,
-  listIntake,
-  getIntake,
+  uploadDraft,
 } from './operations.js';
 
 type Env = { Variables: { principal: Principal } };
@@ -52,7 +51,9 @@ adminIntakeRoutes.post('/intake/:id/decompose', (c) =>
 // real local model posts here).
 adminIntakeRoutes.post('/intake/:id/draft', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  return handle(() => uploadDraft(c.req.param('id'), body.proposed, String(body.triaged_by ?? 'local')))(c);
+  return handle(() =>
+    uploadDraft(c.req.param('id'), body.proposed, String(body.triaged_by ?? 'local')),
+  )(c);
 });
 
 adminIntakeRoutes.post('/intake/:id/publish', async (c) => {

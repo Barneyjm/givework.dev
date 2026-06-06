@@ -1,8 +1,8 @@
-import { acceptTask } from './operations.js';
-import { completedRequestForTask, getRequestResults } from './intake/operations.js';
 import { completionEmail, statusUrlFor } from './intake/email.js';
+import { completedRequestForTask, getRequestResults } from './intake/operations.js';
+import { type SendEmailBinding, sendEmail } from './mailer.js';
+import { acceptTask } from './operations.js';
 import { resultsToFile } from './results.js';
-import { sendEmail, type SendEmailBinding } from './mailer.js';
 
 /**
  * Accept a submitted task and, if that completes its whole intake request, email
