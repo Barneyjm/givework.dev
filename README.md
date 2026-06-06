@@ -54,6 +54,23 @@ The migration runner records applied files in a `schema_migrations` table and
 only runs what's pending, so re-running is a no-op. The test suite shares one
 database and truncates between tests — point it at a throwaway DB, never prod.
 
+## Lint & format
+
+[Biome](https://biomejs.dev/) handles both linting and formatting (one fast
+tool, config in `biome.json`):
+
+```bash
+npm run lint        # check (what CI runs)
+npm run lint:fix    # lint + format, applying safe fixes
+npm run format      # format only
+```
+
+`npm install` also points git at the repo's hooks (`core.hooksPath` via the
+`prepare` script), so a **pre-commit hook** lints staged files and blocks the
+commit on any issue — run `npm run lint:fix` and re-stage, or `git commit
+--no-verify` to bypass. See [CONTRIBUTING.md](CONTRIBUTING.md) for details,
+including the Claude Code auto-format hook.
+
 ## Auth model
 
 Stateless JWTs (HS256, signed with `JWT_SECRET`). Two roles:
