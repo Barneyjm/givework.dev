@@ -8,8 +8,8 @@ Guidance for Claude Code working in this repo. Keep it short; prefer the README,
 Givework — "agentic volunteering." Nonprofits email plain-language needs to
 `intake@givework.dev`; the platform decomposes them into budgeted tasks; volunteer
 developers' runners execute each via their own `claude -p` and submit results. A
-locked, append-only ledger guarantees no volunteer overspends. See the README for
-the full flow and architecture.
+row-level lock plus a database `CHECK` invariant guarantees no volunteer overspends.
+See the README for the full flow and architecture.
 
 TypeScript on Node, HTTP via Hono, Postgres via `pg`, MCP via the official SDK.
 Money is integer cents everywhere (`BIGINT`), never floats.

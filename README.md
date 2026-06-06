@@ -27,8 +27,8 @@ decomposes it into small, well-scoped tasks and publishes them to an open pool. 
 volunteer developer's **runner** checks out a task, executes it with their *own*
 Claude Code agent (`claude -p` — donated capacity from a subscription they already
 pay for), and submits the result, which is delivered back to the nonprofit. Every
-task carries a budget, and a locked append-only ledger guarantees no volunteer ever
-overspends.
+task carries a budget, and a row-level lock plus a database `CHECK` invariant
+guarantees no volunteer ever overspends.
 
 Nonprofits never see costs or model names. Volunteers never expose an API key —
 work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
@@ -56,7 +56,7 @@ work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
   spend per task.
 - **Fully accounted for.** The invariant `reserved_cents + spent_cents <= budget_cents`
   is enforced by a DB `CHECK` plus a `FOR UPDATE` row lock on every state change, and
-  the append-only `ledger` is the receipt of record — the sum of a dev's deltas always
+  the `ledger` tracks every change — the sum of a dev's deltas always
   equals their live `reserved + spent`.
 
 ## Architecture
