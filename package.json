@@ -24,9 +24,9 @@
     "intake-email": "node --import tsx scripts/intake-email.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src scripts test",
-    "lint:fix": "biome check --write src scripts test",
-    "format": "biome format --write src scripts test",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "format": "biome format --write",
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
