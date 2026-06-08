@@ -11,6 +11,30 @@
             "statusMessage": "Biome formatting edited file"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-status.sh\" PostToolUse 2>/dev/null || true",
+            "if": "Bash(git push*)",
+            "timeout": 20,
+            "statusMessage": "Checking PR/CI status"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-status.sh\" SessionStart 2>/dev/null || true",
+            "timeout": 20,
+            "statusMessage": "Checking PR/CI status"
+          }
+        ]
       }
     ]
   }
