@@ -212,31 +212,31 @@ interface ForwardableEmailMessage {
 
 const ONBOARDING_TEXT = `Hi there,
 
-I'm Nora — I help coordinate requests here at Givework. Thanks for reaching out!
+Thanks for reaching out to Givework!
 
 Givework connects nonprofits with developers who donate their AI agents to do
 real work — summaries, data cleanup, categorization, drafting, and more. It's
 free for nonprofits, and you never have to pick a model, write a prompt, or see
 a bill.
 
-We only take requests from organizations we've already set up, which is why
-your message didn't go through yet. To get started, just reply to this email
-with:
+This inbox (intake@givework.dev) only accepts requests from organizations we've
+already partnered with, which is why your message didn't go through yet. To get
+started, just reply to hello@givework.dev with:
 
   • your organization's name and what you do
   • the kind of work you're drowning in
 
-I'll get you set up, and from then on you can email your needs in plain language
-and we'll turn them into tasks for our volunteers.
+We'll get you set up, and from then on you can email your needs here in plain
+language and we'll turn them into tasks for our volunteers.
 
-— Nora
-Givework · https://givework.dev`;
+— The Givework team
+https://givework.dev`;
 
 /** A friendly confirmation body with a link to the request's status page. */
 function confirmationText(statusUrl: string): string {
   return `Hi there,
 
-Thanks — I've got your request and we're on it.
+Thanks — we've got your request and we're on it.
 
 Track its status any time here:
 ${statusUrl}
@@ -245,9 +245,9 @@ We'll break your request into the right pieces of work, our volunteers' AI agent
 do them, and the results come back to you by email. No cost, nothing to install,
 nothing for you to do in the meantime.
 
-Questions? Just reply to this email — it comes straight to me.
+Questions? Just reply to this email.
 
-— Nora`;
+— The Givework team`;
 }
 
 /** A friendly completion body, with the status link. */
@@ -260,10 +260,9 @@ See the final status here:
 ${statusUrl}
 
 Your results are on their way back to you. Thank you for working with Givework —
-whenever you need a hand again, just email intake@givework.dev and I'll take it
-from there.
+whenever you need a hand again, just email intake@givework.dev.
 
-— Nora`;
+— The Givework team`;
 }
 
 /** Prefix "Re:" without stacking it; fall back to a default subject. */

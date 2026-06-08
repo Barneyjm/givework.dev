@@ -218,7 +218,7 @@ describe('email content builders', () => {
     expect(e.to).toBe('hello@newcharity.org');
     expect(e.subject).toBe('Re: Can you help us?');
     expect(e.inReplyTo).toBe('<abc@mail>');
-    expect(e.body).toContain('just reply to this email'); // CTA
+    expect(e.body).toContain('hello@givework.dev'); // CTA
   });
 
   it('onboardingEmail: default subject for blank/missing original; no stacked Re:', () => {
