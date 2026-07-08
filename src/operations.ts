@@ -154,7 +154,7 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
           'This task requires a verified developer; ask an admin to verify your account',
         );
       }
-      if (dev.rows[0].agreement_version !== VOLUNTEER_AGREEMENT_VERSION) {
+      if (dev.rows[0]?.agreement_version !== VOLUNTEER_AGREEMENT_VERSION) {
         throw new OpError(
           403,
           'agreement_required',

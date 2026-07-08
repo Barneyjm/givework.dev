@@ -8,7 +8,12 @@ import {
   receiveIntake,
   uploadDraft,
 } from '../src/intake/operations.js';
-import { redactPII, restoreRedactions, screenForPHI } from '../src/intake/screen.js';
+import {
+  redactPII,
+  restoreRedactions,
+  restoreRedactionsDeep,
+  screenForPHI,
+} from '../src/intake/screen.js';
 import { acceptVolunteerAgreement, isDevTrusted, listOpenTasks } from '../src/operations.js';
 import { createDev, resetDb, setVerified } from './helpers.js';
 
@@ -68,6 +73,34 @@ describe('redactPII', () => {
     const result = { note: `wrote to ${text.slice('email '.length)}` };
     const restored = JSON.parse(restoreRedactions(JSON.stringify(result), entities));
     expect(restored.note).toBe('wrote to a@x.org');
+  });
+
+  it('treats null/undefined text as empty instead of crashing', () => {
+    expect(redactPII(null).text).toBe('');
+    expect(redactPII(undefined).entities).toEqual([]);
+  });
+
+  it('restores correctly past ten entities of one kind (prefix collision)', () => {
+    // [EMAIL_1] is a prefix of [EMAIL_10..12]; naive insertion-order replacement
+    // would corrupt the double-digit tokens.
+    const addrs = Array.from({ length: 12 }, (_, i) => `person${i}@x.org`);
+    const { text, entities } = redactPII(addrs.join(' '));
+    expect(text).toContain('[EMAIL_12]');
+    expect(restoreRedactions(text, entities)).toBe(addrs.join(' '));
+  });
+
+  it('restores deeply through nested results, including object keys', () => {
+    const { entities } = redactPII('a@x.org and 555-123-4567');
+    const value = {
+      rows: [{ '[EMAIL_1]': 'primary', note: 'call [PHONE_1]' }],
+      count: 2,
+      flag: true,
+    };
+    expect(restoreRedactionsDeep(value, entities)).toEqual({
+      rows: [{ 'a@x.org': 'primary', note: 'call 555-123-4567' }],
+      count: 2,
+      flag: true,
+    });
   });
 });
 

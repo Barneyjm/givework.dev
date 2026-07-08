@@ -66,8 +66,13 @@ const PATTERNS: { kind: PIIKind; re: RegExp; valid?: (m: string) => boolean }[] 
  * publish-time sweep over task specs) — the same value always gets the same
  * token, and new values continue the sequence. Idempotent: tokens themselves
  * match no pattern, so re-screening already-redacted text is a no-op.
+ * Null/undefined input is treated as empty — this runs on optional fields
+ * (subject) fed from parsed JSON, so it must not crash on absence.
  */
-export function redactPII(text: string, existing: RedactionEntity[] = []): RedactionResult {
+export function redactPII(
+  text: string | null | undefined,
+  existing: RedactionEntity[] = [],
+): RedactionResult {
   const entities = [...existing];
   const tokenByValue = new Map(entities.map((e) => [`${e.kind}:${e.value}`, e.token]));
   const counters = new Map<PIIKind, number>();
@@ -76,7 +81,7 @@ export function redactPII(text: string, existing: RedactionEntity[] = []): Redac
     counters.set(e.kind, Math.max(counters.get(e.kind) ?? 0, n));
   }
 
-  let out = text;
+  let out = text ?? '';
   for (const { kind, re, valid } of PATTERNS) {
     out = out.replace(re, (m) => {
       if (valid && !valid(m)) return m;
@@ -97,14 +102,35 @@ export function redactPII(text: string, existing: RedactionEntity[] = []): Redac
 
 /**
  * Put original values back — used only when delivering results to the data
- * owner (the nonprofit). Safe to run over serialized JSON: every redacted kind
- * is plain ASCII with no quotes, backslashes, or control characters, so a
- * string-level substitution cannot break JSON syntax.
+ * owner (the nonprofit). Longest tokens are replaced first: [EMAIL_1] is a
+ * prefix of [EMAIL_10], so replacing in insertion order would corrupt the
+ * ten-and-up tokens.
  */
 export function restoreRedactions(text: string, entities: RedactionEntity[]): string {
+  const byLength = [...entities].sort((a, b) => b.token.length - a.token.length);
   let out = text;
-  for (const e of entities) out = out.split(e.token).join(e.value);
+  for (const e of byLength) out = out.split(e.token).join(e.value);
   return out;
+}
+
+/**
+ * restoreRedactions over an arbitrary JSON value — walks strings wherever they
+ * appear (values AND keys, since a result may be keyed by a redacted value).
+ * Structure-aware on purpose: substituting inside a serialized JSON string
+ * would break the moment a future PII kind contains a quote or backslash.
+ */
+export function restoreRedactionsDeep(value: unknown, entities: RedactionEntity[]): unknown {
+  if (typeof value === 'string') return restoreRedactions(value, entities);
+  if (Array.isArray(value)) return value.map((v) => restoreRedactionsDeep(v, entities));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [
+        restoreRedactions(k, entities),
+        restoreRedactionsDeep(v, entities),
+      ]),
+    );
+  }
+  return value;
 }
 
 // Health-context terms. Deliberately specific ("treatment plan", not

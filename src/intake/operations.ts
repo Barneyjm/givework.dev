@@ -2,7 +2,13 @@ import { type Client, query, withTransaction } from '../db.js';
 import { OpError } from '../operations.js';
 import type { TaskResult } from '../results.js';
 import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
-import { type RedactionEntity, redactPII, restoreRedactions, screenForPHI } from './screen.js';
+import {
+  type RedactionEntity,
+  redactPII,
+  restoreRedactions,
+  restoreRedactionsDeep,
+  screenForPHI,
+} from './screen.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -315,10 +321,7 @@ export async function getRequestResults(requestId: string): Promise<TaskResult[]
   const entities = rows[0]?.redactions ?? [];
   return rows.map((r) => ({
     title: restoreRedactions(r.title, entities),
-    result:
-      entities.length > 0
-        ? JSON.parse(restoreRedactions(JSON.stringify(r.result), entities))
-        : r.result,
+    result: entities.length > 0 ? restoreRedactionsDeep(r.result, entities) : r.result,
   }));
 }
 
@@ -584,25 +587,27 @@ export async function uploadDraft(intakeId: string, proposed: unknown, triagedBy
   return withTransaction(async (client) => {
     // The off-Worker watcher decomposes from the raw body it fetched as admin,
     // so its draft can carry raw PII — redact it here, seeded with the stored
-    // map, before the draft lands where a later publish could ship it.
-    const r = await client.query<{ redactions: RedactionEntity[] | null }>(
-      `SELECT redactions FROM intake_requests WHERE id = $1 FOR UPDATE`,
+    // map, before the draft lands where a later publish could ship it. The
+    // FOR UPDATE lock holds the status steady, so checking it up front (404 for
+    // unknown, 409 for published — same semantics as the sibling operations)
+    // also lets us skip the redaction work on a request we'd refuse anyway.
+    const r = await client.query<{ status: string; redactions: RedactionEntity[] | null }>(
+      `SELECT status, redactions FROM intake_requests WHERE id = $1 FOR UPDATE`,
       [intakeId],
     );
-    if (!r.rows[0])
-      throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
-    const { tasks, entities } = redactTasks(normalized, r.rows[0].redactions ?? []);
-    const upd = await client.query(
+    const row = r.rows[0];
+    if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
+    if (row.status === 'published') {
+      throw new OpError(409, 'not_draftable', 'Request already published');
+    }
+    const { tasks, entities } = redactTasks(normalized, row.redactions ?? []);
+    await client.query(
       `UPDATE intake_requests
           SET proposed = $2, triaged_by = $3, status = 'decomposed', redactions = $4,
               updated_at = now()
-        WHERE id = $1 AND status <> 'published'
-        RETURNING id`,
+        WHERE id = $1`,
       [intakeId, JSON.stringify(tasks), tb, JSON.stringify(entities)],
     );
-    if (upd.rowCount === 0) {
-      throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
-    }
     return { intake_id: intakeId, status: 'decomposed', triaged_by: tb, count: tasks.length };
   });
 }

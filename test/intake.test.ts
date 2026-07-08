@@ -256,6 +256,12 @@ describe('uploadDraft (off-Worker decompose watcher)', () => {
     await publishIntake(r.intake_id, undefined, 'admin');
     await expect(uploadDraft(r.intake_id, draft, 'local')).rejects.toMatchObject({ status: 409 });
   });
+
+  it('404s an unknown request id (distinct from the published 409)', async () => {
+    await expect(
+      uploadDraft('00000000-0000-0000-0000-000000000000', draft, 'local'),
+    ).rejects.toMatchObject({ status: 404, code: 'intake_not_found' });
+  });
 });
 
 describe('extractTasks (tolerant JSON extraction)', () => {
