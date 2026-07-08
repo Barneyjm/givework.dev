@@ -234,8 +234,9 @@ adminRoutes.post('/budgets', async (c) => {
   })(c);
 });
 
-// Verify a dev — promotes a self-serve (GitHub) signup to handle internal/
-// sensitive tasks. Until this is called, the dev can only claim public work.
+// Verify a dev — the identity half of the trust gate. Non-public work also
+// requires the dev to accept the volunteer agreement (POST /devs/agreement);
+// until both hold, the dev can only claim public work.
 adminRoutes.post('/devs/:id/verify', (c) =>
   adminHandle(async () => {
     const { rows } = await query(

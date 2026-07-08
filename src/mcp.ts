@@ -5,6 +5,7 @@ import { verifyToken } from './auth.js';
 import {
   checkoutTask,
   getBudget,
+  isDevTrusted,
   listOpenTasks,
   OpError,
   releaseTask,
@@ -71,11 +72,14 @@ async function main() {
       },
     },
     (args) =>
-      run(() =>
+      run(async () =>
         listOpenTasks({
           maxCostCents: args.max_cost_cents,
           sensitivity: args.sensitivity,
           limit: args.limit,
+          // Same pinning as GET /tasks/open: an untrusted dev only sees public
+          // work (checkout enforces it regardless — this keeps the listing honest).
+          devTrusted: await isDevTrusted(devId),
         }),
       ),
   );

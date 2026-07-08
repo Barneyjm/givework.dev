@@ -1,3 +1,4 @@
+import { VOLUNTEER_AGREEMENT_VERSION } from './agreement.js';
 import { type Client, query, withTransaction } from './db.js';
 
 /**
@@ -133,13 +134,17 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
     }
 
     // Trust gate: non-public work must never reach an unverified (self-serve,
-    // unvetted) dev. This is the authoritative enforcement point — listOpenTasks
-    // also hides these, but checkout is what actually protects the payload. Read
-    // verified from the DB (not the token) so an admin's verification takes effect
-    // immediately, without waiting for the dev's 90-day token to roll over.
+    // unvetted) dev, nor one who hasn't accepted the current volunteer
+    // agreement (the signed data-handling commitment — see src/agreement.ts).
+    // Two independent preconditions: identity trust and the signed agreement.
+    // This is the authoritative enforcement point — listOpenTasks also hides
+    // these, but checkout is what actually protects the payload. Read both from
+    // the DB (not the token) so an admin's verification or a new agreement
+    // version takes effect immediately, without waiting for the dev's 90-day
+    // token to roll over.
     if (task.sensitivity !== 'public') {
-      const dev = await client.query<{ verified: boolean }>(
-        `SELECT verified FROM devs WHERE id = $1`,
+      const dev = await client.query<{ verified: boolean; agreement_version: string | null }>(
+        `SELECT verified, agreement_version FROM devs WHERE id = $1`,
         [devId],
       );
       if (!dev.rows[0]?.verified) {
@@ -147,6 +152,14 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
           403,
           'not_verified',
           'This task requires a verified developer; ask an admin to verify your account',
+        );
+      }
+      if (dev.rows[0].agreement_version !== VOLUNTEER_AGREEMENT_VERSION) {
+        throw new OpError(
+          403,
+          'agreement_required',
+          'This task requires accepting the current volunteer agreement ' +
+            '(docs/VOLUNTEER_AGREEMENT.md); run `givework agree`',
         );
       }
     }
@@ -543,7 +556,7 @@ export async function getBudget(devId: string): Promise<BudgetView | null> {
   };
 }
 
-/** Whether a dev is verified (trusted with non-public work). Missing dev -> false. */
+/** Whether a dev is verified (identity-trusted). Missing dev -> false. */
 export async function isDevVerified(devId: string): Promise<boolean> {
   const { rows } = await query<{ verified: boolean }>(`SELECT verified FROM devs WHERE id = $1`, [
     devId,
@@ -551,22 +564,79 @@ export async function isDevVerified(devId: string): Promise<boolean> {
   return rows[0]?.verified ?? false;
 }
 
+/**
+ * Whether a dev may see/claim non-public work: verified AND signed onto the
+ * CURRENT volunteer agreement. Mirrors the checkout trust gate — keep the two
+ * in sync. Missing dev -> false.
+ */
+export async function isDevTrusted(devId: string): Promise<boolean> {
+  const { rows } = await query<{ verified: boolean; agreement_version: string | null }>(
+    `SELECT verified, agreement_version FROM devs WHERE id = $1`,
+    [devId],
+  );
+  return (rows[0]?.verified ?? false) && rows[0]?.agreement_version === VOLUNTEER_AGREEMENT_VERSION;
+}
+
+/**
+ * Record a dev's acceptance of the volunteer agreement. The caller must echo
+ * the CURRENT version — proof the client showed the document it claims to have
+ * shown, and a clean 409 for a stale client after the agreement changes.
+ */
+export async function acceptVolunteerAgreement(devId: string, version: string) {
+  if (version !== VOLUNTEER_AGREEMENT_VERSION) {
+    throw new OpError(
+      CONFLICT,
+      'agreement_version_mismatch',
+      `Current agreement version is ${VOLUNTEER_AGREEMENT_VERSION} (got ${version})`,
+    );
+  }
+  const { rows } = await query<{
+    id: string;
+    agreement_version: string;
+    agreement_signed_at: string;
+  }>(
+    `UPDATE devs SET agreement_version = $2, agreement_signed_at = now()
+      WHERE id = $1 RETURNING id, agreement_version, agreement_signed_at`,
+    [devId, version],
+  );
+  if (!rows[0]) throw new OpError(404, 'dev_not_found', 'Unknown dev');
+  return rows[0];
+}
+
 export interface DevProfile {
   id: string;
   github_handle: string;
   verified: boolean;
+  agreement_version: string | null;
+  agreement_signed_at: string | null;
+  /** True when agreement_version is the current one — non-public work unlocked (if verified). */
+  agreement_current: boolean;
+  /** What the client should show/accept when agreement_current is false. */
+  current_agreement_version: string;
   budget: BudgetView | null;
 }
 
 /** A dev's own profile + current-period budget, for GET /devs/me. */
 export async function getDevProfile(devId: string): Promise<DevProfile | null> {
-  const { rows } = await query<{ id: string; github_handle: string; verified: boolean }>(
-    `SELECT id, github_handle, verified FROM devs WHERE id = $1`,
+  const { rows } = await query<{
+    id: string;
+    github_handle: string;
+    verified: boolean;
+    agreement_version: string | null;
+    agreement_signed_at: string | null;
+  }>(
+    `SELECT id, github_handle, verified, agreement_version, agreement_signed_at
+       FROM devs WHERE id = $1`,
     [devId],
   );
   const dev = rows[0];
   if (!dev) return null;
-  return { ...dev, budget: await getBudget(devId) };
+  return {
+    ...dev,
+    agreement_current: dev.agreement_version === VOLUNTEER_AGREEMENT_VERSION,
+    current_agreement_version: VOLUNTEER_AGREEMENT_VERSION,
+    budget: await getBudget(devId),
+  };
 }
 
 /**
@@ -606,13 +676,14 @@ export interface OpenTaskFilter {
   sensitivity?: string;
   limit?: number;
   /**
-   * Whether the requesting dev is verified. When false, the listing is forced to
-   * sensitivity='public' regardless of any requested filter — an unverified dev
+   * Whether the requesting dev is trusted with non-public work (verified AND
+   * current agreement — see isDevTrusted). When false, the listing is forced to
+   * sensitivity='public' regardless of any requested filter — an untrusted dev
    * must not even see non-public work (and couldn't check it out anyway; see the
    * trust gate in checkoutTask). Omitted (undefined) means "no restriction",
    * preserving the unfiltered behaviour for internal callers.
    */
-  devVerified?: boolean;
+  devTrusted?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -770,9 +841,9 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
     params.push(filter.maxCostCents);
     conditions.push(`max_cost_cents <= $${params.length}`);
   }
-  // An unverified dev is pinned to public tasks: ignore a broader requested
-  // sensitivity rather than honour it.
-  const effectiveSensitivity = filter.devVerified === false ? 'public' : filter.sensitivity;
+  // An untrusted dev (unverified, or agreement not signed/stale) is pinned to
+  // public tasks: ignore a broader requested sensitivity rather than honour it.
+  const effectiveSensitivity = filter.devTrusted === false ? 'public' : filter.sensitivity;
   if (effectiveSensitivity !== undefined) {
     params.push(effectiveSensitivity);
     conditions.push(`sensitivity = $${params.length}`);

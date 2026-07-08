@@ -59,7 +59,12 @@ adminIntakeRoutes.post('/intake/:id/draft', async (c) => {
 adminIntakeRoutes.post('/intake/:id/publish', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const who = c.get('principal').role === 'admin' ? 'admin' : 'unknown';
-  return handle(() => publishIntake(c.req.param('id'), body.tasks, who))(c);
+  return handle(() =>
+    publishIntake(c.req.param('id'), body.tasks, who, {
+      // The reviewed-a-PHI-flag override must be an explicit boolean, not truthy.
+      acknowledgePhi: body.acknowledge_phi === true,
+    }),
+  )(c);
 });
 
 adminIntakeRoutes.post('/intake/:id/reject', (c) =>

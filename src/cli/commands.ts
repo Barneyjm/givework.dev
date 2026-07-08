@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline';
+import { VOLUNTEER_AGREEMENT_URL } from '../agreement.js';
 import { ClaudeCliExecutor, type Executor, StubExecutor } from '../executor.js';
 import { getDecomposer } from '../intake/decompose.js';
 import { HttpBackend, runLoop } from '../run-loop.js';
@@ -40,9 +41,12 @@ export async function whoami(): Promise<void> {
   const token = requireToken();
   const me = await apiRequest<any>(apiUrl(), { path: '/devs/me', token });
   const b = me.budget;
-  console.log(
-    `@${me.github_handle}  (${me.verified ? 'verified' : 'unverified — public tasks only'})`,
-  );
+  const trust = !me.verified
+    ? 'unverified — public tasks only'
+    : me.agreement_current
+      ? 'verified'
+      : 'verified — volunteer agreement pending, run: givework agree';
+  console.log(`@${me.github_handle}  (${trust})`);
   if (b) {
     console.log(
       `budget: ${b.available_cents}¢ available of ${b.budget_cents}¢  (reserved ${b.reserved_cents}¢, spent ${b.spent_cents}¢)`,
@@ -50,6 +54,37 @@ export async function whoami(): Promise<void> {
   } else {
     console.log('budget: none set for this period — run:  givework budget set <cents>');
   }
+}
+
+/**
+ * Accept the volunteer agreement — the data-handling commitment that (with
+ * verification) unlocks internal/sensitive tasks. Deliberately interactive:
+ * acceptance is a human act, so it lives in the CLI, not the runner loop.
+ * `--yes` skips the prompt for devs who have already read the document.
+ */
+export async function agree(args: string[]): Promise<void> {
+  const token = requireToken();
+  const me = await apiRequest<any>(apiUrl(), { path: '/devs/me', token });
+  if (me.agreement_current) {
+    console.log(`Volunteer agreement ${me.agreement_version} already accepted — nothing to do.`);
+    return;
+  }
+  const version = me.current_agreement_version;
+  console.log(`Volunteer agreement ${version}:\n  ${VOLUNTEER_AGREEMENT_URL}\n`);
+  if (!has(args, '--yes')) {
+    const answer = await prompt('Read it, then type "agree" to accept: ');
+    if (answer.toLowerCase() !== 'agree') {
+      console.error('Not accepted.');
+      process.exit(1);
+    }
+  }
+  const r = await apiRequest<any>(apiUrl(), {
+    method: 'POST',
+    path: '/devs/agreement',
+    token,
+    body: { version },
+  });
+  console.log(`✓ accepted volunteer agreement ${r.agreement_version}`);
 }
 
 export async function budget(args: string[]): Promise<void> {

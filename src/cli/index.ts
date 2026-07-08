@@ -1,5 +1,16 @@
 import { ApiError } from './api.js';
-import { admin, budget, history, run, stats, status, tasks, version, whoami } from './commands.js';
+import {
+  admin,
+  agree,
+  budget,
+  history,
+  run,
+  stats,
+  status,
+  tasks,
+  version,
+  whoami,
+} from './commands.js';
 import { CONFIG_PATH } from './config.js';
 import { login } from './login.js';
 
@@ -14,6 +25,7 @@ Usage: givework <command> [options]
 Dev:
   login                      sign in with GitHub (opens your browser)
   whoami                     show your handle, verification, and budget
+  agree [--yes]              accept the volunteer agreement (unlocks non-public tasks)
   budget set <cents>         set how much of your own Claude credit to donate this month
   tasks                      browse the open task pool [--max <cents>] [--sensitivity <s>] [--limit <n>]
   run [--once|--watch]       do work: poll → checkout → claude -p → submit
@@ -25,7 +37,7 @@ Dev:
 
 Admin (needs an admin token — see 'admin login'):
   admin login                paste an admin token
-  admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
+  admin verify <devId>       mark a dev verified (with the signed agreement, unlocks sensitive tasks)
   admin review               list submitted work awaiting accept
   admin accept <taskId>      accept a submission (releases it to the nonprofit)
   admin decompose [--watch]  run a local model on stub-drafted intake, post drafts back
@@ -48,6 +60,8 @@ async function main(argv: string[]): Promise<void> {
       return login();
     case 'whoami':
       return whoami();
+    case 'agree':
+      return agree(args);
     case 'budget':
       return budget(args);
     case 'tasks':

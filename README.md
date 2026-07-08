@@ -357,6 +357,27 @@ Local models are slow under schema-constrained decoding, so the HTTP request
 timeout defaults to 240s (`DECOMPOSER_TIMEOUT_MS`). Task *execution* is separate
 — it runs on the volunteer's donated Claude credit.
 
+## Trust, privacy & legal
+
+The two hard questions — are volunteers liable for results, and does personal
+data end up on strangers' machines — are answered by structure and by code, not
+by promises. The short version:
+
+- **PII is redacted at intake** (`src/intake/screen.ts`): task specs carry
+  tokens like `[EMAIL_1]`, never values; the map stays on the control plane and
+  is restored only in results delivered back to the nonprofit.
+- **PHI is refused**: health-context requests are flagged at intake and can't be
+  published until an admin reviews and explicitly acknowledges the flag.
+- **Non-public tasks require a trusted volunteer**: verified GitHub identity
+  **and** a signed [volunteer agreement](docs/VOLUNTEER_AGREEMENT.md)
+  (`givework agree`), both checked in the DB at checkout time.
+- **Volunteers donate compute, not services**: no contact with nonprofits, and
+  everything is delivered by the platform, as-is, after review — see the
+  [nonprofit terms](docs/NONPROFIT_TERMS.md).
+
+The full position, with pointers to each enforcement site, is in
+[docs/TRUST.md](docs/TRUST.md).
+
 ## HTTP surface
 
 `Authorization: Bearer <token>` required on every route below.
@@ -368,12 +389,13 @@ A  POST /admin/intake          { from_email, subject?, body, attachments?, nonpr
 A  GET  /admin/intake?status=
 A  GET  /admin/intake/:id
 A  POST /admin/intake/:id/decompose
-A  POST /admin/intake/:id/publish   { tasks? }   -- defaults to the AI draft
+A  POST /admin/intake/:id/publish   { tasks?, acknowledge_phi? }   -- defaults to the AI draft
 A  POST /admin/intake/:id/reject
 
 —  GET  /transparency                                   -- public: listed orgs + task counts
 —  GET  /requests/:id                                    -- public: plain-language status (id = the share-link token)
 
+D  POST /devs/agreement      { version }             -- accept the volunteer agreement
 D  POST /checkout            { task_id }
 D  POST /submit              { task_id, result, actual_cost_cents, raw_usage }
 D  POST /release             { task_id }
@@ -409,7 +431,9 @@ src/server.ts             HTTP routes -> operations (dev_id from the token)
 src/admin.ts              admin-only seed routes
 src/mcp.ts                MCP server wrapping operations.ts (stdio)
 src/runner.ts             dev runner — MCP client loop (checkout -> work -> submit)
+src/agreement.ts          volunteer-agreement version — half of the non-public trust gate
 src/intake/decompose.ts   Decomposer interface + deterministic StubDecomposer
+src/intake/screen.ts      PII redaction + PHI flagging, applied before the decomposer
 src/intake/operations.ts  receive / decompose / publish + sender allowlist — HTTP-free
 src/intake/email.ts       Cloudflare Email Worker — inbound mail → allowlist → intake
 src/intake/routes.ts      admin intake routes (manual submit + review/publish)

@@ -1,6 +1,7 @@
 // Ensure a signing secret exists before anything in src/auth touches it.
 process.env.JWT_SECRET ??= 'test-secret-do-not-use-in-prod';
 
+import { VOLUNTEER_AGREEMENT_VERSION } from '../src/agreement.js';
 import { signAdminToken, signDevToken } from '../src/auth.js';
 import { pool } from '../src/db.js';
 
@@ -35,9 +36,24 @@ export async function createDev(handle: string): Promise<string> {
   return rows[0].id;
 }
 
-/** Mark a dev as verified (trusted with non-public work). */
-export async function setVerified(devId: string, verified = true): Promise<void> {
-  await pool.query(`UPDATE devs SET verified = $2 WHERE id = $1`, [devId, verified]);
+/**
+ * Mark a dev as verified and (by default) signed onto the current volunteer
+ * agreement — the two preconditions for non-public work. Pass
+ * `{ agreement: false }` to model a verified dev who hasn't signed yet.
+ */
+export async function setVerified(
+  devId: string,
+  verified = true,
+  opts: { agreement?: boolean } = {},
+): Promise<void> {
+  const agreed = opts.agreement ?? verified;
+  await pool.query(
+    `UPDATE devs SET verified = $2,
+            agreement_version = $3,
+            agreement_signed_at = CASE WHEN $3::text IS NULL THEN NULL ELSE now() END
+      WHERE id = $1`,
+    [devId, verified, agreed ? VOLUNTEER_AGREEMENT_VERSION : null],
+  );
 }
 
 export async function createNonprofit(name = 'Test NP'): Promise<string> {

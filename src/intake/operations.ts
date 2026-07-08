@@ -2,6 +2,7 @@ import { type Client, query, withTransaction } from '../db.js';
 import { OpError } from '../operations.js';
 import type { TaskResult } from '../results.js';
 import { getDecomposer, normalizeTask, type ProposedTask } from './decompose.js';
+import { type RedactionEntity, redactPII, restoreRedactions, screenForPHI } from './screen.js';
 
 // Intake pipeline operations, HTTP-free (same convention as src/operations.ts).
 // receive -> decompose (auto) -> [admin review] -> publish -> normal tasks.
@@ -124,6 +125,16 @@ export async function receiveIntake(input: ReceiveInput) {
     throw new OpError(400, 'bad_input', 'from_email and body are required');
   }
 
+  // Screen BEFORE anything downstream sees the text: the decomposer (and thus
+  // every task spec it drafts) only ever gets the redacted subject/body, so
+  // structured PII never reaches a volunteer machine. The raw body is still
+  // stored — it belongs to the nonprofit and is needed to re-map results on
+  // delivery — but it stays on the control plane. Likely PHI is flagged here
+  // and blocks publishing until an admin acknowledges it after review.
+  const subjectRed = redactPII(input.subject ?? '');
+  const bodyRed = redactPII(input.body, subjectRed.entities);
+  const phi = screenForPHI(`${input.subject ?? ''}\n${input.body}`);
+
   // Txn 1: persist the inbound request (status 'received'). Kept short — no model
   // call inside an open transaction. A caller-supplied nonprofit_id (the admin
   // manual path) that isn't a real UUID / known org would trip a foreign-key
@@ -136,9 +147,19 @@ export async function receiveIntake(input: ReceiveInput) {
       const nonprofitId =
         input.nonprofit_id ?? (await findOrCreateProvisionalNonprofit(client, input.from_email));
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
-         VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
-        [input.from_email, input.subject ?? null, input.body, nonprofitId],
+        `INSERT INTO intake_requests
+           (from_email, subject, raw_body, nonprofit_id, status,
+            phi_flagged, phi_signals, redactions)
+         VALUES ($1, $2, $3, $4, 'received', $5, $6, $7) RETURNING id`,
+        [
+          input.from_email,
+          input.subject ?? null,
+          input.body,
+          nonprofitId,
+          phi.flagged,
+          JSON.stringify(phi.signals),
+          JSON.stringify(bodyRed.entities),
+        ],
       );
       const intakeId = ins.rows[0].id;
       for (const a of input.attachments ?? []) {
@@ -162,11 +183,11 @@ export async function receiveIntake(input: ReceiveInput) {
   }
 
   // Decompose OUTSIDE any transaction — a real local model can take seconds, and
-  // we must not hold DB locks/connection while it runs.
+  // we must not hold DB locks/connection while it runs. Redacted text only.
   const { triagedBy, tasks: proposed } = await getDecomposer().decompose({
     from_email: input.from_email,
-    subject: input.subject,
-    body: input.body,
+    subject: input.subject !== undefined ? subjectRed.text : undefined,
+    body: bodyRed.text,
     attachment_count: input.attachments?.length ?? 0,
   });
 
@@ -179,7 +200,14 @@ export async function receiveIntake(input: ReceiveInput) {
     [intakeId, JSON.stringify(proposed), triagedBy],
   );
 
-  return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
+  return {
+    intake_id: intakeId,
+    nonprofit_id: nonprofitId,
+    status: 'decomposed',
+    proposed,
+    // Surface the screen verdict so the admin manual path sees it immediately.
+    phi_flagged: phi.flagged,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,13 +297,29 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
  * the access check (token + completeness); see getRequestResultsForToken.
  */
 export async function getRequestResults(requestId: string): Promise<TaskResult[]> {
-  const { rows } = await query<{ title: string; result: unknown }>(
-    `SELECT title, result FROM tasks
-      WHERE intake_request_id = $1 AND result IS NOT NULL
-      ORDER BY created_at ASC`,
+  const { rows } = await query<{
+    title: string;
+    result: unknown;
+    redactions: RedactionEntity[] | null;
+  }>(
+    `SELECT t.title, t.result, r.redactions FROM tasks t
+      JOIN intake_requests r ON r.id = t.intake_request_id
+      WHERE t.intake_request_id = $1 AND t.result IS NOT NULL
+      ORDER BY t.created_at ASC`,
     [requestId],
   );
-  return rows.map((r) => ({ title: r.title, result: r.result }));
+  // Deliverables go to the data owner (the nonprofit), so restore the values
+  // that were tokenized at intake — a result full of [EMAIL_1] placeholders is
+  // not usable. This is the ONLY place the map is re-applied; volunteers and
+  // task specs only ever see tokens.
+  const entities = rows[0]?.redactions ?? [];
+  return rows.map((r) => ({
+    title: restoreRedactions(r.title, entities),
+    result:
+      entities.length > 0
+        ? JSON.parse(restoreRedactions(JSON.stringify(r.result), entities))
+        : r.result,
+  }));
 }
 
 /**
@@ -332,7 +376,11 @@ export async function redecompose(intakeId: string) {
     subject: string | null;
     raw_body: string;
     status: string;
-  }>(`SELECT from_email, subject, raw_body, status FROM intake_requests WHERE id = $1`, [intakeId]);
+    redactions: RedactionEntity[] | null;
+  }>(
+    `SELECT from_email, subject, raw_body, status, redactions FROM intake_requests WHERE id = $1`,
+    [intakeId],
+  );
   const row = r.rows[0];
   if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
   if (row.status === 'published') {
@@ -343,19 +391,25 @@ export async function redecompose(intakeId: string) {
     [intakeId],
   );
 
-  // Model call outside any transaction.
+  // Re-redact from the raw text, seeded with the stored map so tokens stay
+  // stable across passes (a pre-007 row has no map — seed with []).
+  const subjectRed = redactPII(row.subject ?? '', row.redactions ?? []);
+  const bodyRed = redactPII(row.raw_body, subjectRed.entities);
+
+  // Model call outside any transaction. Redacted text only.
   const { triagedBy, tasks: proposed } = await getDecomposer().decompose({
     from_email: row.from_email,
-    subject: row.subject ?? undefined,
-    body: row.raw_body,
+    subject: row.subject !== null ? subjectRed.text : undefined,
+    body: bodyRed.text,
     attachment_count: Number(att.rows[0].n),
   });
 
   // Guard on status so we don't clobber a request that got published mid-call.
   const upd = await query(
-    `UPDATE intake_requests SET proposed = $2, status = 'decomposed', triaged_by = $3, updated_at = now()
+    `UPDATE intake_requests SET proposed = $2, status = 'decomposed', triaged_by = $3,
+            redactions = $4, updated_at = now()
       WHERE id = $1 AND status <> 'published' RETURNING id`,
-    [intakeId, JSON.stringify(proposed), triagedBy],
+    [intakeId, JSON.stringify(proposed), triagedBy, JSON.stringify(bodyRed.entities)],
   );
   if (upd.rowCount === 0) {
     throw new OpError(409, 'already_published', 'Request was published during decomposition');
@@ -364,13 +418,43 @@ export async function redecompose(intakeId: string) {
 }
 
 /**
+ * Redact residual structured PII from the text fields of drafted tasks, seeded
+ * with the intake's stored map so tokens stay consistent. The last line of
+ * defense before content can ship to a volunteer machine: prompts drafted from
+ * the redacted body are already clean, but an admin override or an off-Worker
+ * draft (uploadDraft) may reintroduce raw values. Returns the cleaned tasks
+ * plus the merged entity map for the caller to persist.
+ */
+function redactTasks(
+  tasks: ProposedTask[],
+  existing: RedactionEntity[],
+): { tasks: ProposedTask[]; entities: RedactionEntity[] } {
+  let entities = existing;
+  const cleaned = tasks.map((t) => {
+    const title = redactPII(t.title, entities);
+    const prompt = redactPII(t.spec.prompt, title.entities);
+    const acceptance = redactPII(t.spec.acceptance, prompt.entities);
+    entities = acceptance.entities;
+    return {
+      ...t,
+      title: title.text,
+      spec: { ...t.spec, prompt: prompt.text, acceptance: acceptance.text },
+    };
+  });
+  return { tasks: cleaned, entities };
+}
+
+/**
  * Publish a request: insert the proposed (or reviewer-edited) tasks as real,
  * open tasks linked back to the intake request. The reviewer is `authoredBy`.
+ * A PHI-flagged request refuses to publish until the reviewer passes
+ * `acknowledgePhi` — the explicit "I looked at this" for likely health data.
  */
 export async function publishIntake(
   intakeId: string,
   tasksOverride: ProposedTask[] | undefined,
   authoredBy: string,
+  opts: { acknowledgePhi?: boolean } = {},
 ) {
   // tasksOverride comes from the admin /publish body; a non-array (object or
   // string) would make the `for (const t of tasks)` below throw a 500 or iterate
@@ -383,23 +467,36 @@ export async function publishIntake(
       status: string;
       nonprofit_id: string;
       proposed: ProposedTask[] | null;
-    }>(`SELECT status, nonprofit_id, proposed FROM intake_requests WHERE id = $1 FOR UPDATE`, [
-      intakeId,
-    ]);
+      phi_flagged: boolean;
+      redactions: RedactionEntity[] | null;
+    }>(
+      `SELECT status, nonprofit_id, proposed, phi_flagged, redactions
+         FROM intake_requests WHERE id = $1 FOR UPDATE`,
+      [intakeId],
+    );
     const row = r.rows[0];
     if (!row) throw new OpError(404, 'intake_not_found', 'Unknown intake request');
     if (row.status === 'published') {
       throw new OpError(409, 'already_published', 'Request already published');
+    }
+    if (row.phi_flagged && !opts.acknowledgePhi) {
+      throw new OpError(
+        409,
+        'phi_flagged',
+        'This request looks like it contains health data (PHI), which Givework does not accept. ' +
+          'Review it; if the flag is wrong, publish again with acknowledge_phi: true, otherwise reject.',
+      );
     }
 
     // Normalize every task through the same path the decomposer uses, so an
     // admin-supplied override with missing/invalid fields can't reach the INSERT
     // and trip a NOT NULL / CHECK violation (500). normalizeTask clamps cents,
     // whitelists model/sensitivity, and guarantees max >= est > 0.
-    const tasks = (tasksOverride ?? row.proposed ?? []).map(normalizeTask);
-    if (tasks.length === 0) {
+    const normalized = (tasksOverride ?? row.proposed ?? []).map(normalizeTask);
+    if (normalized.length === 0) {
       throw new OpError(400, 'nothing_to_publish', 'No proposed tasks to publish');
     }
+    const { tasks, entities } = redactTasks(normalized, row.redactions ?? []);
 
     const created: string[] = [];
     for (const t of tasks) {
@@ -424,9 +521,12 @@ export async function publishIntake(
       created.push(ins.rows[0].id);
     }
 
+    // Persist the merged map — delivery-time restore must cover any values the
+    // publish-time sweep just tokenized.
     await client.query(
-      `UPDATE intake_requests SET status = 'published', updated_at = now() WHERE id = $1`,
-      [intakeId],
+      `UPDATE intake_requests SET status = 'published', redactions = $2, updated_at = now()
+        WHERE id = $1`,
+      [intakeId, JSON.stringify(entities)],
     );
 
     return { intake_id: intakeId, status: 'published', task_ids: created };
@@ -474,24 +574,37 @@ export async function uploadDraft(intakeId: string, proposed: unknown, triagedBy
   if (!Array.isArray(proposed)) {
     throw new OpError(400, 'bad_input', 'proposed must be an array');
   }
-  const tasks = (proposed as ProposedTask[])
+  const normalized = (proposed as ProposedTask[])
     .map(normalizeTask)
     .filter((t) => t.spec.prompt.length > 0);
-  if (tasks.length === 0) {
+  if (normalized.length === 0) {
     throw new OpError(400, 'nothing_to_draft', 'No usable proposed tasks');
   }
   const tb = ['stub', 'local', 'cli'].includes(triagedBy) ? triagedBy : 'local';
-  const upd = await query(
-    `UPDATE intake_requests
-        SET proposed = $2, triaged_by = $3, status = 'decomposed', updated_at = now()
-      WHERE id = $1 AND status <> 'published'
-      RETURNING id`,
-    [intakeId, JSON.stringify(tasks), tb],
-  );
-  if (upd.rowCount === 0) {
-    throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
-  }
-  return { intake_id: intakeId, status: 'decomposed', triaged_by: tb, count: tasks.length };
+  return withTransaction(async (client) => {
+    // The off-Worker watcher decomposes from the raw body it fetched as admin,
+    // so its draft can carry raw PII — redact it here, seeded with the stored
+    // map, before the draft lands where a later publish could ship it.
+    const r = await client.query<{ redactions: RedactionEntity[] | null }>(
+      `SELECT redactions FROM intake_requests WHERE id = $1 FOR UPDATE`,
+      [intakeId],
+    );
+    if (!r.rows[0])
+      throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
+    const { tasks, entities } = redactTasks(normalized, r.rows[0].redactions ?? []);
+    const upd = await client.query(
+      `UPDATE intake_requests
+          SET proposed = $2, triaged_by = $3, status = 'decomposed', redactions = $4,
+              updated_at = now()
+        WHERE id = $1 AND status <> 'published'
+        RETURNING id`,
+      [intakeId, JSON.stringify(tasks), tb, JSON.stringify(entities)],
+    );
+    if (upd.rowCount === 0) {
+      throw new OpError(409, 'not_draftable', 'Unknown request, or already published');
+    }
+    return { intake_id: intakeId, status: 'decomposed', triaged_by: tb, count: tasks.length };
+  });
 }
 
 export async function getIntake(intakeId: string) {

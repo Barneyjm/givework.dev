@@ -12,6 +12,7 @@ import {
   expire,
   getBudget,
   getPublicTransparency,
+  isDevTrusted,
   isDevVerified,
   listOpenTasks,
   OpError,
@@ -204,8 +205,9 @@ app.get('/tasks/open', requireDev, async (c) => {
       maxCostCents: maxCost !== undefined ? Number(maxCost) : undefined,
       sensitivity: sensitivity ?? undefined,
       limit: limit !== undefined ? Number(limit) : undefined,
-      // Unverified devs are pinned to public tasks; authoritative DB read.
-      devVerified: await isDevVerified(dev),
+      // Untrusted devs (unverified, or volunteer agreement not signed) are
+      // pinned to public tasks; authoritative DB read.
+      devTrusted: await isDevTrusted(dev),
     }),
   )(c);
 });

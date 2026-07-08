@@ -1,6 +1,13 @@
 import { Hono } from 'hono';
 import { type Principal, requireDev } from './auth.js';
-import { getDevLedger, getDevProfile, getDevStats, OpError, setOwnBudget } from './operations.js';
+import {
+  acceptVolunteerAgreement,
+  getDevLedger,
+  getDevProfile,
+  getDevStats,
+  OpError,
+  setOwnBudget,
+} from './operations.js';
 
 // A dev's own self-serve surface. Every route is dev-token gated and acts only
 // on the caller: dev_id always comes from the token `sub`, never the body or
@@ -54,6 +61,19 @@ devRoutes.get('/me/ledger', (c) => {
 devRoutes.get('/me/stats', (c) => {
   const dev = c.get('principal').dev_id!;
   return handle(() => getDevStats(dev))(c);
+});
+
+// Accept the volunteer agreement (docs/VOLUNTEER_AGREEMENT.md). The body must
+// echo the current version — proof the client showed the document it claims —
+// and acceptance is recorded on the dev row. Together with `verified`, this is
+// what unlocks internal/sensitive tasks (see the trust gate in checkoutTask).
+devRoutes.post('/agreement', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const dev = c.get('principal').dev_id!;
+  return handle(() => {
+    if (!body.version) throw new OpError(400, 'bad_input', 'Missing field: version');
+    return acceptVolunteerAgreement(dev, String(body.version));
+  })(c);
 });
 
 // Self-set the current-period budget — how much of my own donated Claude credit

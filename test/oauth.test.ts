@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { VOLUNTEER_AGREEMENT_VERSION } from '../src/agreement.js';
 import { closePool, pool } from '../src/db.js';
 import { shouldAutoVerify } from '../src/oauth.js';
 import { app } from '../src/server.js';
@@ -266,11 +267,28 @@ describe('sensitivity trust gate', () => {
     expect(res.status).toBe(200);
   });
 
-  it('admin verify route flips the flag and unlocks sensitive work', async () => {
+  it('admin verify route flips the flag; the agreement then unlocks sensitive work', async () => {
     const admin = await mintAdminToken();
     const v = await req(`/admin/devs/${dev}/verify`, { method: 'POST', headers: bearer(admin) });
     expect(v.status).toBe(200);
     expect(((await v.json()) as any).verified).toBe(true);
+
+    // Verified alone is not enough — the volunteer agreement is the second,
+    // independent precondition (auto-verify must never skip it).
+    const gated = await req('/checkout', {
+      method: 'POST',
+      headers: bearer(tok),
+      body: JSON.stringify({ task_id: sensitiveTask }),
+    });
+    expect(gated.status).toBe(403);
+    expect(((await gated.json()) as any).error).toBe('agreement_required');
+
+    const agreed = await req('/devs/agreement', {
+      method: 'POST',
+      headers: bearer(tok),
+      body: JSON.stringify({ version: VOLUNTEER_AGREEMENT_VERSION }),
+    });
+    expect(agreed.status).toBe(200);
 
     const res = await req('/checkout', {
       method: 'POST',
