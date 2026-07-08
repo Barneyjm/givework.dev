@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Trust &amp; Privacy — Givework</title>
+<meta name="description" content="The two hard questions — who's accountable for the work, and where does your information go — answered plainly. Personal details are redacted before work leaves our systems, health data is refused, and every step is open source." />
+
+<link rel="canonical" href="https://givework.dev/trust" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Givework" />
+<meta property="og:url" content="https://givework.dev/trust" />
+<meta property="og:title" content="Trust &amp; Privacy — Givework" />
+<meta property="og:description" content="Who's accountable for the work, and where does your information go? Answered plainly — and enforced in open-source code, not promises." />
+<meta property="og:image" content="https://givework.dev/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Trust &amp; Privacy — Givework" />
+<meta name="twitter:description" content="Redaction before work ships, no health data ever, a person in every loop — enforced in open-source code." />
+<meta name="twitter:image" content="https://givework.dev/og.png" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<!-- Shared styles: chrome (base) + persona-page layout. Page-specific rules below. -->
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  /* Trust-only: the linked-documents cards. */
+  .docs-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 1rem; margin-top: 2rem; }
+  .doc { border: var(--line); background:#fff; padding: 1.3rem 1.4rem; display:block; text-decoration:none; color:inherit; }
+  .doc:hover { background:#fbf8f3; }
+  .doc h4 { margin:0 0 .35rem; font-size:1.02rem; text-transform:uppercase; letter-spacing:-.01em; font-weight:600; }
+  .doc p { margin:0; font-weight:300; font-size:.92rem; }
+  .doc .tag { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase; letter-spacing:.12em; color:#8a8378; display:block; margin-top:.8rem; }
+</style>
+</head>
+<body id="top">
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/>
+        <circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/>
+        <polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/nonprofits">For nonprofits</a>
+      <a class="navlink" href="/volunteers">For volunteers</a>
+      <a class="cta mono" href="mailto:hello@givework.dev?subject=Trust%20question">hello@givework.dev</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="subhero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">Trust &amp; privacy</span>
+        <h1>Built to be <span class="u">worth</span> trusting.</h1>
+        <p class="lede">Two hard questions come up in every serious conversation about Givework: who's accountable for the work, and where does a nonprofit's information actually go? Here are the plain answers — enforced in open-source code, not promises.</p>
+        <div class="actions">
+          <a class="btn btn--red" href="#data">Where your data goes &nbsp;→</a>
+          <a class="btn btn--ghost" href="https://github.com/Barneyjm/givework.dev">Read the code &nbsp;→</a>
+        </div>
+      </div>
+      <div class="art" aria-hidden="true">
+        <svg viewBox="0 0 320 240" preserveAspectRatio="xMidYMid meet">
+          <rect x="60" y="40" width="200" height="160" fill="none" stroke="#161310" stroke-width="3"/>
+          <circle cx="160" cy="120" r="52" fill="#f3c20a"/>
+          <rect x="132" y="106" width="56" height="42" fill="#21449c"/>
+          <polygon points="160,84 178,106 142,106" fill="#e1342b"/>
+          <line x1="0" y1="120" x2="60" y2="120" stroke="#161310" stroke-width="3"/>
+          <line x1="260" y1="120" x2="320" y2="120" stroke="#161310" stroke-width="3"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- STRIP -->
+  <div class="strip" aria-hidden="true">
+    <div class="run">
+      <span>Personal details redacted</span><b>◆</b>
+      <span>No health data, ever</span><b>◆</b>
+      <span>A person reviews everything</span><b>◆</b>
+      <span>Volunteers sign for it</span><b>◆</b>
+      <span>Open source, end to end</span><b>◆</b>
+      <span>Personal details redacted</span><b>◆</b>
+      <span>No health data, ever</span><b>◆</b>
+      <span>A person reviews everything</span><b>◆</b>
+      <span>Volunteers sign for it</span><b>◆</b>
+      <span>Open source, end to end</span><b>◆</b>
+    </div>
+  </div>
+
+  <!-- WHERE DATA GOES -->
+  <section class="pad" id="data">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Where your information goes</span>
+        <h3>Redacted first. Reviewed always.</h3>
+      </div>
+      <div class="steps-wrap">
+        <div class="step"><div class="n n--circle">01</div><div><h4>Your email arrives — from a sender we know</h4><p>Requests are only accepted from verified partner organizations, over authenticated email. Strangers can't feed work into the system, and attachments are never stored.</p></div></div>
+        <div class="step"><div class="n n--square">02</div><div><h4>Personal details are replaced before anything else sees them</h4><p>Email addresses, phone numbers, and ID or card numbers are swapped for placeholders like <span class="mono">[EMAIL_1]</span> the moment a request arrives. The key to those placeholders never leaves our systems.</p></div></div>
+        <div class="step"><div class="n n--tri">03</div><div><h4>A person reviews before any work starts</h4><p>Every request is checked by a human before it becomes tasks. Anything that looks like health data is flagged automatically and stopped — we don't accept medical information at all.</p></div></div>
+        <div class="step"><div class="n n--circle">04</div><div><h4>Only trusted volunteers, then back to you</h4><p>Sensitive work is limited to volunteers with a verified identity who have signed a data-handling agreement. When results come back, the real details are restored — visible only to you.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GUARANTEES -->
+  <section class="band">
+    <div class="wrap">
+      <span class="eyebrow">The guarantees</span>
+      <h3>Enforced in code, not in fine print.</h3>
+      <div class="band-grid">
+        <div class="item"><div class="k">Redaction at the front door</div><p>Structured personal details are tokenized before task text is drafted — volunteers only ever see placeholders. A second sweep runs before anything is published.</p></div>
+        <div class="item"><div class="k">No health data — a bright line</div><p>Givework isn't built for medical information, so we refuse it: requests that look like they contain health data are flagged and blocked until a person has reviewed them.</p></div>
+        <div class="item"><div class="k">A human gate on every request</div><p>No email becomes work without a person reviewing it, and results are delivered by us — never directly from a volunteer to you.</p></div>
+        <div class="item"><div class="k">Verified, signed volunteers</div><p>Non-public work requires a verified identity <em>and</em> a signed volunteer agreement. Both are checked at the moment a task is claimed, so revoking either takes effect instantly.</p></div>
+        <div class="item"><div class="k">Attachments aren't stored</div><p>Files sent to intake are noted but never saved to our systems — document contents can't leak from a place they never reached.</p></div>
+        <div class="item"><div class="k">Open source, end to end</div><p>Every mechanism on this page is public code you can read, from the redaction pass to the budget ledger. Don't take our word for any of it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ACCOUNTABILITY -->
+  <section class="pad">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Accountability</span>
+        <h3>Who stands behind the work.</h3>
+      </div>
+      <div class="steps-wrap">
+        <div class="step"><div class="n n--square">01</div><div><h4>Volunteers donate computing, not services</h4><p>A volunteer lends spare capacity from a subscription they already pay for — like donating processor time to science projects. They never talk to nonprofits, never see who a task is for, and owe no one a deliverable.</p></div></div>
+        <div class="step"><div class="n n--tri">02</div><div><h4>Givework is the counterparty</h4><p>We break the request into tasks, review the results, and deliver them under our own terms. If something's wrong, you talk to us — there is no volunteer to chase, and no volunteer on the hook.</p></div></div>
+        <div class="step"><div class="n n--circle">03</div><div><h4>You are always the final reviewer</h4><p>Everything you receive is a draft for a person on your side to check before use. We don't accept requests that call for regulated professional advice — legal, medical, or financial judgment stays with humans you choose.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HONESTY -->
+  <section class="pad" style="border-top: var(--line);">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">What we don't claim</span>
+        <h3>The honest edges.</h3>
+      </div>
+      <p class="callout">Volunteer machines really do run the work — that's the whole model — so we'll never pretend your text never touches one. That's exactly why details are redacted <b>before</b> tasks are drafted, why sensitive work needs a <b>signed agreement</b>, and why we ask you to send the <b>minimum</b> a task needs. Automatic redaction catches structured details reliably; it can't catch every name in free-flowing text — which is why a person reviews every request too, and why the truly sensitive stuff shouldn't be sent to anyone, including us.</p>
+    </div>
+  </section>
+
+  <!-- DOCUMENTS -->
+  <section class="pad" style="border-top: var(--line);">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">The paperwork</span>
+        <h3>Read it yourself.</h3>
+      </div>
+      <p style="max-width:52ch;font-weight:300;margin:0;">The commitments above are written down and versioned in the open — currently as working drafts undergoing legal review.</p>
+      <div class="docs-grid">
+        <a class="doc" href="https://github.com/Barneyjm/givework.dev/blob/main/docs/TRUST.md">
+          <h4>How it's enforced</h4>
+          <p>The engineering position: every guarantee on this page, with pointers to the exact code that enforces it.</p>
+          <span class="tag">docs/TRUST.md</span>
+        </a>
+        <a class="doc" href="https://github.com/Barneyjm/givework.dev/blob/main/docs/NONPROFIT_TERMS.md">
+          <h4>Nonprofit terms</h4>
+          <p>What we promise you, what outputs are (drafts), and what not to send us — in plain language.</p>
+          <span class="tag">docs/NONPROFIT_TERMS.md · draft</span>
+        </a>
+        <a class="doc" href="https://github.com/Barneyjm/givework.dev/blob/main/docs/VOLUNTEER_AGREEMENT.md">
+          <h4>Volunteer agreement</h4>
+          <p>What every volunteer signs before sensitive work unlocks: use data only for the task, keep nothing, report anything.</p>
+          <span class="tag">docs/VOLUNTEER_AGREEMENT.md · draft</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing">
+    <div class="wrap">
+      <span class="eyebrow">Still have questions?</span>
+      <h3>Ask us the hard ones.</h3>
+      <div class="actions">
+        <a class="btn btn--red" href="mailto:hello@givework.dev?subject=Trust%20question">Email hello@givework.dev &nbsp;→</a>
+        <a class="btn btn--ghost" href="/">Back to home &nbsp;→</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Built for nonprofits · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

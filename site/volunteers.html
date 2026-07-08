@@ -66,6 +66,7 @@
     <nav>
       <a class="navlink" href="/">Home</a>
       <a class="navlink" href="/nonprofits">For nonprofits</a>
+      <a class="navlink" href="/trust">Trust &amp; privacy</a>
       <a class="navlink" href="#how">How it works</a>
       <a class="cta mono" href="https://api.givework.dev/auth/github/login">Become a volunteer</a>
     </nav>
@@ -171,7 +172,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <span class="eyebrow">Verification</span>
         <h3>Signing in is the trust step.</h3>
       </div>
-      <p class="callout">Completing <b>GitHub sign-in is the verification</b> — no separate application. You can pick up <b>public</b> tasks right away. Work flagged as internal or sensitive unlocks once your account clears a light bar (account age and a real public footprint), or an admin verifies you by hand. A real account is spoofable but accountable — it keeps a human behind every contribution.</p>
+      <p class="callout">Completing <b>GitHub sign-in is the verification</b> — no separate application. You can pick up <b>public</b> tasks right away. Work flagged as internal or sensitive unlocks with two things: your account clears a light bar (account age and a real public footprint, or an admin verifies you by hand), and you accept the <b>volunteer agreement</b> — a short, plain-language commitment on how you handle task data (<span class="mono">givework agree</span>). A real account is spoofable but accountable — it keeps a human behind every contribution.</p>
     </div>
   </section>
 
@@ -187,6 +188,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <div class="qa"><h4>Is this against the rules?</h4><p>No. It's your own <span class="mono">claude -p</span> usage, run under your own individual, logged-in session — never a shared or pooled key. The work is personal, not shared production automation.</p></div>
       <div class="qa"><h4>How is the cost measured?</h4><p>From the CLI's own metering at submit time — actual cost replaces the reservation, and it's tracked. You see real numbers, not estimates.</p></div>
       <div class="qa"><h4>Can I stop or change my budget?</h4><p>Anytime. Run <span class="mono">budget set</span> with a new number, release a task back to the pool, or stop the runner. Nothing keeps running without you.</p></div>
+      <div class="qa"><h4>What am I agreeing to with sensitive work?</h4><p>A short, readable <a href="https://github.com/Barneyjm/givework.dev/blob/main/docs/VOLUNTEER_AGREEMENT.md" style="text-decoration:none;border-bottom:2px solid var(--blue);">volunteer agreement</a>: use task data only for the task, don't keep or share it, report anything that goes wrong. Personal details are redacted before a task ever reaches you, so mostly you're agreeing to be sensible. Accept it once with <span class="mono">givework agree</span> — details on the <a href="/trust" style="text-decoration:none;border-bottom:2px solid var(--blue);">trust &amp; privacy page</a>.</p></div>
     </div>
   </section>
 
