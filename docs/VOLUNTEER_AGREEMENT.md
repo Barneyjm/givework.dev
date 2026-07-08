@@ -31,9 +31,10 @@ sensitive). For every non-public task you check out, you agree to:
 - **Use the data only to complete that task.** No other use, ever.
 - **Not share it** with any person or service beyond the `claude -p` execution
   the runner performs.
-- **Not deliberately retain it.** Delete local artifacts of a task when it
-  completes, including Claude CLI session transcripts where practical
-  (`claude` keeps these under `~/.claude`).
+- **Not deliberately retain it.** The runner deletes each task's Claude CLI
+  session transcript automatically when the run finishes — don't disable or
+  circumvent that cleanup, and delete any other local artifacts of a task when
+  it completes.
 - **Report incidents.** If task data is exposed — a compromised machine, an
   accidental paste, anything — email hello@givework.dev promptly.
 

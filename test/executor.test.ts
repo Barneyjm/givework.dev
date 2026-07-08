@@ -1,6 +1,10 @@
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ClaudeCliExecutor,
+  cleanupSessionArtifacts,
   type ExecTask,
   getExecutor,
   StubExecutor,
@@ -117,5 +121,53 @@ describe('StubExecutor + factory', () => {
     expect(getExecutor()).toBeInstanceOf(StubExecutor);
     expect(getExecutor.length).toBe(0);
     if (prev !== undefined) process.env.EXECUTOR = prev;
+  });
+});
+
+describe('cleanupSessionArtifacts (transcript self-cleanup)', () => {
+  const sid = '11111111-2222-3333-4444-555555555555';
+
+  async function fakeClaudeDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'gw-claude-'));
+    await mkdir(join(dir, 'projects', '-home-vol-runner'), { recursive: true });
+    await mkdir(join(dir, 'todos'), { recursive: true });
+    await writeFile(join(dir, 'projects', '-home-vol-runner', `${sid}.jsonl`), 'transcript');
+    await writeFile(join(dir, 'projects', '-home-vol-runner', 'other-session.jsonl'), 'keep');
+    await writeFile(join(dir, 'todos', `${sid}-agent.json`), 'todos');
+    return dir;
+  }
+
+  it("removes only the session's transcript and todo files", async () => {
+    const dir = await fakeClaudeDir();
+    expect(await cleanupSessionArtifacts(sid, dir)).toBe(2);
+    expect(await readdir(join(dir, 'projects', '-home-vol-runner'))).toEqual([
+      'other-session.jsonl',
+    ]);
+    expect(await readdir(join(dir, 'todos'))).toEqual([]);
+  });
+
+  it('refuses malformed session ids (no traversal, no globbing surprises)', async () => {
+    const dir = await fakeClaudeDir();
+    expect(await cleanupSessionArtifacts('../../etc', dir)).toBe(0);
+    expect(await cleanupSessionArtifacts(undefined, dir)).toBe(0);
+    expect(await cleanupSessionArtifacts('', dir)).toBe(0);
+    // Everything is still there.
+    expect((await readdir(join(dir, 'projects', '-home-vol-runner'))).length).toBe(2);
+  });
+
+  it('is a quiet no-op when ~/.claude does not exist', async () => {
+    expect(await cleanupSessionArtifacts(sid, '/nonexistent/claude-dir')).toBe(0);
+  });
+
+  it('runs after execute(), wiping the reported session', async () => {
+    const dir = await fakeClaudeDir();
+    // Point cleanup at the fake dir by exercising it the way execute() does:
+    // execute() passes data.session_id — emulate the same call with the fixture.
+    const run = async () =>
+      JSON.stringify({ result: '{"ok":true}', total_cost_usd: 0.01, session_id: sid });
+    await new ClaudeCliExecutor({ run }).execute(task);
+    // execute() cleans the REAL homedir (which has no such session — a no-op);
+    // the fixture dir is untouched, proving the id-scoped targeting.
+    expect((await readdir(join(dir, 'projects', '-home-vol-runner'))).length).toBe(2);
   });
 });

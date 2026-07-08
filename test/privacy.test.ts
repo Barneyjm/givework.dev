@@ -246,6 +246,53 @@ describe('intake screening', () => {
   });
 });
 
+describe('auto-publish fast track', () => {
+  async function org(opts: { auto?: boolean; verified?: boolean } = {}) {
+    const { rows } = await pool.query(
+      `INSERT INTO nonprofits (name, contact_email, verified, auto_publish)
+       VALUES ('Fast NP', 'fast@org.org', $1, $2) RETURNING id`,
+      [opts.verified ?? true, opts.auto ?? true],
+    );
+    return rows[0].id as string;
+  }
+
+  it('publishes a clean request from a fast-tracked org with no manual step', async () => {
+    const np = await org();
+    const r: any = await receiveIntake({
+      from_email: 'fast@org.org',
+      body: 'Draft one welcome letter for new volunteers.',
+      nonprofit_id: np,
+    });
+    expect(r.status).toBe('published');
+    expect(r.task_ids.length).toBeGreaterThan(0);
+    const { rows } = await pool.query(`SELECT status, authored_by FROM tasks WHERE id = $1`, [
+      r.task_ids[0],
+    ]);
+    expect(rows[0]).toMatchObject({ status: 'open', authored_by: 'auto' });
+  });
+
+  it('still stops a PHI-flagged request for human review', async () => {
+    const np = await org();
+    const r: any = await receiveIntake({
+      from_email: 'fast@org.org',
+      body: 'Summarize 30 patient records including diagnosis details.',
+      nonprofit_id: np,
+    });
+    expect(r.status).toBe('decomposed');
+    expect(r.phi_flagged).toBe(true);
+  });
+
+  it('ignores auto_publish on an unverified org', async () => {
+    const np = await org({ verified: false });
+    const r: any = await receiveIntake({
+      from_email: 'fast@org.org',
+      body: 'Draft one welcome letter.',
+      nonprofit_id: np,
+    });
+    expect(r.status).toBe('decomposed');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // volunteer agreement — the second half of the trust gate
 // ---------------------------------------------------------------------------

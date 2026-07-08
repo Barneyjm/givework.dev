@@ -17,7 +17,7 @@
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Trust &amp; Privacy — Givework" />
-<meta name="twitter:description" content="Redaction before work ships, no health data ever, a person in every loop — enforced in open-source code." />
+<meta name="twitter:description" content="Redaction before work ships, no health data ever, a person where it counts — enforced in open-source code." />
 <meta name="twitter:image" content="https://givework.dev/og.png" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
@@ -77,13 +77,14 @@
         </div>
       </div>
       <div class="art" aria-hidden="true">
+        <!-- The brand shapes drawn as a checkmark: circle starts the stroke,
+             square sits at the pivot, triangle crowns the tip. -->
         <svg viewBox="0 0 320 240" preserveAspectRatio="xMidYMid meet">
-          <rect x="60" y="40" width="200" height="160" fill="none" stroke="#161310" stroke-width="3"/>
-          <circle cx="160" cy="120" r="52" fill="#f3c20a"/>
-          <rect x="132" y="106" width="56" height="42" fill="#21449c"/>
-          <polygon points="160,84 178,106 142,106" fill="#e1342b"/>
-          <line x1="0" y1="120" x2="60" y2="120" stroke="#161310" stroke-width="3"/>
-          <line x1="260" y1="120" x2="320" y2="120" stroke="#161310" stroke-width="3"/>
+          <line x1="78" y1="128" x2="140" y2="186" stroke="#161310" stroke-width="12"/>
+          <line x1="140" y1="186" x2="250" y2="64" stroke="#161310" stroke-width="12"/>
+          <circle cx="78" cy="128" r="24" fill="#e1342b"/>
+          <rect x="120" y="166" width="40" height="40" fill="#21449c"/>
+          <polygon points="250,36 274,80 226,80" fill="#f3c20a"/>
         </svg>
       </div>
     </div>
@@ -94,12 +95,12 @@
     <div class="run">
       <span>Personal details redacted</span><b>◆</b>
       <span>No health data, ever</span><b>◆</b>
-      <span>A person reviews everything</span><b>◆</b>
+      <span>Screens on every request</span><b>◆</b>
       <span>Volunteers sign for it</span><b>◆</b>
       <span>Open source, end to end</span><b>◆</b>
       <span>Personal details redacted</span><b>◆</b>
       <span>No health data, ever</span><b>◆</b>
-      <span>A person reviews everything</span><b>◆</b>
+      <span>Screens on every request</span><b>◆</b>
       <span>Volunteers sign for it</span><b>◆</b>
       <span>Open source, end to end</span><b>◆</b>
     </div>
@@ -110,12 +111,12 @@
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">Where your information goes</span>
-        <h3>Redacted first. Reviewed always.</h3>
+        <h3>Redacted first. Screened always.</h3>
       </div>
       <div class="steps-wrap">
         <div class="step"><div class="n n--circle">01</div><div><h4>Your email arrives — from a sender we know</h4><p>Requests are only accepted from verified partner organizations, over authenticated email. Strangers can't feed work into the system, and attachments are never stored.</p></div></div>
         <div class="step"><div class="n n--square">02</div><div><h4>Personal details are replaced before anything else sees them</h4><p>Email addresses, phone numbers, and ID or card numbers are swapped for placeholders like <span class="mono">[EMAIL_1]</span> the moment a request arrives. The key to those placeholders never leaves our systems.</p></div></div>
-        <div class="step"><div class="n n--tri">03</div><div><h4>A person reviews before any work starts</h4><p>Every request is checked by a human before it becomes tasks. Anything that looks like health data is flagged automatically and stopped — we don't accept medical information at all.</p></div></div>
+        <div class="step"><div class="n n--tri">03</div><div><h4>Screened always, reviewed where it counts</h4><p>Anything that looks like health data is flagged automatically and stopped — we don't accept medical information at all. Requests from newer partners also wait for a person; established partners can be fast-tracked so the agents get straight to work.</p></div></div>
         <div class="step"><div class="n n--circle">04</div><div><h4>Only trusted volunteers, then back to you</h4><p>Sensitive work is limited to volunteers with a verified identity who have signed a data-handling agreement. When results come back, the real details are restored — visible only to you.</p></div></div>
       </div>
     </div>
@@ -129,7 +130,7 @@
       <div class="band-grid">
         <div class="item"><div class="k">Redaction at the front door</div><p>Structured personal details are tokenized before task text is drafted — volunteers only ever see placeholders. A second sweep runs before anything is published.</p></div>
         <div class="item"><div class="k">No health data — a bright line</div><p>Givework isn't built for medical information, so we refuse it: requests that look like they contain health data are flagged and blocked until a person has reviewed them.</p></div>
-        <div class="item"><div class="k">A human gate on every request</div><p>No email becomes work without a person reviewing it, and results are delivered by us — never directly from a volunteer to you.</p></div>
+        <div class="item"><div class="k">A human gate where it matters</div><p>New partners and anything the screens flag wait for a person — and results are delivered by us, never directly from a volunteer to you. Trusted partners can be fast-tracked, with every screen still running.</p></div>
         <div class="item"><div class="k">Verified, signed volunteers</div><p>Non-public work requires a verified identity <em>and</em> a signed volunteer agreement. Both are checked at the moment a task is claimed, so revoking either takes effect instantly.</p></div>
         <div class="item"><div class="k">Attachments aren't stored</div><p>Files sent to intake are noted but never saved to our systems — document contents can't leak from a place they never reached.</p></div>
         <div class="item"><div class="k">Open source, end to end</div><p>Every mechanism on this page is public code you can read, from the redaction pass to the budget ledger. Don't take our word for any of it.</p></div>
@@ -159,7 +160,7 @@
         <span class="eyebrow">What we don't claim</span>
         <h3>The honest edges.</h3>
       </div>
-      <p class="callout">Volunteer machines really do run the work — that's the whole model — so we'll never pretend your text never touches one. That's exactly why details are redacted <b>before</b> tasks are drafted, why sensitive work needs a <b>signed agreement</b>, and why we ask you to send the <b>minimum</b> a task needs. Automatic redaction catches structured details reliably; it can't catch every name in free-flowing text — which is why a person reviews every request too, and why the truly sensitive stuff shouldn't be sent to anyone, including us.</p>
+      <p class="callout">Volunteer machines really do run the work — that's the whole model — so we'll never pretend your text never touches one. That's exactly why details are redacted <b>before</b> tasks are drafted, why sensitive work needs a <b>signed agreement</b>, why the runner <b>deletes the AI session's local transcript</b> the moment a task finishes, and why we ask you to send the <b>minimum</b> a task needs. Automatic redaction catches structured details reliably; it can't catch every name in free-flowing text — which is why flagged or unfamiliar requests wait for a person, and why the truly sensitive stuff shouldn't be sent to anyone, including us.</p>
     </div>
   </section>
 

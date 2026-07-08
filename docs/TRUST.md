@@ -17,8 +17,9 @@ nonprofit email ─▶ intake (DMARC + allowlist)
                      ▼
                   decompose (sees redacted text only)
                      ▼
-                  human review ─▶ publish            PHI flag blocks publish
-                     ▼
+                  review gate ─▶ publish             PHI flag always blocks;
+                     ▼                               humans review the exceptions,
+                                                     fast-tracked partners skip the queue
                   task pool  ── trust gate ──▶ volunteer runner
                      │        (verified + signed agreement)
                      ▼
@@ -84,9 +85,13 @@ is policy, enforced at intake:
   off-Worker draft reintroduced. The token→value map lives only on the control
   plane and is re-applied exactly once: when results are delivered back to the
   data owner (`getRequestResults`).
-- **Sensitive by default.** Inbound intake defaults to `sensitivity='sensitive'`
-  (`src/intake/decompose.ts`); a human reviews every request before any task is
-  published.
+- **Sensitive by default, humans review the exceptions.** Inbound intake
+  defaults to `sensitivity='sensitive'` (`src/intake/decompose.ts`). Requests
+  wait for human review unless an admin has marked the org `auto_publish` — a
+  per-partner fast track for established organizations (migration 008), so the
+  agents do the routine work and people review what's new or flagged. The
+  automated screens run on every request either way, and a PHI flag stops the
+  fast track cold.
 - **The trust gate.** Non-public tasks can only be checked out by a volunteer
   who is both **verified** (a real, aged GitHub identity — `src/oauth.ts`) and
   **signed onto the current volunteer agreement** (`src/agreement.ts`). Both are
@@ -101,12 +106,15 @@ is policy, enforced at intake:
 
 ### The honest caveat
 
-The runner streams task → `claude -p` → submit and persists nothing itself, but
-the Claude CLI keeps local session transcripts, so "nothing ever touches a
-volunteer's disk" would be an overclaim and we don't make it. The guarantee is
-about **what** ships (redacted, minimized, human-reviewed) and **who** receives
-it (verified, agreement-bound volunteers) — not a clean-room claim about
-volunteer hardware. The long-term answer for the highest-sensitivity tier is
+The runner streams task → `claude -p` → submit and persists nothing itself. The
+Claude CLI does keep a local session transcript — so the executor deletes it the
+moment a run finishes, success or failure (`cleanupSessionArtifacts`,
+`src/executor.ts`; opt out with `GIVEWORK_KEEP_TRANSCRIPTS=1` for debugging).
+That cleanup is best-effort on hardware we don't control, so "nothing ever
+touches a volunteer's disk" would still be an overclaim and we don't make it.
+The guarantee is about **what** ships (redacted, minimized, screened) and
+**who** receives it (verified, agreement-bound volunteers) — not a clean-room
+claim about volunteer hardware. The long-term answer for the highest-sensitivity tier is
 platform-controlled ephemeral execution environments instead of volunteer
 machines; until then, that tier of data simply shouldn't be sent to Givework,
 and the nonprofit terms say so.

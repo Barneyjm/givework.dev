@@ -451,7 +451,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
     'givework admin nonprofit list\n' +
     '                        show <id>\n' +
     '                        create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]\n' +
-    '                        set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]\n' +
+    '                        set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false] [--auto-publish true|false]\n' +
     '                        allow <id> <email|domain>      (authorize a sender)\n' +
     '                        deny  <id> <email|domain>      (block a sender, overrides allow)\n' +
     '                        rm-id <id> <identifierId>      (remove an identifier; see `show`)';
@@ -466,7 +466,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
         return;
       }
       for (const n of rows) {
-        const flags = `${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`;
+        const flags = `${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}${n.auto_publish ? ', fast-tracked' : ''}`;
         console.log(
           `${n.id}  ${n.name}  <${n.contact_email}>  [${flags}]  ${n.identifier_count} ids · ${n.tasks_accepted}/${n.tasks_total} tasks`,
         );
@@ -484,7 +484,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
       });
       console.log(`${n.name}  <${n.contact_email}>${n.ein ? `  EIN ${n.ein}` : ''}`);
       console.log(
-        `  ${n.verified ? 'verified' : 'unverified'} · ${n.listed ? 'listed (public)' : 'unlisted'}`,
+        `  ${n.verified ? 'verified' : 'unverified'} · ${n.listed ? 'listed (public)' : 'unlisted'} · ${n.auto_publish ? 'fast-tracked intake' : 'reviewed intake'}`,
       );
       if (n.identifiers?.length) {
         console.log('  identifiers:');
@@ -530,7 +530,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
     case 'set': {
       if (!rest[0]) {
         console.error(
-          'Usage: givework admin nonprofit set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]',
+          'Usage: givework admin nonprofit set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false] [--auto-publish true|false]',
         );
         process.exit(1);
       }
@@ -545,9 +545,11 @@ async function adminNonprofit(args: string[]): Promise<void> {
       if (v !== undefined) body.verified = v;
       const l = boolArg(rest, '--listed');
       if (l !== undefined) body.listed = l;
+      const ap = boolArg(rest, '--auto-publish');
+      if (ap !== undefined) body.auto_publish = ap;
       if (Object.keys(body).length === 0) {
         console.error(
-          'Nothing to set — provide at least one of --name/--email/--ein/--verified/--listed.',
+          'Nothing to set — provide at least one of --name/--email/--ein/--verified/--listed/--auto-publish.',
         );
         process.exit(1);
       }
@@ -558,7 +560,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
         body,
       });
       console.log(
-        `✓ ${n.name}: ${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}`,
+        `✓ ${n.name}: ${n.verified ? 'verified' : 'unverified'}, ${n.listed ? 'listed' : 'unlisted'}, ${n.auto_publish ? 'fast-tracked' : 'reviewed'}`,
       );
       return;
     }

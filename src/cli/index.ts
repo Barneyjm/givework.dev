@@ -46,7 +46,7 @@ Admin (needs an admin token — see 'admin login'):
   admin task create --json '{…}'
   admin nonprofit list                       list orgs + their allowlist/task counts
   admin nonprofit show <id>                  one org + its allowlist identifiers
-  admin nonprofit set <id> [--verified true|false] [--listed true|false] [--name/--email/--ein]
+  admin nonprofit set <id> [--verified true|false] [--listed true|false] [--auto-publish true|false] [--name/--email/--ein]
   admin nonprofit allow|deny <id> <email|domain>   authorize / block a sender
   admin nonprofit rm-id <id> <identifierId>  remove an identifier
 

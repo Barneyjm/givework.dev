@@ -50,7 +50,9 @@ work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
   machine. ([details](#intake--decomposition))
 - **Decomposition** turns one fuzzy ask into right-sized tasks, each with a cost
   estimate, a max budget, and a sensitivity level — drafted by a small local model
-  (schema-constrained), reviewed by an admin before publishing.
+  (schema-constrained), reviewed by an admin before publishing. Established
+  partners can be marked `auto_publish` to skip the queue; PHI-flagged requests
+  always wait for a human.
 - **Execution is donated, not billed.** The runner shells out to `claude -p`, so the
   capacity is the volunteer's existing Claude Code credit. No API keys, no platform
   spend per task.
@@ -374,6 +376,8 @@ by promises. The short version:
 - **Volunteers donate compute, not services**: no contact with nonprofits, and
   everything is delivered by the platform, as-is, after review — see the
   [nonprofit terms](docs/NONPROFIT_TERMS.md).
+- **Runners clean up after themselves**: the executor deletes each task's local
+  `claude -p` session transcript the moment the run finishes.
 
 The full position, with pointers to each enforcement site, is in
 [docs/TRUST.md](docs/TRUST.md).
@@ -406,7 +410,7 @@ A  POST /admin/devs          { github_handle, email? }  -- returns the dev row +
 A  POST /admin/nonprofits    { name, ein?, contact_email, verified? }
 A  GET  /admin/nonprofits                               -- all orgs + identifier/task counts
 A  GET  /admin/nonprofits/:id                           -- one org + its allowlist identifiers
-A  POST /admin/nonprofits/:id { name?, ein?, contact_email?, verified?, listed? }  -- override fields
+A  POST /admin/nonprofits/:id { name?, ein?, contact_email?, verified?, listed?, auto_publish? }  -- override fields
 A  POST /admin/nonprofits/:id/identifiers   { kind, value }  -- kind: email|domain|email_deny|domain_deny
 A  DELETE /admin/nonprofits/:id/identifiers/:identifierId
 A  POST /admin/tasks         { nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity? }

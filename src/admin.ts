@@ -67,7 +67,7 @@ adminRoutes.post('/nonprofits', async (c) => {
 adminRoutes.get('/nonprofits', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
-      `SELECT n.id, n.name, n.contact_email, n.verified, n.listed,
+      `SELECT n.id, n.name, n.contact_email, n.verified, n.listed, n.auto_publish,
               (SELECT count(*)::int FROM nonprofit_identifiers i WHERE i.nonprofit_id = n.id) AS identifier_count,
               (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id) AS tasks_total,
               (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id AND t.status = 'accepted') AS tasks_accepted
@@ -82,7 +82,8 @@ adminRoutes.get('/nonprofits', (c) =>
 adminRoutes.get('/nonprofits/:id', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
-      `SELECT id, name, ein, contact_email, verified, listed FROM nonprofits WHERE id = $1`,
+      `SELECT id, name, ein, contact_email, verified, listed, auto_publish
+         FROM nonprofits WHERE id = $1`,
       [c.req.param('id')],
     );
     if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
@@ -96,8 +97,9 @@ adminRoutes.get('/nonprofits/:id', (c) =>
 );
 
 // Override any of a nonprofit's fields — verify/unverify, list/unlist publicly,
-// or fix its name/contact/EIN. Only provided fields change (COALESCE keeps the
-// rest); pass verified/listed explicitly to flip them.
+// fast-track its intake (auto_publish), or fix its name/contact/EIN. Only
+// provided fields change (COALESCE keeps the rest); pass the booleans
+// explicitly to flip them.
 adminRoutes.post('/nonprofits/:id', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
@@ -107,9 +109,10 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
           ein = COALESCE($3, ein),
           contact_email = COALESCE($4, contact_email),
           verified = COALESCE($5::boolean, verified),
-          listed = COALESCE($6::boolean, listed)
+          listed = COALESCE($6::boolean, listed),
+          auto_publish = COALESCE($7::boolean, auto_publish)
         WHERE id = $1
-        RETURNING id, name, ein, contact_email, verified, listed`,
+        RETURNING id, name, ein, contact_email, verified, listed, auto_publish`,
       [
         c.req.param('id'),
         body.name ?? null,
@@ -117,6 +120,7 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
         body.contact_email ?? null,
         body.verified ?? null,
         body.listed ?? null,
+        body.auto_publish ?? null,
       ],
     );
     if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');

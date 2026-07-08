@@ -206,6 +206,29 @@ export async function receiveIntake(input: ReceiveInput) {
     [intakeId, JSON.stringify(proposed), triagedBy],
   );
 
+  // Fast track: an admin-designated, verified partner's clean request goes
+  // straight to the open pool — the point of the platform is agents doing the
+  // work, so humans review the exceptions, not every email. The screens above
+  // ran regardless (PII already redacted), and a PHI flag always stops here:
+  // flagged requests wait for a person no matter what the org's flag says.
+  if (!phi.flagged && proposed.length > 0) {
+    const org = await query<{ fast: boolean }>(
+      `SELECT (auto_publish AND verified) AS fast FROM nonprofits WHERE id = $1`,
+      [nonprofitId],
+    );
+    if (org.rows[0]?.fast) {
+      const pub = await publishIntake(intakeId, undefined, 'auto');
+      return {
+        intake_id: intakeId,
+        nonprofit_id: nonprofitId,
+        status: pub.status,
+        proposed,
+        phi_flagged: false,
+        task_ids: pub.task_ids,
+      };
+    }
+  }
+
   return {
     intake_id: intakeId,
     nonprofit_id: nonprofitId,

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readdir, rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // Task execution — the actual donated work. The donation is each monthly
 // subscriber's `claude -p` (Claude Code CLI) capacity — the credit Anthropic
@@ -167,6 +170,61 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
 
 type CliRunner = (args: string[], input: string) => Promise<string>;
 
+// Only ever delete files named by a well-formed session id (the CLI emits
+// UUIDs). This is the guard that keeps a weird/hostile `session_id` value from
+// turning the cleanup into an arbitrary-file match.
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Delete the local artifacts `claude -p` leaves behind for one session — the
+ * transcript under ~/.claude/projects/<cwd-slug>/<session_id>.jsonl plus any
+ * per-session todo files. Task data must not outlive the task on a volunteer's
+ * disk: the runner streams task → claude → submit and stores nothing itself,
+ * and this closes the one gap the CLI opens. Best-effort by design (never
+ * throws, returns the number of files removed) — a failed delete must not fail
+ * the task. Exported for the runner's use and for tests (via `claudeDir`).
+ */
+export async function cleanupSessionArtifacts(
+  sessionId: unknown,
+  claudeDir = join(homedir(), '.claude'),
+): Promise<number> {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return 0;
+  let removed = 0;
+  const tryRm = async (path: string) => {
+    try {
+      await rm(path, { force: true, recursive: true });
+      removed++;
+    } catch {
+      /* best-effort */
+    }
+  };
+  // projects/<cwd-slug>/<session_id>.jsonl — the transcript itself.
+  try {
+    for (const slug of await readdir(join(claudeDir, 'projects'))) {
+      let files: string[] = [];
+      try {
+        files = await readdir(join(claudeDir, 'projects', slug));
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        if (f.includes(sessionId)) await tryRm(join(claudeDir, 'projects', slug, f));
+      }
+    }
+  } catch {
+    /* no projects dir — nothing to clean */
+  }
+  // todos/<session_id>*.json — per-session scratch state.
+  try {
+    for (const f of await readdir(join(claudeDir, 'todos'))) {
+      if (f.includes(sessionId)) await tryRm(join(claudeDir, 'todos', f));
+    }
+  } catch {
+    /* no todos dir */
+  }
+  return removed;
+}
+
 export class ClaudeCliExecutor implements Executor {
   private run: CliRunner;
   private timeoutMs: number;
@@ -202,39 +260,50 @@ export class ClaudeCliExecutor implements Executor {
     } catch {
       throw new Error(`claude -p returned non-JSON output: ${raw.slice(0, 200)}`);
     }
-    if (data.is_error) {
-      throw new Error(
-        `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`,
-      );
+
+    try {
+      if (data.is_error) {
+        throw new Error(
+          `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`,
+        );
+      }
+
+      // An empty result means the run produced no work. Throw so the runner RELEASES
+      // the task instead of submitting a blank deliverable (and charging for it).
+      const resultText = String(data.result ?? '').trim();
+      if (!resultText) {
+        throw new Error(
+          'claude -p returned an empty result — releasing rather than submitting blank output',
+        );
+      }
+      const result = coerceResult(resultText);
+
+      // Prefer the CLI's own cost figure; fall back to token metering if absent.
+      const cents =
+        typeof data.total_cost_usd === 'number'
+          ? Math.ceil(data.total_cost_usd * 100)
+          : usageToCents(model, data.usage ?? {});
+
+      return {
+        result,
+        actual_cost_cents: cents,
+        raw_usage: {
+          model,
+          total_cost_usd: data.total_cost_usd,
+          usage: data.usage,
+          duration_ms: data.duration_ms,
+          num_turns: data.num_turns,
+        },
+      };
+    } finally {
+      // Privacy: wipe the CLI's local session transcript whether the run
+      // succeeded or errored — task data must not outlive the task on the
+      // volunteer's machine. Opt out with GIVEWORK_KEEP_TRANSCRIPTS=1 (e.g. to
+      // debug a misbehaving run).
+      if (process.env.GIVEWORK_KEEP_TRANSCRIPTS !== '1') {
+        await cleanupSessionArtifacts(data?.session_id);
+      }
     }
-
-    // An empty result means the run produced no work. Throw so the runner RELEASES
-    // the task instead of submitting a blank deliverable (and charging for it).
-    const resultText = String(data.result ?? '').trim();
-    if (!resultText) {
-      throw new Error(
-        'claude -p returned an empty result — releasing rather than submitting blank output',
-      );
-    }
-    const result = coerceResult(resultText);
-
-    // Prefer the CLI's own cost figure; fall back to token metering if absent.
-    const cents =
-      typeof data.total_cost_usd === 'number'
-        ? Math.ceil(data.total_cost_usd * 100)
-        : usageToCents(model, data.usage ?? {});
-
-    return {
-      result,
-      actual_cost_cents: cents,
-      raw_usage: {
-        model,
-        total_cost_usd: data.total_cost_usd,
-        usage: data.usage,
-        duration_ms: data.duration_ms,
-        num_turns: data.num_turns,
-      },
-    };
   }
 }
 

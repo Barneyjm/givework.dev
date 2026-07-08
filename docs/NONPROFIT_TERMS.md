@@ -16,11 +16,12 @@ call for it.
 
 ## 2. Outputs are drafts — review before you rely on them
 
-Everything you receive is **AI-generated output, provided as-is**. A human on
-our side reviews requests before work starts and results before delivery, but we
-do not certify accuracy or fitness for any purpose. **You are responsible for
-having a person review outputs before using them** — especially anything
-public-facing or consequential.
+Everything you receive is **AI-generated output, provided as-is**. Every
+request is screened automatically; a person on our side reviews anything the
+screens flag and all requests from newer partners (established partners may be
+fast-tracked so work starts sooner). None of that certifies accuracy or fitness
+for any purpose. **You are responsible for having a person review outputs
+before using them** — especially anything public-facing or consequential.
 
 ## 3. Send only what the task needs
 
@@ -44,6 +45,8 @@ Treat an email to intake like handing work to an outside helper, because it is:
   back to you.
 - Non-public tasks are routed only to volunteers who are identity-verified and
   have signed a data-handling agreement.
+- Volunteer machines clean up after themselves: the runner deletes the AI
+  session's local transcript as soon as a task finishes.
 - Ask us to delete a request and its data at any time: hello@givework.dev.
 
 See [TRUST.md](TRUST.md) for the mechanisms behind each of these.
