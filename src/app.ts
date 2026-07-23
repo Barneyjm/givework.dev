@@ -21,6 +21,7 @@ import {
 } from './operations.js';
 import { resultsToCsv, resultsToJson } from './results.js';
 import { acceptTaskAndNotify } from './review.js';
+import { runAutoVerification } from './verify.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -182,19 +183,31 @@ app.post('/submit', requireDev, async (c) => {
         stateUpdate: body.state_update,
       },
     );
-    // Auto-accept: a verified volunteer's *terminal* submission flows straight to
-    // the recipient — no manual review gate. A progress/dead-end contribution
-    // returned the task to the pool (status 'open'), so there's nothing to accept.
-    // Non-fatal; the submit already succeeded.
+    // Verify a terminal (candidate_solution) submission. A progress/dead-end
+    // contribution returned the task to the pool (status 'open'), so there's
+    // nothing to verify. Non-fatal; the submit already succeeded.
+    let verification: { verdict: string; target_status: string | null } | null = null;
     try {
-      if (result.status === 'submitted' && (await isDevVerified(dev))) {
+      if (result.status === 'submitted') {
         const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-        await acceptTaskAndNotify(body.task_id, binding);
+        // Machine verification decides auto_rerun (and holds proof_checker /
+        // replication for Phase 6). human_review is NOT handled here — fall back
+        // to the trust auto-accept: a verified volunteer's work flows straight
+        // through, an unverified one waits for admin review.
+        const v = await runAutoVerification(body.task_id, binding);
+        if (v.handled) {
+          verification = {
+            verdict: v.verdict ?? 'pending',
+            target_status: v.target_status ?? null,
+          };
+        } else if (await isDevVerified(dev)) {
+          await acceptTaskAndNotify(body.task_id, binding);
+        }
       }
     } catch (err) {
-      console.error('auto-accept on submit failed', err);
+      console.error('verification on submit failed', err);
     }
-    return result;
+    return { ...result, verification };
   })(c);
 });
 

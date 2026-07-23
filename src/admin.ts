@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { requireAdmin, signDevToken } from './auth.js';
 import { query } from './db.js';
 import type { SendEmailBinding } from './mailer.js';
-import { OpError, rejectTask } from './operations.js';
-import { acceptTaskAndNotify } from './review.js';
+import { OpError } from './operations.js';
+import { recordHumanReview } from './verify.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
 // tokens so a nonprofit can review its own tasks without an admin credential —
@@ -74,10 +74,11 @@ adminRoutes.post('/targets', async (c) => {
     try {
       const { rows } = await query(
         `INSERT INTO targets
-           (name, kind, slug, statement_plain, statement_formal, source_ref, ein, contact_email, verified)
-         VALUES ($1, $2::target_kind, $3, $4, $5, $6, $7, $8, $9)
+           (name, kind, slug, statement_plain, statement_formal, source_ref, checker,
+            ein, contact_email, verified)
+         VALUES ($1, $2::target_kind, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id, name, kind, slug, status, statement_plain, statement_formal, source_ref,
-                   ein, contact_email, verified`,
+                   checker, ein, contact_email, verified`,
         [
           body.name,
           kind,
@@ -85,6 +86,7 @@ adminRoutes.post('/targets', async (c) => {
           body.statement_plain ?? null,
           body.statement_formal ?? null,
           body.source_ref ?? null,
+          body.checker ?? null,
           body.ein ?? null,
           body.contact_email ?? null,
           body.verified ?? false,
@@ -134,21 +136,31 @@ adminRoutes.get('/targets/:id', (c) =>
   })(c),
 );
 
-// Override any of a nonprofit's fields — verify/unverify, list/unlist publicly,
-// or fix its name/contact/EIN. Only provided fields change (COALESCE keeps the
-// rest); pass verified/listed explicitly to flip them.
+const TARGET_STATUSES = new Set(['open', 'partially_resolved', 'resolved', 'disproven', 'closed']);
+
+// Override any of a target's fields — verify/unverify, list/unlist publicly, set
+// its status (resolve/disprove/close a conjecture), or fix its name/contact/EIN.
+// Only provided fields change (COALESCE keeps the rest).
 adminRoutes.post('/targets/:id', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
+    if (body.status != null && !TARGET_STATUSES.has(body.status)) {
+      throw new OpError(
+        400,
+        'bad_input',
+        `status must be one of ${[...TARGET_STATUSES].join(', ')}`,
+      );
+    }
     const { rows } = await query(
       `UPDATE targets SET
           name = COALESCE($2, name),
           ein = COALESCE($3, ein),
           contact_email = COALESCE($4, contact_email),
           verified = COALESCE($5::boolean, verified),
-          listed = COALESCE($6::boolean, listed)
+          listed = COALESCE($6::boolean, listed),
+          status = COALESCE($7::target_status, status)
         WHERE id = $1
-        RETURNING id, name, ein, contact_email, verified, listed`,
+        RETURNING id, name, kind, slug, status, ein, contact_email, verified, listed`,
       [
         c.req.param('id'),
         body.name ?? null,
@@ -156,9 +168,10 @@ adminRoutes.post('/targets/:id', async (c) => {
         body.contact_email ?? null,
         body.verified ?? null,
         body.listed ?? null,
+        body.status ?? null,
       ],
     );
-    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
+    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown target');
     return rows[0];
   })(c);
 });
@@ -307,8 +320,11 @@ adminRoutes.get('/tasks', (c) =>
 adminRoutes.post('/tasks/:id/accept', (c) =>
   adminHandle(() => {
     const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-    return acceptTaskAndNotify(c.req.param('id'), binding);
+    // Human-review verdict: accept + notify + record the verification row.
+    return recordHumanReview(c.req.param('id'), 'passed', 'admin', binding);
   })(c),
 );
 
-adminRoutes.post('/tasks/:id/reject', (c) => adminHandle(() => rejectTask(c.req.param('id')))(c));
+adminRoutes.post('/tasks/:id/reject', (c) =>
+  adminHandle(() => recordHumanReview(c.req.param('id'), 'failed', 'admin'))(c),
+);

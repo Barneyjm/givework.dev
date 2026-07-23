@@ -22,7 +22,7 @@ if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
-    `TRUNCATE ledger, contributions, tasks, intake_attachments, intake_requests,
+    `TRUNCATE ledger, verifications, contributions, tasks, intake_attachments, intake_requests,
               dev_budgets, target_budgets, target_identifiers, targets, devs
               RESTART IDENTITY CASCADE`,
   );
@@ -72,11 +72,20 @@ export async function setBudget(devId: string, budgetCents: number): Promise<voi
 
 export async function createTask(
   targetId: string,
-  opts: { est?: number; max: number; sensitivity?: string; title?: string } = { max: 500 },
+  opts: {
+    est?: number;
+    max: number;
+    sensitivity?: string;
+    title?: string;
+    kind?: string;
+    verify_via?: string;
+  } = { max: 500 },
 ): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'))
+    `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity,
+                        kind, verify_via)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'),
+             COALESCE($8::task_kind,'exploration'), COALESCE($9::verification_method,'human_review'))
      RETURNING id`,
     [
       targetId,
@@ -86,6 +95,8 @@ export async function createTask(
       opts.max,
       'claude-opus-4-8',
       opts.sensitivity ?? null,
+      opts.kind ?? null,
+      opts.verify_via ?? null,
     ],
   );
   return rows[0].id;
