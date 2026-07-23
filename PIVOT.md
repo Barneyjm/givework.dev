@@ -363,8 +363,13 @@ proliferate files that never shipped separately).
 4. ✅ **Decomposition** — math attack-plan schema + prompts; reworked `StubDecomposer`.
 5. ✅ **Verification core** — `verify.ts` with `auto_rerun` + `human_review`, the
    `verifications` table, and the disproof status-flip.
-6. ⏳ **Sandbox + `proof_checker` + `replication`** — trusted sandbox, Lean/Coq
-   checking, K-of-N replication. (Next.)
+6. ✅ **Admin local checker** (scoped) — instead of a hosted sandbox, an admin runs
+   the real check on their own machine (compile the Lean proof, re-run the range,
+   evaluate the witness) and posts an authoritative verdict via
+   `POST /admin/tasks/:id/verify`. It records the task's actual method and flips
+   the target on a pass (disproven for a counterexample, resolved for a proof, or
+   an explicit `resolve` override). A hosted sandbox + automatic K-of-N replication
+   remain future work.
 7. ✅ **Public surface** — public `POST /submissions` (no allowlist/DMARC vetting),
    `GET /leaderboard`, `GET /conjectures/:slug`, and a `seed-conjectures` starter
    set. The email allowlist path is kept but dormant.

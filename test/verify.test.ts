@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closePool, pool } from '../src/db.js';
 import { checkoutTask, submitResult } from '../src/operations.js';
+import { app } from '../src/server.js';
 import { runAutoVerification } from '../src/verify.js';
-import { createDev, createTask, resetDb, setBudget } from './helpers.js';
+import { createDev, createTask, mintAdminToken, resetDb, setBudget } from './helpers.js';
 
 // Phase 5: verification core. auto_rerun re-evaluates a counterexample witness
 // with a built-in checker; a pass flips the target to 'disproven'. human_review
@@ -120,5 +121,106 @@ describe('auto_rerun verification', () => {
     expect(v.handled).toBe(false);
     expect(await taskStatus(task)).toBe('submitted'); // untouched — waits for review
     expect(await verificationsFor(task)).toHaveLength(0);
+  });
+});
+
+describe('admin local checker (POST /admin/tasks/:id/verify)', () => {
+  const req = (path: string, init?: RequestInit) =>
+    app.fetch(new Request(`http://test${path}`, init));
+  const verify = (tok: string, taskId: string, payload: unknown) =>
+    req(`/admin/tasks/${taskId}/verify`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+  async function submittedTask(opts: {
+    slug: string;
+    kind?: string;
+    verify_via: string;
+  }): Promise<{ target: string; task: string }> {
+    const target = await createConjecture({ slug: opts.slug });
+    const task = await createTask(target, {
+      max: 500,
+      kind: opts.kind,
+      verify_via: opts.verify_via,
+    });
+    await submitCandidate(task, { proof: 'see attached' });
+    return { target, task };
+  }
+
+  it('a passed proof_checker resolves the conjecture', async () => {
+    const tok = await mintAdminToken();
+    const { target, task } = await submittedTask({
+      slug: 'pc',
+      kind: 'formalization',
+      verify_via: 'proof_checker',
+    });
+
+    const res = await verify(tok, task, { verdict: 'passed', detail: { lake: 'build ok' } });
+    expect(res.status).toBe(200);
+    expect(await taskStatus(task)).toBe('accepted');
+    expect((await targetRow(target)).status).toBe('resolved');
+    expect((await verificationsFor(task))[0]).toMatchObject({
+      method: 'proof_checker',
+      verdict: 'passed',
+      verifier: 'admin',
+    });
+  });
+
+  it('a passed counterexample_search disproves the conjecture', async () => {
+    const tok = await mintAdminToken();
+    const { target, task } = await submittedTask({
+      slug: 'cx',
+      kind: 'counterexample_search',
+      verify_via: 'proof_checker',
+    });
+    await verify(tok, task, { verdict: 'passed' });
+    expect((await targetRow(target)).status).toBe('disproven');
+  });
+
+  it('a passed replication accepts the range work but does NOT resolve the conjecture', async () => {
+    const tok = await mintAdminToken();
+    const { target, task } = await submittedTask({
+      slug: 'rep',
+      kind: 'computational',
+      verify_via: 'replication',
+    });
+    await verify(tok, task, { verdict: 'passed' });
+    expect(await taskStatus(task)).toBe('accepted');
+    expect((await targetRow(target)).status).toBe('open'); // progress, not a solution
+  });
+
+  it('a failed verdict returns the task to the pool', async () => {
+    const tok = await mintAdminToken();
+    const { target, task } = await submittedTask({ slug: 'fail', verify_via: 'proof_checker' });
+    await verify(tok, task, { verdict: 'failed', detail: { reason: 'does not compile' } });
+    expect(await taskStatus(task)).toBe('open');
+    expect((await targetRow(target)).status).toBe('open');
+    expect((await verificationsFor(task))[0]).toMatchObject({ verdict: 'failed' });
+  });
+
+  it('an explicit resolve override settles a lemma the admin judges complete', async () => {
+    const tok = await mintAdminToken();
+    const { target, task } = await submittedTask({
+      slug: 'lemma',
+      kind: 'lemma',
+      verify_via: 'human_review',
+    });
+    // A lemma would not flip on its own; the admin forces resolution.
+    await verify(tok, task, { verdict: 'passed', resolve: 'resolved' });
+    expect((await targetRow(target)).status).toBe('resolved');
+  });
+
+  it('validates the verdict and requires an admin token', async () => {
+    const tok = await mintAdminToken();
+    const { task } = await submittedTask({ slug: 'bad', verify_via: 'proof_checker' });
+    expect((await verify(tok, task, { verdict: 'maybe' })).status).toBe(400);
+    const noAuth = await req(`/admin/tasks/${task}/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ verdict: 'passed' }),
+    });
+    expect(noAuth.status).toBe(401);
   });
 });

@@ -3,7 +3,7 @@ import { requireAdmin, signDevToken } from './auth.js';
 import { query } from './db.js';
 import type { SendEmailBinding } from './mailer.js';
 import { OpError } from './operations.js';
-import { recordHumanReview } from './verify.js';
+import { adminVerify, recordHumanReview } from './verify.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
 // tokens so a nonprofit can review its own tasks without an admin credential —
@@ -304,8 +304,8 @@ adminRoutes.get('/tasks', (c) =>
       throw new OpError(400, 'bad_input', `unknown status: ${status}`);
     }
     const { rows } = await query(
-      `SELECT t.id, t.title, t.status, t.actual_cost_cents, t.intake_request_id,
-              d.github_handle AS dev, t.result
+      `SELECT t.id, t.title, t.status, t.kind::text AS kind, t.verify_via::text AS verify_via,
+              t.actual_cost_cents, t.intake_request_id, d.github_handle AS dev, t.result
          FROM tasks t
          LEFT JOIN devs d ON d.id = t.assigned_dev_id
         WHERE ($1::text IS NULL OR t.status = $1::task_status)
@@ -316,6 +316,31 @@ adminRoutes.get('/tasks', (c) =>
     return rows;
   })(c),
 );
+
+const VERDICTS = new Set(['passed', 'failed', 'inconclusive']);
+
+// Admin-run local checker: the admin runs the real check locally (compile the
+// Lean proof, re-run the range, evaluate the witness) and posts an authoritative
+// verdict. Records the task's actual verify_via method and, on a pass, flips the
+// target when the kind implies a resolution — or when `resolve` is set explicitly.
+adminRoutes.post('/tasks/:id/verify', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return adminHandle(async () => {
+    const verdict = String(body.verdict ?? '');
+    if (!VERDICTS.has(verdict)) {
+      throw new OpError(400, 'bad_input', `verdict must be one of ${[...VERDICTS].join(', ')}`);
+    }
+    if (body.resolve != null && body.resolve !== 'resolved' && body.resolve !== 'disproven') {
+      throw new OpError(400, 'bad_input', 'resolve must be "resolved" or "disproven"');
+    }
+    const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+    return adminVerify(c.req.param('id'), verdict as 'passed' | 'failed' | 'inconclusive', {
+      detail: body.detail,
+      resolve: body.resolve,
+      binding,
+    });
+  })(c);
+});
 
 adminRoutes.post('/tasks/:id/accept', (c) =>
   adminHandle(() => {

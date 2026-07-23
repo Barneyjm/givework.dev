@@ -1,7 +1,7 @@
 import { query } from './db.js';
 import type { VerificationMethod } from './intake/decompose.js';
 import type { SendEmailBinding } from './mailer.js';
-import { rejectTask } from './operations.js';
+import { OpError, rejectTask } from './operations.js';
 import { acceptTaskAndNotify } from './review.js';
 
 // Verification core. Replaces the subjective accept/reject with a recorded
@@ -324,4 +324,83 @@ export async function recordHumanReview(
     verifier,
   });
   return { task_id: taskId, verdict, verification_id: id };
+}
+
+type Resolution = 'resolved' | 'disproven';
+
+/**
+ * The status flip a passing verification implies from the task's kind: a verified
+ * counterexample disproves; a checked proof resolves. Other kinds (a confirmed
+ * computational range, a lemma, exploration) advance the work but don't settle the
+ * whole conjecture, so they don't flip on their own — an admin can still force one
+ * via `resolve`.
+ */
+function resolutionForKind(kind: string): Resolution | null {
+  if (kind === 'counterexample_search') return 'disproven';
+  if (kind === 'formalization') return 'resolved';
+  return null;
+}
+
+/**
+ * Admin-run local checker (Phase 6, scoped): an admin runs the real check on their
+ * own machine — compile the Lean proof, re-run the search range, evaluate the
+ * witness — and posts an authoritative verdict. Unlike the lightweight
+ * accept/reject, this records the task's *actual* method and, on a pass, flips the
+ * target when the kind implies a resolution (or when the admin sets `resolve`
+ * explicitly). The admin standing in for the sandbox until Phase 6 proper.
+ */
+export async function adminVerify(
+  taskId: string,
+  verdict: 'passed' | 'failed' | 'inconclusive',
+  opts: {
+    verifier?: string;
+    detail?: unknown;
+    resolve?: Resolution;
+    binding?: SendEmailBinding;
+  } = {},
+): Promise<{
+  task_id: string;
+  method: VerificationMethod;
+  verdict: Verdict;
+  target_status: string | null;
+  verification_id: number;
+}> {
+  const { rows } = await query<{
+    status: string;
+    verify_via: VerificationMethod;
+    kind: string;
+    target_id: string | null;
+  }>(
+    `SELECT status, verify_via::text AS verify_via, kind::text AS kind, target_id
+       FROM tasks WHERE id = $1`,
+    [taskId],
+  );
+  const t = rows[0];
+  if (!t) throw new OpError(404, 'task_not_found', 'Unknown task');
+  if (t.status !== 'submitted') {
+    throw new OpError(409, 'not_submitted', 'Task is not awaiting verification');
+  }
+  const contributionId = await latestContributionId(taskId);
+
+  let target_status: string | null = null;
+  if (verdict === 'passed') {
+    await acceptTaskAndNotify(taskId, opts.binding);
+    const resolution = opts.resolve ?? resolutionForKind(t.kind);
+    if (resolution && t.target_id) {
+      target_status = await flipTargetStatus(t.target_id, resolution, contributionId);
+    }
+  } else if (verdict === 'failed') {
+    await rejectTask(taskId);
+  }
+  // 'inconclusive' records the attempt only, leaving the task submitted.
+  const id = await recordVerification({
+    taskId,
+    contributionId,
+    targetId: t.target_id,
+    method: t.verify_via,
+    verdict,
+    verifier: opts.verifier ?? 'admin',
+    detail: opts.detail,
+  });
+  return { task_id: taskId, method: t.verify_via, verdict, target_status, verification_id: id };
 }
