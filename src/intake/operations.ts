@@ -399,8 +399,9 @@ export async function publishIntake(
       const ins = await client.query<{ id: string }>(
         `INSERT INTO tasks
            (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity,
-            intake_request_id, authored_by)
-         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'), $8, $9)
+            kind, verify_via, intake_request_id, authored_by)
+         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'),
+                 $8::task_kind, $9::verification_method, $10, $11)
          RETURNING id`,
         [
           row.target_id,
@@ -410,6 +411,8 @@ export async function publishIntake(
           t.max_cost_cents,
           t.model,
           t.sensitivity ?? null,
+          t.kind,
+          t.verify_via,
           intakeId,
           authoredBy,
         ],

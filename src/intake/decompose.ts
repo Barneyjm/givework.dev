@@ -1,18 +1,61 @@
-// The decomposition step: turn a plain-language intake request into proposed,
-// right-sized, structured tasks. Swappable behind the `Decomposer` interface:
+// The decomposition step: turn a plain-language open problem into proposed,
+// right-sized, structured attack tasks. Swappable behind the `Decomposer`
+// interface:
 //   - StubDecomposer    — deterministic, no model, used by default + in tests.
 //   - LocalLLMDecomposer — a real LLM running locally and FREE (Ollama / any
 //     OpenAI-compatible endpoint), selected with DECOMPOSER=local.
 //
-// Decomposition runs on the *platform*, so it must be cheap — a small local
-// model. Task *execution* is separate: it runs on the volunteer's donated Claude
-// credit (see the runner's executeTask). So a task's `model` below is a Claude
-// model the runner will use, even though a local model chose it.
+// Each proposed task carries a `kind` (what sort of mathematical work) and a
+// `verify_via` (how a result is judged correct) — the correctness axis that
+// replaces the old PII-sensitivity axis. Decomposition runs on the *platform*, so
+// it must be cheap — a small local model. Task *execution* is separate: it runs on
+// the volunteer's donated Claude credit, so a task's `model` is a Claude model the
+// runner will use, even though a local model chose it.
 
 import { jsonrepair } from 'jsonrepair';
 
+/** What sort of mathematical work a task is (mirrors the DB `task_kind` enum). */
+export type TaskKind =
+  | 'computational'
+  | 'counterexample_search'
+  | 'formalization'
+  | 'lemma'
+  | 'exploration';
+export const TASK_KINDS: readonly TaskKind[] = [
+  'computational',
+  'counterexample_search',
+  'formalization',
+  'lemma',
+  'exploration',
+];
+
+/** How a task's result is judged correct (mirrors the DB `verification_method` enum). */
+export type VerificationMethod = 'auto_rerun' | 'proof_checker' | 'replication' | 'human_review';
+export const VERIFICATION_METHODS: readonly VerificationMethod[] = [
+  'auto_rerun',
+  'proof_checker',
+  'replication',
+  'human_review',
+];
+
+/** The verification method that fits a kind when the model doesn't specify one. */
+export function defaultVerifyFor(kind: TaskKind): VerificationMethod {
+  switch (kind) {
+    case 'counterexample_search':
+      return 'auto_rerun'; // re-evaluate the witness
+    case 'computational':
+      return 'replication'; // an independent volunteer re-runs the range
+    case 'formalization':
+      return 'proof_checker'; // the Lean/Coq compiler is the judge
+    default:
+      return 'human_review'; // lemma / exploration — the subjective fallback
+  }
+}
+
 export interface ProposedTask {
   title: string;
+  kind: TaskKind;
+  verify_via: VerificationMethod;
   spec: {
     prompt: string;
     input_refs: string[];
@@ -75,17 +118,21 @@ function detectQuantity(text: string): { count: number; noun: string } | null {
 }
 
 /**
- * Deterministic, rules-based decomposer. Pure function of its input.
- * - A quantity ("categorize 50 invoices") is split into batches of UNITS_PER_TASK.
- * - Otherwise the whole request becomes a single task.
- * - Sensitivity defaults to `sensitive` — the safe default for inbound intake,
- *   which routinely carries PII. A reviewer can downgrade before publishing.
+ * Deterministic, rules-based decomposer. Pure function of its input. All work is
+ * public mathematics, so every task is `sensitivity: 'public'`.
+ * - A numeric bound ("verify up to 50") splits into `computational` range-sweep
+ *   batches of UNITS_PER_TASK, each independently replicable.
+ * - Otherwise the whole problem becomes one open-ended `exploration` task.
+ * The richer multi-kind attack plans (counterexample search, formalization,
+ * lemmas) come from the model-backed decomposers via the new prompt below.
  */
 export class StubDecomposer implements Decomposer {
   async decompose(input: IntakeInput): Promise<DecomposeResult> {
     const ask = (input.subject ? `${input.subject}: ` : '') + input.body.trim();
     const qty = detectQuantity(input.body);
 
+    // A numeric bound decomposes into computational range-sweep batches — each a
+    // slice of the search another volunteer can independently replicate.
     if (qty && qty.count > UNITS_PER_TASK) {
       const batches = Math.min(Math.ceil(qty.count / UNITS_PER_TASK), MAX_TASKS);
       const tasks: ProposedTask[] = [];
@@ -96,40 +143,45 @@ export class StubDecomposer implements Decomposer {
         const { est, max } = priceFor(units);
         tasks.push({
           title: `${qty.noun} ${start}–${end} of ${qty.count}`,
+          kind: 'computational',
+          verify_via: 'replication',
           spec: {
-            prompt: `From the request "${ask}", process ${qty.noun} ${start} through ${end}.`,
+            prompt: `For the problem "${ask}", check ${qty.noun} ${start} through ${end}. Report a counterexample if any fails, otherwise confirm the whole range holds.`,
             input_refs: [],
-            output_schema: { results: 'object[]' },
-            acceptance: `Each of ${qty.noun} ${start}–${end} is addressed with a result.`,
+            output_schema: { range_holds: 'boolean', counterexamples: 'object[]' },
+            acceptance: `Every ${qty.noun} in ${start}–${end} is checked; the result states whether the range holds and lists any counterexample found.`,
             unit_count: units,
           },
           est_cost_cents: est,
           max_cost_cents: max,
           model: DEFAULT_MODEL,
-          sensitivity: 'sensitive',
+          sensitivity: 'public',
         });
       }
       return { triagedBy: 'stub', tasks };
     }
 
-    // No quantity — one task for the whole ask.
+    // No bound — one open-ended exploration task for the whole problem.
     const { est, max } = priceFor(1);
     return {
       triagedBy: 'stub',
       tasks: [
         {
-          title: input.subject?.slice(0, 80) || ask.slice(0, 80) || 'Intake request',
+          title: input.subject?.slice(0, 80) || ask.slice(0, 80) || 'Open problem',
+          kind: 'exploration',
+          verify_via: 'human_review',
           spec: {
             prompt: ask,
             input_refs: [],
-            output_schema: { result: 'string' },
-            acceptance: 'The request is fulfilled per the description.',
+            output_schema: { findings: 'string' },
+            acceptance:
+              'The problem is advanced per the description — a partial result, an approach, or a sub-conjecture, with reasoning.',
             unit_count: 1,
           },
           est_cost_cents: est,
           max_cost_cents: max,
           model: DEFAULT_MODEL,
-          sensitivity: 'sensitive',
+          sensitivity: 'public',
         },
       ],
     };
@@ -159,11 +211,18 @@ const clampInt = (n: unknown, min: number, fallback: number): number => {
 export function normalizeTask(raw: any): ProposedTask {
   const est = clampInt(raw?.est_cost_cents, 1, 100);
   const max = Math.max(clampInt(raw?.max_cost_cents, 1, Math.ceil(est * 1.5)), est);
-  const sensitivity = SENSITIVITIES.includes(raw?.sensitivity) ? raw.sensitivity : 'sensitive';
+  // All work is public mathematics; keep the dormant column populated as 'public'.
+  const sensitivity = SENSITIVITIES.includes(raw?.sensitivity) ? raw.sensitivity : 'public';
+  const kind: TaskKind = TASK_KINDS.includes(raw?.kind) ? raw.kind : 'exploration';
+  const verify_via: VerificationMethod = VERIFICATION_METHODS.includes(raw?.verify_via)
+    ? raw.verify_via
+    : defaultVerifyFor(kind);
   const model = ALLOWED_MODELS.includes(raw?.model) ? raw.model : DEFAULT_EXEC_MODEL;
   const spec = raw?.spec ?? raw ?? {};
   return {
-    title: String(raw?.title ?? 'Intake task').slice(0, 80),
+    title: String(raw?.title ?? 'Attack task').slice(0, 80),
+    kind,
+    verify_via,
     spec: {
       prompt: String(spec.prompt ?? raw?.prompt ?? '').slice(0, 4000),
       input_refs: Array.isArray(spec.input_refs) ? spec.input_refs.map(String) : [],
@@ -184,18 +243,25 @@ export function normalizeTask(raw: any): ProposedTask {
   };
 }
 
-const SYSTEM_PROMPT = `You are the intake decomposer for Givework, a platform where developers donate AI inference to nonprofits.
-A nonprofit has emailed a plain-language request. Break it into one or more concrete, independently-executable tasks that a developer's AI agent can complete.
+const SYSTEM_PROMPT = `You are the decomposer for Givework, a platform where volunteers donate AI-agent compute to open mathematics.
+You are given an open problem or conjecture in plain language. Break it into small, independently-attackable tasks a developer's AI agent can make real progress on within a bounded budget.
+
+Each task has a "kind" and a "verify_via" (how the result is judged correct):
+- "computational": run a program to check or extend a range, or enumerate cases. verify_via "replication" (an independent volunteer re-runs it).
+- "counterexample_search": look for a counterexample that would disprove the conjecture. verify_via "auto_rerun" (the witness is re-evaluated).
+- "formalization": state or prove a step in Lean/Coq. verify_via "proof_checker" (the proof compiler is the judge).
+- "lemma": prove a supporting lemma or finite sub-case. verify_via "human_review".
+- "exploration": survey approaches, find patterns, or generate sub-conjectures. verify_via "human_review".
 
 Rules:
-- Keep each task small. If the request names a quantity (e.g. "50 invoices"), split into batches of about 10 units per task.
-- Set "model" to the Claude model that fits the task's difficulty: "claude-haiku-4-5" (simple), "claude-sonnet-4-6" (moderate), or "claude-opus-4-8" (hard).
+- Keep each task small enough to dent on a bounded budget. A hard task is chipped over many contributions, so frame each so an agent can continue from prior work.
+- If the problem names a numeric bound (e.g. "verify up to 10^9"), split it into "computational" batches.
+- Prefer machine-verifiable kinds (computational, counterexample_search, formalization) where the problem allows.
+- Set "model" to the Claude model that fits difficulty: "claude-haiku-4-5" (simple), "claude-sonnet-4-6" (moderate), "claude-opus-4-8" (hard).
 - Costs are integer cents. est_cost_cents is a rough estimate; max_cost_cents is a hard cap and must be >= est_cost_cents.
-- "sensitivity" is one of "public", "internal", "sensitive". Default to "sensitive" — intake often contains personal data.
-- Never address cost or model choice to the nonprofit; those are internal.
 
 Respond with ONLY a JSON object of the form:
-{"tasks":[{"title":"...","spec":{"prompt":"...","input_refs":[],"output_schema":{"...":"..."},"acceptance":"...","unit_count":1},"est_cost_cents":150,"max_cost_cents":250,"model":"claude-sonnet-4-6","sensitivity":"sensitive"}]}`;
+{"tasks":[{"title":"...","kind":"computational","verify_via":"replication","spec":{"prompt":"...","input_refs":[],"output_schema":{"...":"..."},"acceptance":"...","unit_count":1},"est_cost_cents":150,"max_cost_cents":250,"model":"claude-sonnet-4-6"}]}`;
 
 // JSON Schema for the decomposer output — the structured-output PRIMITIVE. Passed
 // to the model so it's constrained at decode time to our exact shape (no field
@@ -211,9 +277,19 @@ const DRAFT_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['title', 'spec', 'est_cost_cents', 'max_cost_cents', 'model', 'sensitivity'],
+        required: [
+          'title',
+          'kind',
+          'verify_via',
+          'spec',
+          'est_cost_cents',
+          'max_cost_cents',
+          'model',
+        ],
         properties: {
           title: { type: 'string' },
+          kind: { type: 'string', enum: [...TASK_KINDS] },
+          verify_via: { type: 'string', enum: [...VERIFICATION_METHODS] },
           spec: {
             type: 'object',
             additionalProperties: false,
@@ -229,7 +305,6 @@ const DRAFT_JSON_SCHEMA = {
           est_cost_cents: { type: 'integer' },
           max_cost_cents: { type: 'integer' },
           model: { type: 'string', enum: ALLOWED_MODELS },
-          sensitivity: { type: 'string', enum: [...SENSITIVITIES] },
         },
       },
     },
