@@ -106,7 +106,7 @@ export async function stats(): Promise<void> {
   const s = await apiRequest<any>(apiUrl(), { path: '/devs/me/stats', token });
   console.log(`donated:    ${s.total_donated_cents}¢ all time`);
   console.log(`tasks:      ${s.tasks_completed} completed · ${s.tasks_accepted} accepted`);
-  console.log(`nonprofits: ${s.targets_helped} helped`);
+  console.log(`conjectures: ${s.targets_helped} advanced`);
   if (s.first_contribution_at) {
     console.log(`since:      ${new Date(s.first_contribution_at).toISOString().slice(0, 10)}`);
   }
@@ -427,7 +427,7 @@ async function adminTarget(args: string[]): Promise<void> {
     case 'list': {
       const rows = await apiRequest<any[]>(base, { path: '/admin/targets', token });
       if (!rows.length) {
-        console.log('No nonprofits yet.');
+        console.log('No targets yet.');
         return;
       }
       for (const n of rows) {

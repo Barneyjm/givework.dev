@@ -76,8 +76,8 @@ export function brandedHtml(bodyText: string): string {
 ${bodyToHtml(bodyText)}
 </td></tr>
 <tr><td style="padding:16px 24px;border-top:1px solid #ddd;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#5c574e;">
-Givework — free for nonprofits, powered by volunteers.<br>
-<a href="https://givework.dev" style="color:${C.blue};">givework.dev</a> &nbsp;·&nbsp; you're receiving this because you emailed intake@givework.dev. Questions? Reply or write hello@givework.dev.
+Givework — open mathematics, powered by volunteers.<br>
+<a href="https://givework.dev" style="color:${C.blue};">givework.dev</a> &nbsp;·&nbsp; you're receiving this because you wrote to Givework. Questions? Reply or write hello@givework.dev.
 </td></tr>
 </table>
 </td></tr>

@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 //
 // Unlike the decomposer, execution NEVER silently falls back to a stub on
 // failure: submitting fabricated output as if it were real work would corrupt
-// the ledger and the nonprofit's deliverable. A real executor throws; the runner
+// the ledger and the contribution record. A real executor throws; the runner
 // releases the task so another volunteer can pick it up.
 
 export interface ExecTask {
@@ -133,9 +133,9 @@ export class StubExecutor implements Executor {
 }
 
 // System prompt for the executor that calls a model (ClaudeCliExecutor).
-const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI inference to nonprofits.
-You are given one concrete task with a prompt, an expected output shape, and acceptance criteria.
-Do the task and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.`;
+const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI compute to open mathematics.
+You are given one concrete task — an attack on an open problem — with a prompt, an expected output shape, and acceptance criteria.
+Do the task rigorously and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.`;
 
 // ---------------------------------------------------------------------------
 // ClaudeCliExecutor — the production path. Runs the task on the volunteer's

@@ -214,20 +214,15 @@ const ONBOARDING_TEXT = `Hi there,
 
 Thanks for reaching out to Givework!
 
-Givework connects nonprofits with developers who donate their AI agents to do
-real work — summaries, data cleanup, categorization, drafting, and more. It's
-free for nonprofits, and you never have to pick a model, write a prompt, or see
-a bill.
+Givework points volunteers' AI agents at open mathematics — chipping at open
+conjectures with computational searches, counterexample hunts, formalizations,
+and case analysis. Contributions are machine-verified where possible and every
+result is public.
 
-This inbox (intake@givework.dev) only accepts requests from organizations we've
-already partnered with, which is why your message didn't go through yet. To get
-started, just reply to hello@givework.dev with:
-
-  • your organization's name and what you do
-  • the kind of work you're drowning in
-
-We'll get you set up, and from then on you can email your needs here in plain
-language and we'll turn them into tasks for our volunteers.
+The easiest way to propose an open problem is the submission form at
+https://givework.dev — describe it in plain language and we'll break it into
+right-sized attack tasks after a quick review. You can also just reply to
+hello@givework.dev with the problem and any references.
 
 — The Givework team
 https://givework.dev`;
@@ -325,8 +320,8 @@ const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason']
   unauthenticated:
     'Could not verify your sending domain (DMARC). Please email hello@givework.dev to get started.',
   sender_not_approved:
-    'This address is for partnered nonprofits. To get started, email hello@givework.dev.',
-  empty_body: 'The message had no readable text. Please describe your need in plain text.',
+    'To propose an open problem, use the form at https://givework.dev or email hello@givework.dev.',
+  empty_body: 'The message had no readable text. Please describe the problem in plain text.',
 };
 
 /**

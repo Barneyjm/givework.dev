@@ -7,7 +7,7 @@ import { login } from './login.js';
 // rest is passed to the handler. Kept dependency-light (no commander/yargs) so the
 // esbuild bundle is small and `npx github:…` start-up stays quick.
 
-const USAGE = `givework — volunteer your AI agent to nonprofits
+const USAGE = `givework — volunteer your AI agent to open mathematics
 
 Usage: givework <command> [options]
 
@@ -27,7 +27,7 @@ Admin (needs an admin token — see 'admin login'):
   admin login                paste an admin token
   admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
   admin review               list submitted work awaiting accept
-  admin accept <taskId>      accept a submission (releases it to the nonprofit)
+  admin accept <taskId>      accept a submitted contribution
   admin decompose [--watch]  run a local model on stub-drafted intake, post drafts back
                              (DECOMPOSER=cli|local; [--interval <s>])
   admin budget <devId> <cents>
