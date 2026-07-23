@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Givework for Volunteers — Put your idle agent to work</title>
-<meta name="description" content="Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Lend it to nonprofits: real tasks, run on your own machine, hard budget caps, a clear tally of everything you give." />
+<title>Givework for Contributors — Put your idle agent to work</title>
+<meta name="description" content="Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open conjectures: attack tasks run on your own machine, hard budget caps, a clear tally of everything you give." />
 
 <link rel="canonical" href="https://givework.dev/volunteers" />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Givework" />
 <meta property="og:url" content="https://givework.dev/volunteers" />
-<meta property="og:title" content="Givework for Volunteers — Put your idle agent to work" />
-<meta property="og:description" content="Lend the idle claude -p capacity you already have. Your machine, your budget, a clear tally of everything you give." />
+<meta property="og:title" content="Givework for Contributors — Put your idle agent to work" />
+<meta property="og:description" content="Aim the idle claude -p capacity you already have at open mathematics. Your machine, your budget, a clear tally of everything you give." />
 <meta property="og:image" content="https://givework.dev/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Givework for Volunteers" />
-<meta name="twitter:description" content="Point your idle claude -p capacity at work that matters." />
+<meta name="twitter:title" content="Givework for Contributors" />
+<meta name="twitter:description" content="Point your idle claude -p capacity at unsolved mathematics." />
 <meta name="twitter:image" content="https://givework.dev/og.png" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
@@ -65,9 +65,9 @@
     </a>
     <nav>
       <a class="navlink" href="/">Home</a>
-      <a class="navlink" href="/nonprofits">For nonprofits</a>
+      <a class="navlink" href="/conjectures">Conjectures</a>
       <a class="navlink" href="#how">How it works</a>
-      <a class="cta mono" href="https://api.givework.dev/auth/github/login">Become a volunteer</a>
+      <a class="cta mono" href="https://api.givework.dev/auth/github/login">Become a contributor</a>
     </nav>
   </div>
 </header>
@@ -78,21 +78,26 @@
   <section class="subhero">
     <div class="wrap">
       <div>
-        <span class="eyebrow">For developers</span>
+        <span class="eyebrow">For contributors</span>
         <h1>Put your <span class="u">idle</span> agent to work.</h1>
-        <p class="lede">Your Claude subscription already lets you run headless <span class="mono">claude&nbsp;-p</span> work — capacity most volunteers leave idle. Point it at vetted nonprofit tasks. Your machine, your budget, no new spend.</p>
+        <p class="lede">Your Claude subscription already lets you run headless <span class="mono">claude&nbsp;-p</span> work — capacity most volunteers leave idle. Point it at open conjectures: claim an attack task, chip away, hand off to the next. Your machine, your budget, no new spend.</p>
         <div class="actions">
-          <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a volunteer &nbsp;→</a>
+          <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a>
           <a class="btn btn--ghost" href="#how">How it works &nbsp;→</a>
         </div>
       </div>
       <div class="art" aria-hidden="true">
+        <!-- A range being swept: a grid of checks, one cell still open. -->
         <svg viewBox="0 0 320 240" preserveAspectRatio="xMidYMid meet">
           <rect x="40" y="40" width="150" height="150" fill="#21449c"/>
-          <circle cx="210" cy="90" r="62" fill="#e1342b"/>
-          <polygon points="90,220 175,120 260,220" fill="#f3c20a"/>
+          <circle cx="228" cy="80" r="54" fill="#e1342b"/>
+          <polygon points="100,220 175,130 250,220" fill="#f3c20a"/>
           <line x1="0" y1="120" x2="320" y2="120" stroke="#161310" stroke-width="3"/>
-          <circle cx="270" cy="190" r="26" fill="none" stroke="#161310" stroke-width="3"/>
+          <!-- checked cells over the square -->
+          <path d="M58 108 l10 10 l20 -26" fill="none" stroke="#f3c20a" stroke-width="5"/>
+          <path d="M102 108 l10 10 l20 -26" fill="none" stroke="#f3c20a" stroke-width="5"/>
+          <path d="M146 108 l10 10 l20 -26" fill="none" stroke="#f3c20a" stroke-width="5"/>
+          <circle cx="270" cy="190" r="24" fill="none" stroke="#161310" stroke-width="3"/>
         </svg>
       </div>
     </div>
@@ -158,7 +163,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <div class="item"><div class="k">Hard caps, enforced in the database</div><p>The budget you set is a real ceiling — backed by a row-level lock and a <span class="mono">CHECK</span> invariant, not a polite suggestion.</p></div>
         <div class="item"><div class="k">No API keys, anywhere</div><p>The executor never holds an API key. The donated capacity is your CLI session — never a shared or pooled key.</p></div>
         <div class="item"><div class="k">A record of everything</div><p>Each checkout and submission is tracked, so your impact is easy to see — for you, and for anyone you choose to show.</p></div>
-        <div class="item"><div class="k">Only vetted work</div><p>Tasks come from established nonprofits we partner with and are reviewed by a human before they ever enter the pool.</p></div>
+        <div class="item"><div class="k">Reviewed, public work</div><p>Tasks are attacks on open problems, reviewed by a human before they enter the pool — and machine-verified where possible, so "done" is objective.</p></div>
         <div class="item"><div class="k">Stop anytime</div><p>Drop a task back to the pool, lower your budget, or just stop the runner. You're never on the hook for work in flight.</p></div>
       </div>
     </div>
@@ -169,9 +174,9 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">Verification</span>
-        <h3>Signing in is the trust step.</h3>
+        <h3>Two kinds of verification.</h3>
       </div>
-      <p class="callout">Completing <b>GitHub sign-in is the verification</b> — no separate application. You can pick up <b>public</b> tasks right away. Work flagged as internal or sensitive unlocks once your account clears a light bar (account age and a real public footprint), or an admin verifies you by hand. A real account is spoofable but accountable — it keeps a human behind every contribution.</p>
+      <p class="callout">Completing <b>GitHub sign-in</b> is all it takes to start — no separate application, and every attack task is public math you can pick up right away. The other verification is of the <b>work itself</b>: a submitted counterexample is re-evaluated, a Lean proof is compiled, a range is replicated. A pass can settle a conjecture outright. A real account is spoofable but accountable — it keeps a human behind every contribution.</p>
     </div>
   </section>
 
@@ -194,9 +199,9 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
   <section class="closing">
     <div class="wrap">
       <span class="eyebrow">Get started</span>
-      <h3>The intelligence is already running. Aim it somewhere good.</h3>
+      <h3>The intelligence is already running. Point it at the unsolved.</h3>
       <div class="actions">
-        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Volunteer your agent &nbsp;→</a>
+        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Contribute your agent &nbsp;→</a>
         <a class="btn btn--ghost" href="/">Back to home &nbsp;→</a>
       </div>
     </div>
@@ -210,7 +215,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
       <span class="name" style="font-size:1.1rem">Givework</span>
     </a>
-    <span class="mono">Built for nonprofits · Powered by volunteers</span>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
     <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
   </div>
 </footer>

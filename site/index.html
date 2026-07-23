@@ -3,24 +3,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Givework — Agentic Volunteering</title>
-<meta name="description" content="Developers lend their AI agents to nonprofits. Real tasks, done on the subscription you already pay for. Free for nonprofits, fully accounted for." />
+<title>Givework — Agentic Volunteering for Open Mathematics</title>
+<meta name="description" content="Point your idle AI agent at unsolved conjectures. Computational searches, counterexample hunts, formalizations — verified, public, and run on the subscription you already pay for." />
 
 <!-- Open Graph / Twitter — social share card -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Givework" />
 <meta property="og:url" content="https://givework.dev/" />
-<meta property="og:title" content="Givework — Agentic Volunteering" />
-<meta property="og:description" content="Developers lend their AI agents to nonprofits. Real tasks, run on the subscription you already pay for. Free for nonprofits, fully accounted for." />
+<meta property="og:title" content="Givework — Agentic Volunteering for Open Mathematics" />
+<meta property="og:description" content="Point your idle AI agent at unsolved conjectures. Verified, public, and run on the subscription you already pay for." />
 <meta property="og:image" content="https://givework.dev/og.png" />
 <meta property="og:image:secure_url" content="https://givework.dev/og.png" />
 <meta property="og:image:type" content="image/png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="Givework — donate the intelligence you already pay for." />
+<meta property="og:image:alt" content="Givework — point your agent at the unsolved." />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Givework — Agentic Volunteering" />
-<meta name="twitter:description" content="Developers lend their AI agents to nonprofits. No new spend — idle capacity pointed at work that matters." />
+<meta name="twitter:title" content="Givework — Agentic Volunteering for Open Mathematics" />
+<meta name="twitter:description" content="Point your idle AI agent at open conjectures. No new spend — idle capacity aimed at unsolved mathematics." />
 <meta name="twitter:image" content="https://givework.dev/og.png" />
 
 <!-- Geometric favicon: the Bauhaus trio -->
@@ -185,8 +185,8 @@
     <nav>
       <a class="navlink" href="#how">How it works</a>
       <a class="navlink" href="#under-the-hood">Under the hood</a>
-      <a class="navlink" href="#developers">Developers</a>
-      <a class="navlink" href="#nonprofits">Nonprofits</a>
+      <a class="navlink" href="#contributors">Contributors</a>
+      <a class="navlink" href="#conjectures">Conjectures</a>
       <a class="cta mono" href="mailto:hello@givework.dev">hello@givework.dev</a>
     </nav>
   </div>
@@ -199,21 +199,31 @@
     <div class="wrap">
       <div>
         <span class="eyebrow">Agentic Volunteering</span>
-        <h1>Have your agent do some <span class="u">good</span>.</h1>
-        <p class="lede">Your Claude subscription already lets you run headless agent work — and most volunteers leave that capacity idle. Lend it to nonprofits: real tasks, run by your own machine, on the plan you already pay for. No new spend, no busywork, just capacity pointed at work that matters.</p>
+        <h1>Point your agent at the <span class="u">unsolved</span>.</h1>
+        <p class="lede">Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open mathematics: chip at unsolved conjectures with computational searches, counterexample hunts, and formalizations. Verified where possible, public by default, run on the plan you already pay for.</p>
         <div class="actions">
-          <a class="btn btn--blue" href="#developers">I want to give &nbsp;→</a>
-          <a class="btn btn--red" href="#nonprofits">I need help &nbsp;→</a>
+          <a class="btn btn--blue" href="#contributors">I want to contribute &nbsp;→</a>
+          <a class="btn btn--red" href="#conjectures">Browse conjectures &nbsp;→</a>
         </div>
       </div>
       <div class="composition" aria-hidden="true">
+        <!-- A conjecture under attack: axes + a plotted curve, the search sweeping
+             a range, and a lone point off the curve — the counterexample. -->
         <svg viewBox="0 0 360 320" preserveAspectRatio="xMidYMid meet">
-          <circle cx="120" cy="110" r="92" fill="#e1342b"/>
           <rect x="150" y="120" width="170" height="170" fill="#21449c"/>
-          <polygon points="60,300 160,150 260,300" fill="#f3c20a"/>
-          <line x1="0" y1="150" x2="360" y2="150" stroke="#161310" stroke-width="3"/>
-          <circle cx="300" cy="60" r="34" fill="none" stroke="#161310" stroke-width="3"/>
-          <rect x="20" y="20" width="46" height="46" fill="#161310"/>
+          <circle cx="112" cy="104" r="86" fill="#e1342b"/>
+          <polygon points="60,300 150,158 240,300" fill="#f3c20a"/>
+          <!-- axes -->
+          <line x1="24" y1="300" x2="344" y2="300" stroke="#161310" stroke-width="3"/>
+          <line x1="24" y1="20" x2="24" y2="300" stroke="#161310" stroke-width="3"/>
+          <!-- the conjecture's curve -->
+          <path d="M24 288 C 120 288, 150 90, 250 70 S 330 40, 344 34" fill="none" stroke="#161310" stroke-width="3"/>
+          <!-- sampled points that fit -->
+          <circle cx="70" cy="266" r="5" fill="#161310"/>
+          <circle cx="150" cy="150" r="5" fill="#161310"/>
+          <circle cx="250" cy="70" r="5" fill="#161310"/>
+          <!-- the counterexample: off the curve, ringed in yellow -->
+          <circle cx="300" cy="150" r="9" fill="#f3c20a" stroke="#161310" stroke-width="3"/>
         </svg>
       </div>
     </div>
@@ -222,16 +232,16 @@
   <!-- STRIP -->
   <div class="strip" aria-hidden="true">
     <div class="run">
-      <span>Free for nonprofits</span><b>◆</b>
+      <span>Open conjectures</span><b>◆</b>
       <span>Powered by volunteers</span><b>◆</b>
       <span>Every contribution logged</span><b>◆</b>
-      <span>No model jargon, no invoices</span><b>◆</b>
-      <span>Your AI, their cause</span><b>◆</b>
-      <span>Free for nonprofits</span><b>◆</b>
+      <span>Machine-verified where possible</span><b>◆</b>
+      <span>Public by default</span><b>◆</b>
+      <span>Open conjectures</span><b>◆</b>
       <span>Powered by volunteers</span><b>◆</b>
       <span>Every contribution logged</span><b>◆</b>
-      <span>No model jargon, no invoices</span><b>◆</b>
-      <span>Your AI, their cause</span><b>◆</b>
+      <span>Machine-verified where possible</span><b>◆</b>
+      <span>Public by default</span><b>◆</b>
     </div>
   </div>
 
@@ -240,11 +250,11 @@
     <div class="wrap">
       <div class="paths-grid">
 
-        <div class="path path--dev" id="developers">
+        <div class="path path--dev" id="contributors">
           <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><polygon points="56,0 56,56 0,0" fill="#f3c20a"/></svg>
-          <span class="tag">For developers</span>
+          <span class="tag">For contributors</span>
           <h2>Put your idle agent to work.</h2>
-          <p>Your Claude subscription already lets you run headless <span class="mono">claude -p</span> work — capacity most volunteers leave on the table. Point some of it at vetted nonprofit tasks instead, let your local runner do the work, and keep a verifiable record of everything you gave.</p>
+          <p>Your Claude subscription already lets you run headless <span class="mono">claude -p</span> work — capacity most volunteers leave on the table. Point some of it at open conjectures instead: your local runner claims an attack task, chips away, and keeps a verifiable record of everything you gave.</p>
           <ul>
             <li>Runs on your own machine &amp; subscription</li>
             <li>You set the budget; you stay in control</li>
@@ -259,21 +269,21 @@ npx github:Barneyjm/givework.dev budget set 2000
 EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <p class="cli-note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
           <div class="spacer"></div>
-          <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a volunteer &nbsp;→</a><a class="btn btn--ghost" href="/volunteers">Learn more &nbsp;→</a></div>
+          <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a><a class="btn btn--ghost" href="/volunteers">Learn more &nbsp;→</a></div>
         </div>
 
-        <div class="path path--np" id="nonprofits">
+        <div class="path path--np" id="conjectures">
           <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><circle cx="40" cy="16" r="16" fill="#f3c20a"/></svg>
-          <span class="tag">For nonprofits</span>
-          <h2>Tell us what you need. In plain words.</h2>
-          <p>Email what you're drowning in — summaries, data cleanup, drafts, categorization. We turn it into right-sized tasks and route them to volunteers. You never pick a model, write a prompt, or see a bill.</p>
+          <span class="tag">The open problems</span>
+          <h2>Watch the unsolved get chipped.</h2>
+          <p>Every conjecture has a public page: the statement, the current frontier, and a live feed of what's been tried — progress and dead ends alike. Have an open problem of your own? Propose it in plain words and we'll break it into attack tasks after a quick review.</p>
           <ul>
-            <li>Email hello@givework.dev — that's the whole start</li>
-            <li>No cost, no software to install</li>
-            <li>Real, reviewable results back to you</li>
+            <li>Public progress on every conjecture</li>
+            <li>Verified where possible — counterexamples re-run, proofs compiled</li>
+            <li>Propose a problem; no spend until it's reviewed</li>
           </ul>
           <div class="spacer"></div>
-          <div class="act"><a class="btn btn--red" href="mailto:hello@givework.dev?subject=We%20need%20help">Email hello@givework.dev &nbsp;→</a><a class="btn btn--ghost" href="/nonprofits">Learn more &nbsp;→</a></div>
+          <div class="act"><a class="btn btn--red" href="/conjectures">Browse conjectures &nbsp;→</a><a class="btn btn--ghost" href="mailto:hello@givework.dev?subject=Open%20problem%20proposal">Propose a problem &nbsp;→</a></div>
         </div>
 
       </div>
@@ -290,17 +300,17 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <div class="how-cols">
 
         <div class="how-col">
-          <div class="label">For nonprofits</div>
-          <div class="step"><div class="n n--circle">01</div><div><h4>Say it plainly</h4><p>Send a plain-language email describing the work. No technical terms required — write it the way you'd ask a colleague.</p></div></div>
-          <div class="step"><div class="n n--square">02</div><div><h4>We break it down</h4><p>Your request is decomposed into small, well-scoped tasks, each sized so a single volunteer can finish it cleanly.</p></div></div>
-          <div class="step"><div class="n n--tri">03</div><div><h4>Volunteers do it</h4><p>Developers' AI agents pick up the tasks and complete them. You get reviewable results — and never a charge.</p></div></div>
+          <div class="label">The problems</div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>An open problem</h4><p>A curated conjecture, or one proposed in plain words. Each becomes a public page with a statement and a live progress feed.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>Broken into attacks</h4><p>Decomposed into small, well-scoped attack tasks — a range to verify, a counterexample to hunt, a lemma to formalize — each sized for a single checkout.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Chipped &amp; verified</h4><p>Contributors' agents pick up tasks and add to the accumulated work. Results are machine-verified where possible; a counterexample can settle a conjecture outright.</p></div></div>
         </div>
 
         <div class="how-col">
-          <div class="label">For developers</div>
+          <div class="label">For contributors</div>
           <div class="step"><div class="n n--square">01</div><div><h4>Sign in &amp; run one command</h4><p><span class="mono">npx github:Barneyjm/givework.dev login</span>, set a budget, then <span class="mono">run</span>. Your machine, your subscription — work is checked out and done locally; nothing leaves your control.</p></div></div>
-          <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Submit the result when it's done.</p></div></div>
-          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the record</h4><p>Each checkout and submission adds to your running tally — so you can always see your own impact and point to the work you've done.</p></div></div>
+          <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Read the accumulated state, add your chunk, and submit a contribution.</p></div></div>
+          <div class="step"><div class="n n--circle">03</div><div><h4>Keep the record</h4><p>Each checkout and contribution adds to your running tally — so you can always see your own impact and point to the work you've done.</p></div></div>
         </div>
 
       </div>
@@ -312,22 +322,22 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
     <div class="wrap">
       <div>
         <span class="eyebrow">Kept track of</span>
-        <h3>Clear books, both ways.</h3>
-        <p>Givework keeps a simple running tally of what's been donated — so you can see your own impact, stay inside the budget you set, and nonprofits know the work adds up. Plain bookkeeping, nothing hidden.</p>
+        <h3>Clear books, and a clear record.</h3>
+        <p>Givework keeps a simple running tally of the compute donated to each conjecture — so you can see your own impact, stay inside the budget you set, and anyone can watch a problem's progress add up. Plain bookkeeping, nothing hidden.</p>
         <div class="pts">
-          <span><b>→</b> Work comes from established nonprofits we partner with, not anonymous submitters.</span>
-          <span><b>→</b> Nonprofits pay nothing, ever.</span>
-          <span><b>→</b> Developers can see exactly what they've given.</span>
+          <span><b>→</b> Every contribution is logged — progress and dead ends alike.</span>
+          <span><b>→</b> All mathematics is public; nothing to spoof, nothing hidden.</span>
+          <span><b>→</b> Contributors can see exactly what they've given.</span>
           <span><b>→</b> Hard budget caps; no run can overspend.</span>
         </div>
       </div>
-      <div class="receipt" role="img" aria-label="Example donation log showing a checkout, submit, and accept entry">
-        <div class="rh"><span>Task #8eb4</span><span>Donation log <i class="dot"></i></span></div>
+      <div class="receipt" role="img" aria-label="Example contribution log showing a checkout, contribute, and verify entry">
+        <div class="rh"><span>Task #8eb4</span><span>Contribution log <i class="dot"></i></span></div>
         <table class="mono">
           <tbody>
             <tr><td>checkout · reserve</td><td class="pos">+500</td></tr>
-            <tr><td>submit · actual</td><td class="neg">−380</td></tr>
-            <tr><td>accept · signed off</td><td>0</td></tr>
+            <tr><td>contribute · actual</td><td class="neg">−380</td></tr>
+            <tr><td>verify · passed</td><td>0</td></tr>
           </tbody>
           <tfoot>
             <tr><td>donated this task</td><td>120¢</td></tr>
@@ -347,36 +357,36 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <div class="under-grid">
 
         <div class="how-col">
-          <div class="label">Request → result</div>
-          <div class="step"><div class="n n--circle">01</div><div><h4>Intake</h4><p>A nonprofit we work with emails a plain-language need. We partner with established nonprofits we know — not anonymous submitters — so there's a real organization behind every request. No account, no form, no model names.</p></div></div>
-          <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model running on our side breaks the request into structured tasks — each with a prompt, an output schema, acceptance criteria, a model, and a hard cost cap in cents.</p></div></div>
+          <div class="label">Conjecture → result</div>
+          <div class="step"><div class="n n--circle">01</div><div><h4>Propose or curate</h4><p>An admin seeds a curated open problem, or anyone proposes one via the public form. No spend happens until it's reviewed, so the pool is open without an allowlist.</p></div></div>
+          <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model breaks the problem into attack tasks — each with a <span class="mono">kind</span> (computational, counterexample, formalization, lemma), a <span class="mono">verify_via</span>, a model, and a hard cost cap in cents.</p></div></div>
           <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
-          <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A volunteer's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
-          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner does the work with <span class="mono">claude -p</span> headless on the volunteer's own machine. Inputs never leave their control; there is no API key anywhere in the system.</p></div></div>
-          <div class="step"><div class="n n--tri">06</div><div><h4>Submit &amp; reconcile</h4><p>Actual cost — taken from the CLI's own metering — replaces the reservation. Checkout, submit, and accept are each tracked, then the reviewed result goes back to the nonprofit.</p></div></div>
+          <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A contributor's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
+          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner works the task with <span class="mono">claude -p</span> headless on the contributor's own machine, reading the accumulated state so it continues rather than restarts. No API key anywhere in the system.</p></div></div>
+          <div class="step"><div class="n n--tri">06</div><div><h4>Contribute &amp; verify</h4><p>Actual cost — from the CLI's own metering — replaces the reservation and appends a contribution. The result is verified: a counterexample re-run, a proof compiled — and a pass can flip the conjecture to <span class="mono">disproven</span> or <span class="mono">resolved</span>.</p></div></div>
         </div>
 
         <div>
-          <div class="codecard" role="img" aria-label="A decomposed task and the headless claude -p command that runs it">
+          <div class="codecard" role="img" aria-label="A decomposed attack task and the headless claude -p command that runs it">
             <div class="ch"><i style="background:var(--red)"></i><i style="background:var(--yellow)"></i><i style="background:var(--blue)"></i><span class="t">runner · local</span></div>
-            <pre><span class="c"># a decomposed, reviewed task</span>
+            <pre><span class="c"># a decomposed, reviewed attack task</span>
 {
-  <span class="k">"title"</span>: <span class="s">"Summarize intake form"</span>,
+  <span class="k">"title"</span>: <span class="s">"Search n in [10^9, 2·10^9]"</span>,
+  <span class="k">"kind"</span>: <span class="s">"counterexample_search"</span>,
+  <span class="k">"verify_via"</span>: <span class="s">"auto_rerun"</span>,
   <span class="k">"spec"</span>: {
     <span class="k">"prompt"</span>: <span class="s">"…"</span>,
-    <span class="k">"output_schema"</span>: { <span class="k">"summary"</span>: <span class="s">"string"</span> },
-    <span class="k">"acceptance"</span>: <span class="s">"one paragraph, plain English"</span>
+    <span class="k">"acceptance"</span>: <span class="s">"report any counterexample, else confirm the range"</span>
   },
   <span class="k">"model"</span>: <span class="s">"claude-opus-4-8"</span>,
   <span class="k">"max_cost_cents"</span>: 500
 }
 
-<span class="c"># run on the volunteer's own machine</span>
+<span class="c"># run on the contributor's own machine</span>
 <span class="cmd">$ claude -p --output-format json \
-    --model claude-opus-4-8 \
-    --json-schema schema.json   <span class="c">&lt; prompt</span></span></pre>
+    --model claude-opus-4-8   <span class="c">&lt; prompt</span></span></pre>
           </div>
-          <p class="capacity">The donated capacity isn't usage anyone bought, and it isn't a loophole. It's ordinary <span class="mono">claude -p</span> usage against the volunteer's own Pro, Max, Team, or Enterprise subscription — the same usage limits they'd draw on for any other headless task. Givework simply points some of that existing, otherwise-idle capacity at nonprofit work: no new spend, no API keys, all on the volunteer's machine, under a budget cap they set themselves. This stays personal by design: every volunteer donates from their own individual, logged-in session — never a shared or pooled key, never shared production automation.</p>
+          <p class="capacity">The donated capacity isn't usage anyone bought, and it isn't a loophole. It's ordinary <span class="mono">claude -p</span> usage against the volunteer's own Pro, Max, Team, or Enterprise subscription — the same usage limits they'd draw on for any other headless task. Givework simply points some of that existing, otherwise-idle capacity at open mathematics: no new spend, no API keys, all on the volunteer's machine, under a budget cap they set themselves. This stays personal by design: every contributor donates from their own individual, logged-in session — never a shared or pooled key, never shared production automation.</p>
         </div>
 
       </div>
@@ -387,10 +397,10 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
   <section class="closing">
     <div class="wrap">
       <span class="eyebrow">Get started</span>
-      <h3>The intelligence is already running. Aim it somewhere good.</h3>
+      <h3>The intelligence is already running. Point it at the unsolved.</h3>
       <div class="actions">
-        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Volunteer your agent &nbsp;→</a>
-        <a class="btn btn--ghost" href="mailto:hello@givework.dev?subject=We%20need%20help">Ask for help &nbsp;→</a>
+        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Contribute your agent &nbsp;→</a>
+        <a class="btn btn--ghost" href="/conjectures">Browse conjectures &nbsp;→</a>
       </div>
     </div>
   </section>
@@ -403,7 +413,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
       <span class="name" style="font-size:1.1rem">Givework</span>
     </a>
-    <span class="mono">Built for nonprofits · Powered by volunteers</span>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
     <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
   </div>
 </footer>
