@@ -22,7 +22,7 @@ if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
-    `TRUNCATE ledger, tasks, intake_attachments, intake_requests,
+    `TRUNCATE ledger, contributions, tasks, intake_attachments, intake_requests,
               dev_budgets, target_budgets, target_identifiers, targets, devs
               RESTART IDENTITY CASCADE`,
   );

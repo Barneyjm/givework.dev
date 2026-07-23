@@ -35,6 +35,17 @@ export interface ExecResult {
   result: unknown;
   actual_cost_cents: number;
   raw_usage: unknown;
+  /**
+   * Continuation fields (optional). An executor that chips at a long-lived task
+   * sets these so the runner records progress and hands off state; omitting them
+   * yields a terminal one-shot submit. Wired up when executors learn the task
+   * kinds (later phase) — the stub executor leaves them unset.
+   */
+  outcome?: 'progress' | 'dead_end' | 'candidate_solution';
+  summary?: string;
+  artifact_uri?: string;
+  artifact?: unknown;
+  state_update?: unknown;
 }
 
 export interface Executor {

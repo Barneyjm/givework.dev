@@ -103,12 +103,28 @@ async function main() {
     'submit_result',
     {
       description:
-        'Submit a result for a task locked to you; moves the reservation to actual spend.',
+        'Record a chunk of work on a task locked to you; books the spend and appends it to the ' +
+        "task's contribution log. outcome 'candidate_solution' (default) finishes the task; " +
+        "'progress'/'dead_end' return it to the pool with your state_update for the next agent.",
       inputSchema: {
         task_id: z.string().uuid(),
         result: z.any().describe('The task output (any JSON).'),
         actual_cost_cents: z.number().int().nonnegative(),
         raw_usage: z.any().optional().describe('Provider token usage, stored on the ledger row.'),
+        outcome: z.enum(['progress', 'dead_end', 'candidate_solution']).optional(),
+        summary: z.string().optional().describe('Handoff note for the next agent.'),
+        artifact_uri: z
+          .string()
+          .optional()
+          .describe('Pointer to a large artifact in blob storage.'),
+        artifact: z
+          .any()
+          .optional()
+          .describe('Small inline artifact (a lemma, an extended range).'),
+        state_update: z
+          .any()
+          .optional()
+          .describe("Replacement compacted working set for the task's target."),
       },
     },
     (args) =>
@@ -119,6 +135,13 @@ async function main() {
           args.result ?? null,
           args.actual_cost_cents,
           args.raw_usage ?? null,
+          {
+            outcome: args.outcome,
+            summary: args.summary,
+            artifactUri: args.artifact_uri,
+            artifact: args.artifact,
+            stateUpdate: args.state_update,
+          },
         ),
       ),
   );

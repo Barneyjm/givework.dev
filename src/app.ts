@@ -161,11 +161,20 @@ app.post('/submit', requireDev, async (c) => {
       body.result ?? null,
       Number(body.actual_cost_cents),
       body.raw_usage ?? null,
+      {
+        outcome: body.outcome,
+        summary: body.summary,
+        artifactUri: body.artifact_uri,
+        artifact: body.artifact,
+        stateUpdate: body.state_update,
+      },
     );
-    // Auto-accept: a verified volunteer's submission flows straight to the
-    // nonprofit — no manual review gate. Non-fatal; the submit already succeeded.
+    // Auto-accept: a verified volunteer's *terminal* submission flows straight to
+    // the recipient — no manual review gate. A progress/dead-end contribution
+    // returned the task to the pool (status 'open'), so there's nothing to accept.
+    // Non-fatal; the submit already succeeded.
     try {
-      if (await isDevVerified(dev)) {
+      if (result.status === 'submitted' && (await isDevVerified(dev))) {
         const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
         await acceptTaskAndNotify(body.task_id, binding);
       }

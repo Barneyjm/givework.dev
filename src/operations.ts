@@ -89,6 +89,16 @@ async function reservedPeriodOf(client: Client, taskId: string): Promise<string 
 // checkout
 // ---------------------------------------------------------------------------
 
+/** A recent chunk of work on a task, surfaced to the next agent that picks it up. */
+export interface ContributionSummary {
+  id: number;
+  outcome: string;
+  summary: string;
+  artifact_uri: string | null;
+  cost_cents: number;
+  created_at: string;
+}
+
 export interface CheckoutResult {
   task_id: string;
   spec: unknown;
@@ -96,7 +106,18 @@ export interface CheckoutResult {
   model: string;
   max_cost_cents: number;
   lock_expires_at: string;
+  /**
+   * The target's compacted working set — the board state an incoming agent reads
+   * first (current frontier, live sub-goals, known dead ends, suggested next
+   * step). Kept small deliberately; the full history is in `contributions`.
+   */
+  target_state: unknown;
+  /** The most recent contributions to this task, newest first — what's been tried. */
+  prior_contributions: ContributionSummary[];
 }
+
+/** How many recent contributions to hydrate into a checkout's context. */
+const PRIOR_CONTRIBUTIONS_LIMIT = 5;
 
 /**
  * Atomically reserve budget and lock an open task to a dev for 10 minutes.
@@ -193,6 +214,22 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       [taskId, devId, claimed.target_id, task.max_cost_cents],
     );
 
+    // 6. Hydrate the incoming agent's context: the target's compacted working
+    //    set plus the most recent chunks tried on this task (progress and dead
+    //    ends), so a bounded budget continues the work instead of restarting it.
+    const stateRes = await client.query<{ state: unknown }>(
+      `SELECT state FROM targets WHERE id = $1`,
+      [claimed.target_id],
+    );
+    const prior = await client.query<ContributionSummary>(
+      `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at
+         FROM contributions
+        WHERE task_id = $1
+        ORDER BY id DESC
+        LIMIT $2`,
+      [taskId, PRIOR_CONTRIBUTIONS_LIMIT],
+    );
+
     return {
       task_id: claimed.id,
       spec: claimed.spec,
@@ -200,6 +237,8 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       model: claimed.model,
       max_cost_cents: claimed.max_cost_cents,
       lock_expires_at: claimed.lock_expires_at as string,
+      target_state: stateRes.rows[0]?.state ?? {},
+      prior_contributions: prior.rows,
     };
   });
 }
@@ -208,26 +247,54 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 // submit
 // ---------------------------------------------------------------------------
 
+export type ContributionOutcome = 'progress' | 'dead_end' | 'candidate_solution';
+const CONTRIBUTION_OUTCOMES: readonly ContributionOutcome[] = [
+  'progress',
+  'dead_end',
+  'candidate_solution',
+];
+
+export interface ContributeOptions {
+  /**
+   * What this chunk represents. 'progress' and 'dead_end' return the task to the
+   * pool so the next agent continues from the accumulated state; 'candidate_solution'
+   * (the default) finishes the task into 'submitted' for verification/review — the
+   * original one-shot behaviour.
+   */
+  outcome?: ContributionOutcome;
+  /** The agent's handoff note for whoever picks the task up next. */
+  summary?: string;
+  /** Pointer to a large artifact (code, Lean file) in blob storage. */
+  artifactUri?: string;
+  /** Small inline artifact (a lemma, an extended range). */
+  artifact?: unknown;
+  /** Replacement compacted working set for the target (the cheap-path compaction). */
+  stateUpdate?: unknown;
+}
+
 export interface SubmitResult {
   task_id: string;
-  status: 'submitted';
+  /** 'submitted' for a candidate solution (terminal); 'open' when returned to the pool. */
+  status: 'submitted' | 'open';
+  outcome: ContributionOutcome;
+  contribution_id: number;
   reserved_released: number;
   spent_applied: number;
   overage_clamped: boolean;
 }
 
 /**
- * Atomically record a result for a locked task and move the reservation to
- * spend. Releases exactly the amount reserved at checkout (the task's
- * max_cost_cents) and applies the actual spend.
+ * Record one chunk of work on a locked task: append a `contributions` row, book
+ * the spend, and either finish the task (a candidate solution -> 'submitted') or
+ * return it to the pool for the next agent (progress / dead end -> 'open'). In
+ * every case the reservation made at checkout (max_cost_cents) is released and
+ * the actual spend applied — the budget mechanics are identical to the original
+ * one-shot submit; only the resulting task status and the appended log differ.
  *
- * Overage handling: actual_cost_cents should normally be <= max_cost_cents (the
- * runner aborts before exceeding). But if actual > reserved, naively applying it
- * could push reserved + spent over budget and fail the CHECK constraint. We
- * never let that happen: we clamp the spend increment to max_cost_cents and flag
- * the overage in the ledger's raw_usage. The platform eats the difference in
- * Stage 1 rather than failing the transaction — a wrong tracked total is worse
- * than a capped one, and the budget invariant is sacred.
+ * Overage handling (unchanged): actual_cost_cents should be <= max_cost_cents.
+ * If it exceeds the reservation, naively applying it could push reserved + spent
+ * over budget and fail the CHECK. We clamp the spend to max_cost_cents and flag
+ * the overage in raw_usage — a capped tracked total beats a violated invariant.
  */
 export async function submitResult(
   devId: string,
@@ -235,6 +302,7 @@ export async function submitResult(
   result: unknown,
   actualCostCents: number,
   rawUsage: unknown,
+  opts: ContributeOptions = {},
 ): Promise<SubmitResult> {
   // actual_cost_cents comes straight from the dev's /submit body. Reject
   // negatives, NaN, and non-integers up front: a negative value would refund
@@ -243,6 +311,17 @@ export async function submitResult(
   if (!Number.isInteger(actualCostCents) || actualCostCents < 0) {
     throw new OpError(BAD_INPUT, 'bad_input', 'actual_cost_cents must be a non-negative integer');
   }
+  const outcome = opts.outcome ?? 'candidate_solution';
+  if (!CONTRIBUTION_OUTCOMES.includes(outcome)) {
+    throw new OpError(
+      BAD_INPUT,
+      'bad_input',
+      `outcome must be one of ${CONTRIBUTION_OUTCOMES.join(', ')}`,
+    );
+  }
+  // A candidate solution finishes the task; progress/dead-end keep it alive.
+  const terminal = outcome === 'candidate_solution';
+
   return withTransaction(async (client) => {
     // The reservation was made in the task's reserved_period (which may be a
     // prior month if the lock straddled a boundary). Read it first — a plain
@@ -258,21 +337,35 @@ export async function submitResult(
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
-    // 2. Move the task to submitted, guarded on lock+assignment.
-    const upd = await client.query<{ max_cost_cents: number }>(
-      `UPDATE tasks
-          SET status = 'submitted',
-              actual_cost_cents = $3,
-              result = $4,
-              submitted_at = now()
-        WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-        RETURNING max_cost_cents`,
-      [taskId, devId, actualCostCents, result],
-    );
+    // 2. Settle the task, guarded on lock+assignment. Terminal writes the final
+    //    result; a continuing contribution returns the task to the pool (its
+    //    artifact lives on the contributions row, not the task).
+    const upd = terminal
+      ? await client.query<{ max_cost_cents: number; target_id: string }>(
+          `UPDATE tasks
+              SET status = 'submitted',
+                  actual_cost_cents = $3,
+                  result = $4,
+                  submitted_at = now()
+            WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
+            RETURNING max_cost_cents, target_id`,
+          [taskId, devId, actualCostCents, result],
+        )
+      : await client.query<{ max_cost_cents: number; target_id: string }>(
+          `UPDATE tasks
+              SET status = 'open',
+                  assigned_dev_id = NULL,
+                  lock_expires_at = NULL,
+                  reserved_period = NULL
+            WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
+            RETURNING max_cost_cents, target_id`,
+          [taskId, devId],
+        );
     if (upd.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you or already moved on');
     }
     const reserved = upd.rows[0].max_cost_cents;
+    const targetId = upd.rows[0].target_id;
 
     // Clamp the spend so reserved + spent can never exceed budget.
     let spendApplied = actualCostCents;
@@ -303,19 +396,64 @@ export async function submitResult(
 
     await client.query(
       `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents, raw_usage)
-       SELECT $1, $2, t.target_id, 'submit', $3, $4
-         FROM tasks t WHERE t.id = $1`,
-      [taskId, devId, spendApplied - reserved, JSON.stringify(usagePayload ?? null)],
+       VALUES ($1, $2, $3, 'submit', $4, $5)`,
+      [taskId, devId, targetId, spendApplied - reserved, JSON.stringify(usagePayload ?? null)],
     );
+
+    // 5. Append the contribution — the durable, append-only record of this chunk
+    //    (progress or dead end alike). cost_cents is the booked spend.
+    const contrib = await client.query<{ id: number }>(
+      `INSERT INTO contributions
+         (task_id, target_id, dev_id, outcome, summary, artifact_uri, artifact, cost_cents, raw_usage)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      [
+        taskId,
+        targetId,
+        devId,
+        outcome,
+        opts.summary ?? '',
+        opts.artifactUri ?? null,
+        opts.artifact != null ? JSON.stringify(opts.artifact) : null,
+        spendApplied,
+        JSON.stringify(usagePayload ?? null),
+      ],
+    );
+
+    // 6. Refresh the target's compacted working set, if the agent supplied one.
+    if (opts.stateUpdate !== undefined) {
+      await client.query(`UPDATE targets SET state = $2 WHERE id = $1`, [
+        targetId,
+        JSON.stringify(opts.stateUpdate),
+      ]);
+    }
 
     return {
       task_id: taskId,
-      status: 'submitted',
+      status: terminal ? 'submitted' : 'open',
+      outcome,
+      contribution_id: contrib.rows[0].id,
       reserved_released: reserved,
       spent_applied: spendApplied,
       overage_clamped: overageClamped,
     };
   });
+}
+
+/** A task's contributions, newest first — the accumulated log of what's been tried. */
+export async function getTaskContributions(
+  taskId: string,
+  limit = 20,
+): Promise<ContributionSummary[]> {
+  const { rows } = await query<ContributionSummary>(
+    `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at
+       FROM contributions
+      WHERE task_id = $1
+      ORDER BY id DESC
+      LIMIT $2`,
+    [taskId, limit],
+  );
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
