@@ -207,23 +207,22 @@
         </div>
       </div>
       <div class="composition" aria-hidden="true">
-        <!-- A conjecture under attack: axes + a plotted curve, the search sweeping
-             a range, and a lone point off the curve — the counterexample. -->
+        <!-- A conjecture under attack: the Bauhaus trio, a plotted curve with
+             sampled points that fit, and the one point off it — the counterexample. -->
         <svg viewBox="0 0 360 320" preserveAspectRatio="xMidYMid meet">
-          <rect x="150" y="120" width="170" height="170" fill="#21449c"/>
-          <circle cx="112" cy="104" r="86" fill="#e1342b"/>
-          <polygon points="60,300 150,158 240,300" fill="#f3c20a"/>
-          <!-- axes -->
-          <line x1="24" y1="300" x2="344" y2="300" stroke="#161310" stroke-width="3"/>
-          <line x1="24" y1="20" x2="24" y2="300" stroke="#161310" stroke-width="3"/>
-          <!-- the conjecture's curve -->
-          <path d="M24 288 C 120 288, 150 90, 250 70 S 330 40, 344 34" fill="none" stroke="#161310" stroke-width="3"/>
-          <!-- sampled points that fit -->
-          <circle cx="70" cy="266" r="5" fill="#161310"/>
-          <circle cx="150" cy="150" r="5" fill="#161310"/>
-          <circle cx="250" cy="70" r="5" fill="#161310"/>
-          <!-- the counterexample: off the curve, ringed in yellow -->
-          <circle cx="300" cy="150" r="9" fill="#f3c20a" stroke="#161310" stroke-width="3"/>
+          <circle cx="92" cy="90" r="84" fill="#e1342b"/>
+          <rect x="150" y="120" width="175" height="170" fill="#21449c"/>
+          <polygon points="40,300 150,168 260,300" fill="#f3c20a"/>
+          <!-- a grounded baseline -->
+          <line x1="30" y1="300" x2="344" y2="300" stroke="#161310" stroke-width="4"/>
+          <!-- the conjecture, sampled exactly -->
+          <path d="M 36.0 288.0 L 42.3 286.6 L 48.7 285.1 L 55.0 283.3 L 61.3 281.4 L 67.7 279.1 L 74.0 276.7 L 80.3 273.9 L 86.7 270.7 L 93.0 267.3 L 99.3 263.4 L 105.7 259.1 L 112.0 254.5 L 118.3 249.3 L 124.7 243.7 L 131.0 237.7 L 137.3 231.2 L 143.7 224.2 L 150.0 216.8 L 156.3 209.0 L 162.7 200.9 L 169.0 192.4 L 175.3 183.7 L 181.7 174.9 L 188.0 166.0 L 194.3 157.1 L 200.7 148.3 L 207.0 139.6 L 213.3 131.1 L 219.7 123.0 L 226.0 115.2 L 232.3 107.8 L 238.7 100.8 L 245.0 94.3 L 251.3 88.3 L 257.7 82.7 L 264.0 77.5 L 270.3 72.9 L 276.7 68.6 L 283.0 64.7 L 289.3 61.3 L 295.7 58.1 L 302.0 55.3 L 308.3 52.9 L 314.7 50.6 L 321.0 48.7 L 327.3 46.9 L 333.7 45.4 L 340.0 44.0" fill="none" stroke="#161310" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- points that fit, exactly on the curve -->
+          <circle cx="102.9" cy="261.1" r="6" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+          <circle cx="194.1" cy="157.4" r="6" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+          <circle cx="285.3" cy="63.4" r="6" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+          <!-- the one point off the curve: the counterexample -->
+          <circle cx="230.6" cy="187.9" r="9" fill="#f3c20a" stroke="#161310" stroke-width="3.5"/>
         </svg>
       </div>
     </div>
