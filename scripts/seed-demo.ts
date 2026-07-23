@@ -13,7 +13,7 @@ async function main() {
 
   const np = (
     await pool.query(
-      `INSERT INTO nonprofits (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
+      `INSERT INTO targets (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
       ['Demo Charity', 'charity@example.com'],
     )
   ).rows[0];
@@ -34,7 +34,7 @@ async function main() {
   ] as const) {
     const t = (
       await pool.query(
-        `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model)
+        `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
         [np.id, title, JSON.stringify({ prompt: title }), est, max, 'claude-opus-4-8'],
       )
@@ -48,7 +48,7 @@ async function main() {
 
   console.log('Seeded demo fixtures:');
   console.log('  dev_id      =', dev.id);
-  console.log('  nonprofit_id=', np.id);
+  console.log('  target_id=', np.id);
   console.log('  task_ids    =', tasks.join(', '));
   console.log('\n  DEV_TOKEN  =', devToken);
   console.log('  ADMIN_TOKEN=', adminToken);

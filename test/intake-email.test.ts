@@ -9,9 +9,9 @@ import {
   parseInboundEmail,
   statusUrlFor,
 } from '../src/intake/email.js';
-import { findApprovedNonprofitForSender } from '../src/intake/operations.js';
+import { findApprovedTargetForSender } from '../src/intake/operations.js';
 import { brandedHtml, buildMime, FROM_ADDRESS } from '../src/mailer.js';
-import { createVerifiedNonprofit, resetDb } from './helpers.js';
+import { createVerifiedTarget, resetDb } from './helpers.js';
 
 afterAll(closePool);
 
@@ -59,32 +59,32 @@ describe('parseInboundEmail', () => {
   });
 });
 
-describe('findApprovedNonprofitForSender', () => {
+describe('findApprovedTargetForSender', () => {
   it('matches an exact verified contact_email', async () => {
-    const id = await createVerifiedNonprofit('contact@helpful.org');
-    expect(await findApprovedNonprofitForSender('contact@helpful.org')).toBe(id);
-    expect(await findApprovedNonprofitForSender('CONTACT@Helpful.org')).toBe(id);
+    const id = await createVerifiedTarget('contact@helpful.org');
+    expect(await findApprovedTargetForSender('contact@helpful.org')).toBe(id);
+    expect(await findApprovedTargetForSender('CONTACT@Helpful.org')).toBe(id);
   });
 
   it('authorizes other senders at the same org domain', async () => {
-    const id = await createVerifiedNonprofit('director@helpful.org');
-    expect(await findApprovedNonprofitForSender('volunteer@helpful.org')).toBe(id);
+    const id = await createVerifiedTarget('director@helpful.org');
+    expect(await findApprovedTargetForSender('volunteer@helpful.org')).toBe(id);
   });
 
   it('does NOT authorize a whole consumer-mailbox domain', async () => {
-    await createVerifiedNonprofit('jane@gmail.com');
+    await createVerifiedTarget('jane@gmail.com');
     // Same provider, different person — must not be authorized by domain.
-    expect(await findApprovedNonprofitForSender('attacker@gmail.com')).toBeNull();
+    expect(await findApprovedTargetForSender('attacker@gmail.com')).toBeNull();
     // The exact address still works.
-    expect(await findApprovedNonprofitForSender('jane@gmail.com')).not.toBeNull();
+    expect(await findApprovedTargetForSender('jane@gmail.com')).not.toBeNull();
   });
 
   it('returns null for an unverified nonprofit and for strangers', async () => {
     await pool.query(
-      `INSERT INTO nonprofits (name, contact_email, verified) VALUES ('Pending', 'new@unknown.org', false)`,
+      `INSERT INTO targets (name, contact_email, verified) VALUES ('Pending', 'new@unknown.org', false)`,
     );
-    expect(await findApprovedNonprofitForSender('new@unknown.org')).toBeNull();
-    expect(await findApprovedNonprofitForSender('nobody@nowhere.org')).toBeNull();
+    expect(await findApprovedTargetForSender('new@unknown.org')).toBeNull();
+    expect(await findApprovedTargetForSender('nobody@nowhere.org')).toBeNull();
   });
 });
 
@@ -121,7 +121,7 @@ describe('dmarcPassed', () => {
 
 describe('ingestInboundEmail', () => {
   it('accepts DMARC-authenticated mail from an allowlisted sender and links it', async () => {
-    const npId = await createVerifiedNonprofit('intake@helpful.org', 'Helpful Org');
+    const npId = await createVerifiedTarget('intake@helpful.org', 'Helpful Org');
     const res = await ingestInboundEmail(
       rawEmail({
         from: 'intake@helpful.org',
@@ -133,28 +133,28 @@ describe('ingestInboundEmail', () => {
 
     expect(res.accepted).toBe(true);
     if (!res.accepted) return;
-    expect(res.nonprofit_id).toBe(npId);
+    expect(res.target_id).toBe(npId);
     // Carries threading context so the handler can send the confirmation reply.
     expect(res.reply).toEqual({ subject: 'Cleanup', inReplyTo: '<test-msg-id@local>' });
 
     const { rows } = await pool.query(
-      `SELECT from_email, raw_body, nonprofit_id, status FROM intake_requests WHERE id = $1`,
+      `SELECT from_email, raw_body, target_id, status FROM intake_requests WHERE id = $1`,
       [res.intake_id],
     );
     expect(rows[0]).toMatchObject({
       from_email: 'intake@helpful.org',
-      nonprofit_id: npId,
+      target_id: npId,
       status: 'decomposed', // ran through the (stub) decomposer
     });
     // No provisional nonprofit was created — the verified one was reused.
-    const count = await pool.query(`SELECT count(*)::int AS n FROM nonprofits`);
+    const count = await pool.query(`SELECT count(*)::int AS n FROM targets`);
     expect(count.rows[0].n).toBe(1);
   });
 
   it('rejects a spoofed From at a partner domain when DMARC fails (the core fix)', async () => {
     // Attacker knows the verified org's domain and forges the From header, but
     // sends from their own server so Cloudflare's DMARC verdict is fail.
-    await createVerifiedNonprofit('director@helpful.org', 'Helpful Org');
+    await createVerifiedTarget('director@helpful.org', 'Helpful Org');
     const res = await ingestInboundEmail(
       rawEmail({ from: 'anyone@helpful.org', body: 'wire the donations to me' }),
       { authResults: 'mx.cloudflare.net; spf=fail; dmarc=fail' },
@@ -165,7 +165,7 @@ describe('ingestInboundEmail', () => {
   });
 
   it('rejects mail with no Authentication-Results at all', async () => {
-    await createVerifiedNonprofit('intake@helpful.org');
+    await createVerifiedTarget('intake@helpful.org');
     const res = await ingestInboundEmail(rawEmail({ from: 'intake@helpful.org', body: 'hi' }));
     expect(res).toEqual({ accepted: false, reason: 'unauthenticated' });
   });
@@ -193,7 +193,7 @@ describe('ingestInboundEmail', () => {
   });
 
   it('rejects an allowlisted sender with an empty body', async () => {
-    await createVerifiedNonprofit('intake@helpful.org');
+    await createVerifiedTarget('intake@helpful.org');
     const res = await ingestInboundEmail(
       rawEmail({ from: 'intake@helpful.org', body: '   ' }),
       PASS,

@@ -15,9 +15,9 @@ export interface ReceiveInput {
    * When set, attach the request to this existing nonprofit instead of
    * find-or-creating a provisional one. The inbound-email path passes the
    * pre-approved nonprofit it matched the sender to (see
-   * findApprovedNonprofitForSender), so allowlisted mail lands on the real org.
+   * findApprovedTargetForSender), so allowlisted mail lands on the real org.
    */
-  nonprofit_id?: string;
+  target_id?: string;
 }
 
 // Consumer mailbox providers: a verified nonprofit whose contact is e.g.
@@ -53,7 +53,7 @@ const FREE_EMAIL_DOMAINS = new Set([
  * email handler rejects when this returns null, so spam and strangers never
  * reach the decomposer.
  */
-export async function findApprovedNonprofitForSender(email: string): Promise<string | null> {
+export async function findApprovedTargetForSender(email: string): Promise<string | null> {
   const addr = email.trim().toLowerCase();
   const at = addr.lastIndexOf('@');
   if (at <= 0 || at === addr.length - 1) return null;
@@ -61,14 +61,14 @@ export async function findApprovedNonprofitForSender(email: string): Promise<str
   const domainForMatch = FREE_EMAIL_DOMAINS.has(domain) ? null : domain;
   const { rows } = await query<{ id: string }>(
     `SELECT n.id
-       FROM nonprofits n
+       FROM targets n
       WHERE n.verified = true
         -- A deny carves out a sender within THIS org's own allowlist (e.g. allow
         -- the domain but block one mailbox). Scope it to n.id: one org's deny must
         -- never suppress a sender that a different org legitimately authorizes.
         AND NOT EXISTS (
-          SELECT 1 FROM nonprofit_identifiers d
-           WHERE d.nonprofit_id = n.id
+          SELECT 1 FROM target_identifiers d
+           WHERE d.target_id = n.id
              AND ( (d.kind = 'email_deny' AND lower(d.value) = $1)
                 OR (d.kind = 'domain_deny' AND $2::text IS NOT NULL AND lower(d.value) = $2) )
         )
@@ -78,8 +78,8 @@ export async function findApprovedNonprofitForSender(email: string): Promise<str
           OR ($2::text IS NOT NULL AND lower(split_part(n.contact_email, '@', 2)) = $2)
           -- admin-added identifiers for this org
           OR EXISTS (
-            SELECT 1 FROM nonprofit_identifiers i
-             WHERE i.nonprofit_id = n.id
+            SELECT 1 FROM target_identifiers i
+             WHERE i.target_id = n.id
                AND ( (i.kind = 'email' AND lower(i.value) = $1)
                   OR (i.kind = 'domain' AND $2::text IS NOT NULL AND lower(i.value) = $2) )
           )
@@ -87,8 +87,8 @@ export async function findApprovedNonprofitForSender(email: string): Promise<str
       -- Prefer an exact-address match over a domain match for determinism.
       ORDER BY (
           lower(n.contact_email) = $1
-          OR EXISTS (SELECT 1 FROM nonprofit_identifiers i
-                      WHERE i.nonprofit_id = n.id AND i.kind = 'email' AND lower(i.value) = $1)
+          OR EXISTS (SELECT 1 FROM target_identifiers i
+                      WHERE i.target_id = n.id AND i.kind = 'email' AND lower(i.value) = $1)
         ) DESC, n.created_at ASC
       LIMIT 1`,
     [addr, domainForMatch],
@@ -101,18 +101,15 @@ export async function findApprovedNonprofitForSender(email: string): Promise<str
  * repeated emails from one address map to one org. Promotion to verified +
  * EIN check is later (intake never trusts the sender's identity).
  */
-async function findOrCreateProvisionalNonprofit(
-  client: Client,
-  fromEmail: string,
-): Promise<string> {
+async function findOrCreateProvisionalTarget(client: Client, fromEmail: string): Promise<string> {
   const existing = await client.query<{ id: string }>(
-    `SELECT id FROM nonprofits WHERE contact_email = $1 ORDER BY created_at ASC LIMIT 1`,
+    `SELECT id FROM targets WHERE contact_email = $1 ORDER BY created_at ASC LIMIT 1`,
     [fromEmail],
   );
   if (existing.rows[0]) return existing.rows[0].id;
 
   const created = await client.query<{ id: string }>(
-    `INSERT INTO nonprofits (name, contact_email, verified)
+    `INSERT INTO targets (name, contact_email, verified)
      VALUES ($1, $2, false) RETURNING id`,
     [`Pending (${fromEmail})`, fromEmail],
   );
@@ -125,20 +122,20 @@ export async function receiveIntake(input: ReceiveInput) {
   }
 
   // Txn 1: persist the inbound request (status 'received'). Kept short — no model
-  // call inside an open transaction. A caller-supplied nonprofit_id (the admin
+  // call inside an open transaction. A caller-supplied target_id (the admin
   // manual path) that isn't a real UUID / known org would trip a foreign-key
   // (23503) or invalid-text (22P02) error on INSERT; map those to a clean 400
   // rather than a 500, the same way setOwnBudget maps its CHECK violation.
   let intakeId: string;
-  let nonprofitId: string;
+  let targetId: string;
   try {
-    ({ intakeId, nonprofitId } = await withTransaction(async (client) => {
-      const nonprofitId =
-        input.nonprofit_id ?? (await findOrCreateProvisionalNonprofit(client, input.from_email));
+    ({ intakeId, targetId } = await withTransaction(async (client) => {
+      const targetId =
+        input.target_id ?? (await findOrCreateProvisionalTarget(client, input.from_email));
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO intake_requests (from_email, subject, raw_body, nonprofit_id, status)
+        `INSERT INTO intake_requests (from_email, subject, raw_body, target_id, status)
          VALUES ($1, $2, $3, $4, 'received') RETURNING id`,
-        [input.from_email, input.subject ?? null, input.body, nonprofitId],
+        [input.from_email, input.subject ?? null, input.body, targetId],
       );
       const intakeId = ins.rows[0].id;
       for (const a of input.attachments ?? []) {
@@ -148,15 +145,11 @@ export async function receiveIntake(input: ReceiveInput) {
           [intakeId, a.uri, a.filename ?? null, a.content_type ?? null],
         );
       }
-      return { intakeId, nonprofitId };
+      return { intakeId, targetId };
     }));
   } catch (err: any) {
     if (err?.code === '23503' || err?.code === '22P02') {
-      throw new OpError(
-        400,
-        'bad_nonprofit_id',
-        'nonprofit_id does not reference a known nonprofit',
-      );
+      throw new OpError(400, 'bad_target_id', 'target_id does not reference a known target');
     }
     throw err;
   }
@@ -179,7 +172,7 @@ export async function receiveIntake(input: ReceiveInput) {
     [intakeId, JSON.stringify(proposed), triagedBy],
   );
 
-  return { intake_id: intakeId, nonprofit_id: nonprofitId, status: 'decomposed', proposed };
+  return { intake_id: intakeId, target_id: targetId, status: 'decomposed', proposed };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +211,7 @@ export async function getRequestStatus(token: string): Promise<RequestStatus | n
             (SELECT count(*)::int FROM tasks t WHERE t.intake_request_id = r.id) AS total,
             (SELECT count(*)::int FROM tasks t WHERE t.intake_request_id = r.id AND t.status = 'accepted') AS done
        FROM intake_requests r
-       JOIN nonprofits n ON n.id = r.nonprofit_id
+       JOIN targets n ON n.id = r.target_id
       WHERE r.id = $1`,
     [token],
   );
@@ -316,10 +309,10 @@ export async function completedRequestForTask(taskId: string): Promise<Completio
           AND NOT EXISTS (
             SELECT 1 FROM tasks t WHERE t.intake_request_id = r.id AND t.status <> 'accepted'
           )
-        RETURNING r.id, r.from_email, r.nonprofit_id
+        RETURNING r.id, r.from_email, r.target_id
      )
      SELECT c.id AS request_id, c.from_email, n.name AS org
-       FROM claimed c JOIN nonprofits n ON n.id = c.nonprofit_id`,
+       FROM claimed c JOIN targets n ON n.id = c.target_id`,
     [taskId],
   );
   return rows[0] ?? null;
@@ -381,9 +374,9 @@ export async function publishIntake(
   return withTransaction(async (client) => {
     const r = await client.query<{
       status: string;
-      nonprofit_id: string;
+      target_id: string;
       proposed: ProposedTask[] | null;
-    }>(`SELECT status, nonprofit_id, proposed FROM intake_requests WHERE id = $1 FOR UPDATE`, [
+    }>(`SELECT status, target_id, proposed FROM intake_requests WHERE id = $1 FOR UPDATE`, [
       intakeId,
     ]);
     const row = r.rows[0];
@@ -405,12 +398,12 @@ export async function publishIntake(
     for (const t of tasks) {
       const ins = await client.query<{ id: string }>(
         `INSERT INTO tasks
-           (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity,
+           (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity,
             intake_request_id, authored_by)
          VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'), $8, $9)
          RETURNING id`,
         [
-          row.nonprofit_id,
+          row.target_id,
           t.title,
           JSON.stringify(t.spec),
           t.est_cost_cents,
@@ -455,7 +448,7 @@ export async function listIntake(status?: string) {
     where = `WHERE status = $1`;
   }
   const { rows } = await query(
-    `SELECT id, from_email, subject, status, nonprofit_id, triaged_by, created_at,
+    `SELECT id, from_email, subject, status, target_id, triaged_by, created_at,
             jsonb_array_length(COALESCE(proposed, '[]'::jsonb)) AS proposed_count
        FROM intake_requests ${where}
       ORDER BY created_at DESC LIMIT 50`,

@@ -23,15 +23,15 @@ async function main() {
 
   // Find-or-create a throwaway nonprofit to own the task.
   const npName = 'Givework Test (dummy)';
-  let np = await pool.query<{ id: string }>(`SELECT id FROM nonprofits WHERE name = $1`, [npName]);
+  let np = await pool.query<{ id: string }>(`SELECT id FROM targets WHERE name = $1`, [npName]);
   if (np.rowCount === 0) {
     np = await pool.query<{ id: string }>(
-      `INSERT INTO nonprofits (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
+      `INSERT INTO targets (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
       [npName, 'test@givework.dev'],
     );
     console.log(`+ created nonprofit ${np.rows[0].id}`);
   }
-  const nonprofitId = np.rows[0].id;
+  const targetId = np.rows[0].id;
 
   // A small, genuinely-doable PUBLIC task: cheap cap, real prompt, simple schema —
   // so it works with the stub executor AND with EXECUTOR=claude (`claude -p`).
@@ -45,17 +45,10 @@ async function main() {
   };
 
   const task = await pool.query<{ id: string }>(
-    `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
+    `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
      VALUES ($1, $2, $3, $4, $5, $6, 'public')
      RETURNING id`,
-    [
-      nonprofitId,
-      'Summarize a short note (test)',
-      JSON.stringify(spec),
-      20,
-      100,
-      'claude-sonnet-4-6',
-    ],
+    [targetId, 'Summarize a short note (test)', JSON.stringify(spec), 20, 100, 'claude-sonnet-4-6'],
   );
 
   console.log(`\n✓ Seeded PUBLIC task ${task.rows[0].id}`);

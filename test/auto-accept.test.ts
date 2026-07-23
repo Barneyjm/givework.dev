@@ -3,7 +3,7 @@ import { closePool } from '../src/db.js';
 import { app } from '../src/server.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   getTaskRow,
   mintAdminToken,
@@ -26,7 +26,7 @@ function req(path: string, init?: RequestInit) {
 let np: string;
 beforeEach(async () => {
   await resetDb();
-  np = await createNonprofit();
+  np = await createTarget();
 });
 
 /** Drive a dev through checkout → submit on a public task via the HTTP routes. */

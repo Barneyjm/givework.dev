@@ -33,7 +33,7 @@ interface DevBudgetRow {
 
 interface TaskRow {
   id: string;
-  nonprofit_id: string;
+  target_id: string;
   title: string;
   spec: unknown;
   est_cost_cents: number;
@@ -170,7 +170,7 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
               lock_expires_at = now() + interval '10 minutes',
               reserved_period = ${CURRENT_PERIOD}
         WHERE id = $1 AND status = 'open'
-        RETURNING id, nonprofit_id, title, spec, model, max_cost_cents, lock_expires_at`,
+        RETURNING id, target_id, title, spec, model, max_cost_cents, lock_expires_at`,
       [taskId, devId],
     );
     if (claim.rowCount === 0) {
@@ -188,9 +188,9 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 
     // 5. Ledger: +max_cost reserved.
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'checkout', $4)`,
-      [taskId, devId, claimed.nonprofit_id, task.max_cost_cents],
+      [taskId, devId, claimed.target_id, task.max_cost_cents],
     );
 
     return {
@@ -302,8 +302,8 @@ export async function submitResult(
       : rawUsage;
 
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents, raw_usage)
-       SELECT $1, $2, t.nonprofit_id, 'submit', $3, $4
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents, raw_usage)
+       SELECT $1, $2, t.target_id, 'submit', $3, $4
          FROM tasks t WHERE t.id = $1`,
       [taskId, devId, spendApplied - reserved, JSON.stringify(usagePayload ?? null)],
     );
@@ -337,11 +337,11 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
-    const upd = await client.query<{ max_cost_cents: number; nonprofit_id: string }>(
+    const upd = await client.query<{ max_cost_cents: number; target_id: string }>(
       `UPDATE tasks
           SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
         WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-        RETURNING max_cost_cents, nonprofit_id`,
+        RETURNING max_cost_cents, target_id`,
       [taskId, devId],
     );
     if (upd.rowCount === 0) {
@@ -357,9 +357,9 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
     );
 
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'release', $4)`,
-      [taskId, devId, upd.rows[0].nonprofit_id, -reserved],
+      [taskId, devId, upd.rows[0].target_id, -reserved],
     );
 
     return { task_id: taskId, status: 'open', reserved_released: reserved };
@@ -391,11 +391,11 @@ export async function expire(): Promise<ExpireResult> {
     const candidates = await client.query<{
       id: string;
       assigned_dev_id: string;
-      nonprofit_id: string;
+      target_id: string;
       max_cost_cents: number;
       reserved_period: string | null;
     }>(
-      `SELECT id, assigned_dev_id, nonprofit_id, max_cost_cents, reserved_period
+      `SELECT id, assigned_dev_id, target_id, max_cost_cents, reserved_period
          FROM tasks
         WHERE status = 'locked' AND lock_expires_at < now()`,
     );
@@ -448,9 +448,9 @@ export async function expire(): Promise<ExpireResult> {
         [r.assigned_dev_id, r.max_cost_cents, r.reserved_period],
       );
       await client.query(
-        `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+        `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
          VALUES ($1, $2, $3, 'expire', $4)`,
-        [r.id, r.assigned_dev_id, r.nonprofit_id, -r.max_cost_cents],
+        [r.id, r.assigned_dev_id, r.target_id, -r.max_cost_cents],
       );
     }
 
@@ -468,20 +468,20 @@ export async function expire(): Promise<ExpireResult> {
 /** Accept a submitted task. Sets accepted_at, logs an accept ledger row (delta 0). */
 export async function acceptTask(taskId: string): Promise<{ task_id: string; status: 'accepted' }> {
   return withTransaction(async (client) => {
-    const upd = await client.query<{ dev_id: string; nonprofit_id: string }>(
+    const upd = await client.query<{ dev_id: string; target_id: string }>(
       `UPDATE tasks
           SET status = 'accepted', accepted_at = now()
         WHERE id = $1 AND status = 'submitted'
-        RETURNING assigned_dev_id AS dev_id, nonprofit_id`,
+        RETURNING assigned_dev_id AS dev_id, target_id`,
       [taskId],
     );
     if (upd.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_submitted', 'Task is not in submitted state');
     }
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'accept', 0)`,
-      [taskId, upd.rows[0].dev_id, upd.rows[0].nonprofit_id],
+      [taskId, upd.rows[0].dev_id, upd.rows[0].target_id],
     );
     return { task_id: taskId, status: 'accepted' };
   });
@@ -496,20 +496,20 @@ export async function acceptTask(taskId: string): Promise<{ task_id: string; sta
  */
 export async function rejectTask(taskId: string): Promise<{ task_id: string; status: 'open' }> {
   return withTransaction(async (client) => {
-    const upd = await client.query<{ dev_id: string; nonprofit_id: string }>(
+    const upd = await client.query<{ dev_id: string; target_id: string }>(
       `UPDATE tasks
           SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
         WHERE id = $1 AND status = 'submitted'
-        RETURNING assigned_dev_id AS dev_id, nonprofit_id`,
+        RETURNING assigned_dev_id AS dev_id, target_id`,
       [taskId],
     );
     if (upd.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_submitted', 'Task is not in submitted state');
     }
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'reject', 0)`,
-      [taskId, upd.rows[0].dev_id, upd.rows[0].nonprofit_id],
+      [taskId, upd.rows[0].dev_id, upd.rows[0].target_id],
     );
     return { task_id: taskId, status: 'open' };
   });
@@ -623,8 +623,8 @@ export interface LedgerEntry {
   id: number;
   task_id: string;
   task_title: string | null;
-  nonprofit_id: string;
-  nonprofit_name: string | null;
+  target_id: string;
+  target_name: string | null;
   event_type: string;
   delta_cents: number;
   created_at: string;
@@ -668,11 +668,11 @@ export async function getDevLedger(
   params.push(limit + 1);
   const { rows } = await query<LedgerEntry>(
     `SELECT l.id, l.task_id, t.title AS task_title,
-            l.nonprofit_id, n.name AS nonprofit_name,
+            l.target_id, n.name AS target_name,
             l.event_type, l.delta_cents, l.created_at
        FROM ledger l
        LEFT JOIN tasks t ON t.id = l.task_id
-       LEFT JOIN nonprofits n ON n.id = l.nonprofit_id
+       LEFT JOIN targets n ON n.id = l.target_id
       WHERE l.dev_id = $1 ${cursor}
       ORDER BY l.id DESC
       LIMIT $${params.length}`,
@@ -697,7 +697,7 @@ export interface DevStats {
   total_donated_cents: number;
   tasks_completed: number;
   tasks_accepted: number;
-  nonprofits_helped: number;
+  targets_helped: number;
   first_contribution_at: string | null;
   last_contribution_at: string | null;
   by_month: { month: string; donated_cents: number; tasks: number }[];
@@ -719,7 +719,7 @@ export async function getDevStats(devId: string): Promise<DevStats> {
     total_donated_cents: number;
     tasks_completed: number;
     tasks_accepted: number;
-    nonprofits_helped: number;
+    targets_helped: number;
     first_contribution_at: string | null;
     last_contribution_at: string | null;
   }>(
@@ -728,8 +728,8 @@ export async function getDevStats(devId: string): Promise<DevStats> {
                  FILTER (WHERE l.event_type = 'submit'), 0)::bigint AS total_donated_cents,
         COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'submit') AS tasks_completed,
         COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'accept') AS tasks_accepted,
-        COUNT(DISTINCT l.nonprofit_id)
-          FILTER (WHERE l.event_type IN ('submit', 'accept')) AS nonprofits_helped,
+        COUNT(DISTINCT l.target_id)
+          FILTER (WHERE l.event_type IN ('submit', 'accept')) AS targets_helped,
         MIN(l.created_at) FILTER (WHERE l.event_type = 'submit') AS first_contribution_at,
         MAX(l.created_at) FILTER (WHERE l.event_type = 'submit') AS last_contribution_at
        FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id
@@ -752,7 +752,7 @@ export async function getDevStats(devId: string): Promise<DevStats> {
     total_donated_cents: s.total_donated_cents,
     tasks_completed: s.tasks_completed,
     tasks_accepted: s.tasks_accepted,
-    nonprofits_helped: s.nonprofits_helped,
+    targets_helped: s.targets_helped,
     first_contribution_at: s.first_contribution_at,
     last_contribution_at: s.last_contribution_at,
     by_month: months.rows,
@@ -790,7 +790,7 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   const limitParam = `$${params.length}`;
 
   const { rows } = await query<TaskRow>(
-    `SELECT id, nonprofit_id, title, spec, est_cost_cents, max_cost_cents,
+    `SELECT id, target_id, title, spec, est_cost_cents, max_cost_cents,
             model, sensitivity, status, created_at
        FROM tasks
       WHERE ${conditions.join(' AND ')}
@@ -827,8 +827,8 @@ export async function getPublicTransparency(): Promise<Transparency> {
     `SELECT n.name,
             count(t.id)::int AS tasks_total,
             (count(t.id) FILTER (WHERE t.status = 'accepted'))::int AS tasks_accepted
-       FROM nonprofits n
-       LEFT JOIN tasks t ON t.nonprofit_id = n.id
+       FROM targets n
+       LEFT JOIN tasks t ON t.target_id = n.id
       WHERE n.listed = true
       GROUP BY n.id, n.name
       ORDER BY tasks_total DESC, n.name ASC`,

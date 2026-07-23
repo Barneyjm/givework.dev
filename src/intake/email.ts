@@ -5,7 +5,7 @@ import {
   type SendEmailBinding,
   sendEmail,
 } from '../mailer.js';
-import { findApprovedNonprofitForSender, receiveIntake } from './operations.js';
+import { findApprovedTargetForSender, receiveIntake } from './operations.js';
 
 // Inbound email → intake. This is the production front door for nonprofit
 // requests: Cloudflare Email Routing delivers mail for intake@givework.dev to
@@ -91,7 +91,7 @@ export type IngestResult =
   | {
       accepted: true;
       intake_id: string;
-      nonprofit_id: string;
+      target_id: string;
       // Context for the confirmation reply (with the status link). Always safe
       // here: the sender is allowlisted and DMARC-authenticated.
       reply: ReplyContext;
@@ -171,8 +171,8 @@ export async function ingestInboundEmail(
   if (!parsed.from) return { accepted: false, reason: 'no_sender' };
   if (!passed) return { accepted: false, reason: 'unauthenticated' };
 
-  const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
-  if (!nonprofitId) {
+  const targetId = await findApprovedTargetForSender(parsed.from);
+  if (!targetId) {
     return {
       accepted: false,
       reason: 'sender_not_approved',
@@ -187,12 +187,12 @@ export async function ingestInboundEmail(
     subject: parsed.subject ?? undefined,
     body: parsed.text,
     attachments: parsed.attachments,
-    nonprofit_id: nonprofitId,
+    target_id: targetId,
   });
   return {
     accepted: true,
     intake_id: r.intake_id,
-    nonprofit_id: nonprofitId,
+    target_id: targetId,
     reply: { subject: parsed.subject, inReplyTo: parsed.messageId },
   };
 }

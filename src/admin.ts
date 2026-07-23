@@ -47,14 +47,14 @@ adminRoutes.post('/devs', async (c) => {
   })(c);
 });
 
-adminRoutes.post('/nonprofits', async (c) => {
+adminRoutes.post('/targets', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     if (!body.name || !body.contact_email) {
       throw new OpError(400, 'bad_input', 'Missing name or contact_email');
     }
     const { rows } = await query(
-      `INSERT INTO nonprofits (name, ein, contact_email, verified)
+      `INSERT INTO targets (name, ein, contact_email, verified)
        VALUES ($1, $2, $3, $4) RETURNING id, name, ein, contact_email, verified`,
       [body.name, body.ein ?? null, body.contact_email, body.verified ?? false],
     );
@@ -64,14 +64,14 @@ adminRoutes.post('/nonprofits', async (c) => {
 
 // List every nonprofit with its identifier and task counts — the admin's
 // management/transparency view of who's in the system.
-adminRoutes.get('/nonprofits', (c) =>
+adminRoutes.get('/targets', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
       `SELECT n.id, n.name, n.contact_email, n.verified, n.listed,
-              (SELECT count(*)::int FROM nonprofit_identifiers i WHERE i.nonprofit_id = n.id) AS identifier_count,
-              (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id) AS tasks_total,
-              (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id AND t.status = 'accepted') AS tasks_accepted
-         FROM nonprofits n
+              (SELECT count(*)::int FROM target_identifiers i WHERE i.target_id = n.id) AS identifier_count,
+              (SELECT count(*)::int FROM tasks t WHERE t.target_id = n.id) AS tasks_total,
+              (SELECT count(*)::int FROM tasks t WHERE t.target_id = n.id AND t.status = 'accepted') AS tasks_accepted
+         FROM targets n
         ORDER BY n.created_at ASC`,
     );
     return rows;
@@ -79,16 +79,16 @@ adminRoutes.get('/nonprofits', (c) =>
 );
 
 // One nonprofit plus all its allowlist identifiers — what an admin edits.
-adminRoutes.get('/nonprofits/:id', (c) =>
+adminRoutes.get('/targets/:id', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
-      `SELECT id, name, ein, contact_email, verified, listed FROM nonprofits WHERE id = $1`,
+      `SELECT id, name, ein, contact_email, verified, listed FROM targets WHERE id = $1`,
       [c.req.param('id')],
     );
-    if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
     const ids = await query(
-      `SELECT id, kind, value, created_at FROM nonprofit_identifiers
-        WHERE nonprofit_id = $1 ORDER BY kind, value`,
+      `SELECT id, kind, value, created_at FROM target_identifiers
+        WHERE target_id = $1 ORDER BY kind, value`,
       [c.req.param('id')],
     );
     return { ...rows[0], identifiers: ids.rows };
@@ -98,11 +98,11 @@ adminRoutes.get('/nonprofits/:id', (c) =>
 // Override any of a nonprofit's fields — verify/unverify, list/unlist publicly,
 // or fix its name/contact/EIN. Only provided fields change (COALESCE keeps the
 // rest); pass verified/listed explicitly to flip them.
-adminRoutes.post('/nonprofits/:id', async (c) => {
+adminRoutes.post('/targets/:id', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     const { rows } = await query(
-      `UPDATE nonprofits SET
+      `UPDATE targets SET
           name = COALESCE($2, name),
           ein = COALESCE($3, ein),
           contact_email = COALESCE($4, contact_email),
@@ -119,7 +119,7 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
         body.listed ?? null,
       ],
     );
-    if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
     return rows[0];
   })(c);
 });
@@ -127,7 +127,7 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
 const IDENTIFIER_KINDS = new Set(['email', 'domain', 'email_deny', 'domain_deny']);
 
 // Add an allowlist identifier (email/domain, allow or deny) to a nonprofit.
-adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
+adminRoutes.post('/targets/:id/identifiers', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     const kind = String(body.kind ?? '');
@@ -151,12 +151,12 @@ adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
     if (!isEmail && value.includes('@')) {
       throw new OpError(400, 'bad_input', 'a domain identifier must not contain @');
     }
-    const np = await query(`SELECT 1 FROM nonprofits WHERE id = $1`, [c.req.param('id')]);
-    if (np.rowCount === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    const np = await query(`SELECT 1 FROM targets WHERE id = $1`, [c.req.param('id')]);
+    if (np.rowCount === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
     try {
       const { rows } = await query(
-        `INSERT INTO nonprofit_identifiers (nonprofit_id, kind, value)
-         VALUES ($1, $2, $3) RETURNING id, nonprofit_id, kind, value, created_at`,
+        `INSERT INTO target_identifiers (target_id, kind, value)
+         VALUES ($1, $2, $3) RETURNING id, target_id, kind, value, created_at`,
         [c.req.param('id'), kind, value],
       );
       return rows[0];
@@ -170,10 +170,10 @@ adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
 });
 
 // Remove an allowlist identifier.
-adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
+adminRoutes.delete('/targets/:id/identifiers/:identifierId', (c) =>
   adminHandle(async () => {
     const { rowCount } = await query(
-      `DELETE FROM nonprofit_identifiers WHERE id = $1 AND nonprofit_id = $2`,
+      `DELETE FROM target_identifiers WHERE id = $1 AND target_id = $2`,
       [c.req.param('identifierId'), c.req.param('id')],
     );
     if (rowCount === 0)
@@ -185,24 +185,17 @@ adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
 adminRoutes.post('/tasks', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
-    for (const f of [
-      'nonprofit_id',
-      'title',
-      'spec',
-      'est_cost_cents',
-      'max_cost_cents',
-      'model',
-    ]) {
+    for (const f of ['target_id', 'title', 'spec', 'est_cost_cents', 'max_cost_cents', 'model']) {
       if (body[f] === undefined || body[f] === null) {
         throw new OpError(400, 'bad_input', `Missing field: ${f}`);
       }
     }
     const { rows } = await query(
-      `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
+      `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity, 'public'))
-       RETURNING id, nonprofit_id, title, est_cost_cents, max_cost_cents, model, sensitivity, status`,
+       RETURNING id, target_id, title, est_cost_cents, max_cost_cents, model, sensitivity, status`,
       [
-        body.nonprofit_id,
+        body.target_id,
         body.title,
         JSON.stringify(body.spec),
         body.est_cost_cents,

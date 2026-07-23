@@ -4,7 +4,7 @@ import { acceptTask, checkoutTask, releaseTask, submitResult } from '../src/oper
 import { app } from '../src/server.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   mintDevToken,
   resetDb,
@@ -30,7 +30,7 @@ let np: string;
 
 beforeEach(async () => {
   await resetDb();
-  np = await createNonprofit('Helpful Org');
+  np = await createTarget('Helpful Org');
   alice = await createDev('alice');
   aliceTok = await mintDevToken(alice);
   await setBudget(alice, 5000);
@@ -61,7 +61,7 @@ describe('GET /devs/me/ledger', () => {
     expect(body.entries.map((e: any) => e.event_type)).toEqual(['submit', 'checkout']);
     expect(body.entries[0]).toMatchObject({
       task_title: 'Summarize intake',
-      nonprofit_name: 'Helpful Org',
+      target_name: 'Helpful Org',
       delta_cents: 380 - 500, // submit nets spend - reservation
     });
     expect(body.entries[1].delta_cents).toBe(500); // checkout reservation
@@ -121,7 +121,7 @@ describe('GET /devs/me/stats', () => {
     expect(s.total_donated_cents).toBe(380 + 420);
     expect(s.tasks_completed).toBe(2);
     expect(s.tasks_accepted).toBe(1);
-    expect(s.nonprofits_helped).toBe(1);
+    expect(s.targets_helped).toBe(1);
     expect(s.first_contribution_at).toBeTruthy();
     expect(s.last_contribution_at).toBeTruthy();
     expect(s.by_month).toHaveLength(1);
@@ -147,7 +147,7 @@ describe('GET /devs/me/stats', () => {
     await pool.query(`UPDATE ledger SET task_id = NULL WHERE dev_id = $1`, [alice]);
 
     const s = await getJson('/devs/me/stats', aliceTok);
-    expect(s.nonprofits_helped).toBe(1); // the submit row survives the join
+    expect(s.targets_helped).toBe(1); // the submit row survives the join
     expect(s.first_contribution_at).toBeTruthy();
     expect(s.last_contribution_at).toBeTruthy();
     expect(s.total_donated_cents).toBe(0); // no task → no max_cost → omitted, not crashed
@@ -162,7 +162,7 @@ describe('GET /devs/me/stats', () => {
       total_donated_cents: 0,
       tasks_completed: 0,
       tasks_accepted: 0,
-      nonprofits_helped: 0,
+      targets_helped: 0,
       first_contribution_at: null,
       last_contribution_at: null,
       by_month: [],

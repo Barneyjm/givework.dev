@@ -3,7 +3,7 @@ import { closePool, pool } from '../src/db.js';
 import { expire, releaseTask, submitResult } from '../src/operations.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   forceLocked,
   getBudgetRow,
@@ -30,7 +30,7 @@ let prev: string;
 beforeEach(async () => {
   await resetDb();
   dev = await createDev('alice');
-  np = await createNonprofit();
+  np = await createTarget();
   prev = await lastMonth();
   // Reservation was made last month (500 held there); also a fresh current-month budget.
   await setBudgetForPeriod(dev, prev, 2000, 500);

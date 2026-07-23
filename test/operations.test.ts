@@ -10,7 +10,7 @@ import {
 } from '../src/operations.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   expireLockNow,
   getBudgetRow,
@@ -26,7 +26,7 @@ let np: string;
 beforeEach(async () => {
   await resetDb();
   dev = await createDev('alice');
-  np = await createNonprofit();
+  np = await createTarget();
 });
 
 afterAll(closePool);

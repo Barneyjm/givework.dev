@@ -4,7 +4,7 @@ import { shouldAutoVerify } from '../src/oauth.js';
 import { app } from '../src/server.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   getBudgetRow,
   mintAdminToken,
@@ -227,7 +227,7 @@ describe('sensitivity trust gate', () => {
   let sensitiveTask: string;
 
   beforeEach(async () => {
-    np = await createNonprofit();
+    np = await createTarget();
     dev = await createDev('gated'); // unverified by default
     tok = await mintDevToken(dev);
     await setBudget(dev, 5000);
@@ -308,7 +308,7 @@ describe('self-serve budget', () => {
   });
 
   it('rejects a budget below what is already reserved (409)', async () => {
-    const np = await createNonprofit();
+    const np = await createTarget();
     const task = await createTask(np, { max: 500 });
     await setBudget(dev, 1000);
     // Reserve 500 by checking out.

@@ -3,7 +3,7 @@ import { closePool, pool } from '../src/db.js';
 import { checkoutTask, expire, OpError, releaseTask, submitResult } from '../src/operations.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   expireLockNow,
   resetDb,
@@ -51,7 +51,7 @@ describe('invariant fuzz (criterion 10)', () => {
       await setBudget(d, 2000 + i * 500); // $20–$30
       devIds.push(d);
     }
-    const np = await createNonprofit();
+    const np = await createTarget();
 
     const taskIds: string[] = [];
     for (let i = 0; i < 8; i++) {

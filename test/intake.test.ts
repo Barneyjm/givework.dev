@@ -34,7 +34,7 @@ describe('receive', () => {
     // Inbound defaults to sensitive.
     expect(r.proposed.every((t) => t.sensitivity === 'sensitive')).toBe(true);
 
-    const np = await pool.query(`SELECT verified FROM nonprofits WHERE id = $1`, [r.nonprofit_id]);
+    const np = await pool.query(`SELECT verified FROM targets WHERE id = $1`, [r.target_id]);
     expect(np.rows[0].verified).toBe(false); // provisional
 
     const full = await getIntake(r.intake_id);
@@ -45,22 +45,22 @@ describe('receive', () => {
   it('reuses the same provisional nonprofit for repeat emails from one sender', async () => {
     const a = await receiveIntake({ from_email: 'x@org.org', body: 'first ask' });
     const b = await receiveIntake({ from_email: 'x@org.org', body: 'second ask' });
-    expect(a.nonprofit_id).toBe(b.nonprofit_id);
+    expect(a.target_id).toBe(b.target_id);
   });
 
-  it('maps a bad caller-supplied nonprofit_id to a clean 400, not a 500', async () => {
-    // The admin manual path can pass nonprofit_id directly; a stale/typo'd value
+  it('maps a bad caller-supplied target_id to a clean 400, not a 500', async () => {
+    // The admin manual path can pass target_id directly; a stale/typo'd value
     // must surface as bad_input rather than an unhandled FK/UUID error.
     await expect(
-      receiveIntake({ from_email: 'x@org.org', body: 'hi', nonprofit_id: 'not-a-uuid' }),
-    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+      receiveIntake({ from_email: 'x@org.org', body: 'hi', target_id: 'not-a-uuid' }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_target_id' });
     await expect(
       receiveIntake({
         from_email: 'x@org.org',
         body: 'hi',
-        nonprofit_id: '00000000-0000-0000-0000-000000000000',
+        target_id: '00000000-0000-0000-0000-000000000000',
       }),
-    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+    ).rejects.toMatchObject({ status: 400, code: 'bad_target_id' });
   });
 });
 

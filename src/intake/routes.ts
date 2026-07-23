@@ -34,7 +34,7 @@ adminIntakeRoutes.post('/intake', async (c) => {
       subject: body.subject,
       body: body.body,
       attachments: body.attachments,
-      nonprofit_id: body.nonprofit_id,
+      target_id: body.target_id,
     }),
   )(c);
 });

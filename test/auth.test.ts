@@ -3,7 +3,7 @@ import { closePool } from '../src/db.js';
 import { app } from '../src/server.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   getBudgetRow,
   mintAdminToken,
@@ -29,7 +29,7 @@ let task: string;
 
 beforeEach(async () => {
   await resetDb();
-  const np = await createNonprofit();
+  const np = await createTarget();
   alice = await createDev('alice');
   aliceTok = await mintDevToken(alice);
   await setBudget(alice, 2000);
