@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conjecture — Givework</title>
+<meta name="description" content="A conjecture worked in the open on Givework: the statement, the current frontier, and a live feed of every contribution." />
+<!-- Served by the Worker at /conjectures/<slug> (content-negotiated: browsers get
+     this page, API clients get JSON). The slug comes from the URL path and the
+     page renders the same JSON the API serves at this URL. -->
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  /* Conjecture-detail-only styles. */
+  .detail { padding: clamp(2.5rem, 6vw, 5rem) 0; }
+  .crumb { font-family:'Space Mono',monospace; font-size:.8rem; }
+  .crumb a { color: inherit; }
+  .head { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin:.8rem 0 0; }
+  .head h1 { margin:0; font-size:clamp(1.7rem, 4.5vw, 2.8rem); letter-spacing:-.02em; }
+  .badge { font-family:'Space Mono',monospace; font-size:.75rem; text-transform:uppercase;
+           padding:.25rem .6rem; border: var(--line); white-space:nowrap; }
+  .badge--open { background: var(--yellow); }
+  .badge--settled { background: var(--ink); color: var(--paper); }
+  .stmt { font-size:1.15rem; font-weight:300; max-width:64ch; margin:1.2rem 0 .4rem; }
+  .mono { font-family:'Space Mono',monospace; }
+  .src { font-size:.82rem; opacity:.7; margin:.2rem 0 0; }
+  .formal { font-size:.9rem; margin:.6rem 0 0; overflow-x:auto; }
+  .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin:2rem 0 0; }
+  .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
+  .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
+  .metric .k { font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+  .frontier { margin:2rem 0 0; border: var(--line); background: var(--ink); color: var(--paper);
+              padding:1rem 1.2rem; font-family:'Space Mono',monospace; font-size:.82rem; overflow-x:auto; }
+  .frontier .k { color: var(--yellow); text-transform:uppercase; font-size:.7rem; display:block; margin-bottom:.4rem; }
+  .feed-head { margin:2.6rem 0 0; }
+  .feed { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
+  .feed li { border-bottom: 1px solid #16131033; padding:.8rem .2rem; font-weight:300; display:flex; gap:.9rem; align-items:baseline; }
+  .feed .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+              padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
+  .feed .oc--candidate_solution { background: var(--yellow); }
+  .feed .oc--progress { background: #fff; }
+  .feed .oc--dead_end { background: var(--red); color:#fff; border-color: var(--ink); }
+  .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
+  .board-msg { font-weight:300; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/>
+        <circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/>
+        <polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/conjectures">All conjectures</a>
+      <a class="navlink" href="/volunteers">For contributors</a>
+      <a class="cta mono" href="mailto:hello@givework.dev?subject=Open%20problem%20proposal">Propose a problem</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="detail">
+    <div class="wrap" id="page">
+      <p class="board-msg">Loading…</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+<script>
+// Render the conjecture whose slug is the last path segment. The API serves the
+// JSON at this same URL; ask for it explicitly so content negotiation picks JSON.
+(function () {
+  var page = document.getElementById('page');
+  var esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var dollars = function (cents) { return '$' + (cents / 100).toFixed(2); };
+  var when = function (iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+  var OPEN = { open: 1, partially_resolved: 1 };
+
+  var slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+  if (!slug || slug === 'conjecture') {
+    location.replace('/conjectures');
+    return;
+  }
+
+  function render(d) {
+    document.title = d.name + ' — Givework';
+    var settled = !OPEN[d.status];
+    var m = d.metrics;
+    var h = '<p class="crumb"><a href="/conjectures">← All conjectures</a></p>';
+    h += '<div class="head"><h1>' + esc(d.name) + '</h1>' +
+      '<span class="badge ' + (settled ? 'badge--settled' : 'badge--open') + '">' +
+      esc(d.status.replace('_', ' ')) + '</span></div>';
+    h += '<p class="stmt">' + esc(d.statement_plain || 'No plain statement recorded yet.') + '</p>';
+    if (d.statement_formal) h += '<p class="mono formal">' + esc(d.statement_formal) + '</p>';
+    if (d.source_ref) h += '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    h += '<div class="metrics">' +
+      '<div class="metric"><span class="v">' + m.tasks_open + '/' + m.tasks_total + '</span><span class="k">tasks open</span></div>' +
+      '<div class="metric"><span class="v">' + m.contributions + '</span><span class="k">contributions</span></div>' +
+      '<div class="metric"><span class="v">' + m.contributors + '</span><span class="k">contributors</span></div>' +
+      '<div class="metric"><span class="v">' + dollars(m.compute_cents) + '</span><span class="k">compute donated</span></div>' +
+      '</div>';
+    if (d.state && Object.keys(d.state).length) {
+      h += '<div class="frontier"><span class="k">Current frontier</span>' +
+        esc(JSON.stringify(d.state, null, 1)) + '</div>';
+    }
+    h += '<div class="section-head feed-head"><span class="eyebrow">Every attempt, logged</span><h3>Recent contributions.</h3></div>';
+    if (d.recent_contributions && d.recent_contributions.length) {
+      h += '<ul class="feed">';
+      d.recent_contributions.forEach(function (r) {
+        h += '<li><span class="oc oc--' + esc(r.outcome) + '">' + esc(r.outcome.replace('_', ' ')) + '</span>' +
+          '<span>' + esc(r.summary || '(no summary)') + '</span>' +
+          '<span class="when">' + when(r.created_at) + '</span></li>';
+      });
+      h += '</ul>';
+    } else {
+      h += '<p class="board-msg">No contributions yet — be the first to chip.</p>';
+    }
+    page.innerHTML = h;
+  }
+
+  fetch('/conjectures/' + encodeURIComponent(slug), { headers: { accept: 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(render)
+    .catch(function (e) {
+      page.innerHTML = String(e.message) === '404'
+        ? '<p class="board-msg">No conjecture called <span class="mono">' + esc(slug) + '</span>. <a href="/conjectures">Back to the board →</a></p>'
+        : '<p class="board-msg">Couldn’t load this conjecture. The raw feed is at <span class="mono">/conjectures/' + esc(slug) + '</span>.</p>';
+    });
+})();
+</script>
+
+</body>
+</html>
