@@ -350,21 +350,24 @@ actually license is the *code*, the *write-up*, and *data collections*.
 ## Phased rollout
 
 Each phase is independently shippable and leaves `main` green (`lint` +
-`typecheck` + `test`).
+`typecheck` + `test`). All the pivot's schema changes live in one migration,
+`007_math_pivot.sql` (consolidated while this PR is still open — no need to
+proliferate files that never shipped separately).
 
-1. **Reframe (docs only)** — this document + tagline; no logic change.
-2. **Generic domain model** — migration `007`, `kind` discriminator, vetting
-   flagged off, field renames in `operations.ts`. Behaviour otherwise identical.
-3. **Resumable tasks + contributions** — `contributions` table, `contribute`
-   semantics, `state` hydration on checkout, and a compaction/librarian task. (The
-   continuation model — highest-value, do it early.)
-4. **Decomposition** — math attack-plan schema + prompts; rework `StubDecomposer`.
-5. **Verification core** — `verify.ts` with `auto_rerun` + `human_review` first
-   (no new toolchain), the `verifications` table, and the disproof status-flip.
-6. **Sandbox + `proof_checker` + `replication`** — trusted sandbox, Lean/Coq
-   checking, K-of-N replication.
-7. **Public surface** — disable allowlist/DMARC, ship `/submissions`,
-   `/leaderboard`, `/targets/:id`; you seed the initial conjectures.
+1. ✅ **Reframe (docs)** — this document + the licensing stub.
+2. ✅ **Generic domain model** — `nonprofits → targets` with a `kind`
+   discriminator; the correctness axis on tasks; vetting kept dormant.
+3. ✅ **Resumable tasks + contributions** — the `contributions` log, `contribute`
+   semantics, `state` hydration on checkout. (Librarian compaction still deferred;
+   the cheap per-contribution path is in.)
+4. ✅ **Decomposition** — math attack-plan schema + prompts; reworked `StubDecomposer`.
+5. ✅ **Verification core** — `verify.ts` with `auto_rerun` + `human_review`, the
+   `verifications` table, and the disproof status-flip.
+6. ⏳ **Sandbox + `proof_checker` + `replication`** — trusted sandbox, Lean/Coq
+   checking, K-of-N replication. (Next.)
+7. ✅ **Public surface** — public `POST /submissions` (no allowlist/DMARC vetting),
+   `GET /leaderboard`, `GET /conjectures/:slug`, and a `seed-conjectures` starter
+   set. The email allowlist path is kept but dormant.
 
 ---
 

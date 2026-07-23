@@ -3,7 +3,7 @@ import { adminRoutes } from './admin.js';
 import { type Principal, requireAdmin, requireDev } from './auth.js';
 import { query } from './db.js';
 import { devRoutes } from './devs.js';
-import { getRequestResultsForToken, getRequestStatus } from './intake/operations.js';
+import { getRequestResultsForToken, getRequestStatus, receiveIntake } from './intake/operations.js';
 import { adminIntakeRoutes } from './intake/routes.js';
 import type { SendEmailBinding } from './mailer.js';
 import { oauthRoutes } from './oauth.js';
@@ -11,6 +11,7 @@ import {
   checkoutTask,
   expire,
   getBudget,
+  getLeaderboard,
   getPublicTransparency,
   getTargetProgress,
   isDevVerified,
@@ -116,6 +117,37 @@ app.get('/conjectures/:slug', (c) =>
     return p;
   })(c),
 );
+
+// Public leaderboard — curated conjectures with progress + top contributors by
+// donated compute. Drives the marketing site's "what's being worked on" surface.
+app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
+
+// Public problem submission — anyone can propose an open problem in plain
+// language. No allowlist/DMARC vetting (that gated PII; open math has none), and
+// safe to open because nothing is spent until an admin reviews and publishes the
+// draft. Public-safe response: never expose the proposed tasks, costs, or models.
+// STAGE: add rate-limiting before launch (this triggers a stub decomposition).
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+app.post('/submissions', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return handle(async () => {
+    const email = String(body.from_email ?? '').trim();
+    const text = String(body.body ?? '').trim();
+    if (!EMAIL_RE.test(email)) {
+      throw new OpError(400, 'bad_input', 'a valid from_email is required');
+    }
+    if (text.length < 10 || text.length > 10_000) {
+      throw new OpError(400, 'bad_input', 'body must be between 10 and 10000 characters');
+    }
+    const subject = body.subject != null ? String(body.subject).slice(0, 200) : undefined;
+    const r = await receiveIntake({ from_email: email, subject, body: text });
+    return {
+      submission_id: r.intake_id,
+      status: 'received',
+      status_url: `/requests/${r.intake_id}`,
+    };
+  })(c);
+});
 
 // Public per-request status — the capability is the unguessable request id in the
 // link a nonprofit gets by email. Plain-language stage + progress only; 404 for

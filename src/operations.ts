@@ -1097,3 +1097,94 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     })),
   };
 }
+
+// ---------------------------------------------------------------------------
+// public leaderboard
+// ---------------------------------------------------------------------------
+
+export interface LeaderboardConjecture {
+  slug: string;
+  name: string;
+  status: string;
+  tasks_total: number;
+  contributions: number;
+  contributors: number;
+  compute_cents: number;
+}
+
+export interface LeaderboardContributor {
+  github_handle: string;
+  tasks: number;
+  donated_cents: number;
+}
+
+export interface Leaderboard {
+  totals: {
+    conjectures: number;
+    open: number;
+    settled: number;
+    contributors: number;
+    compute_cents: number;
+  };
+  conjectures: LeaderboardConjecture[];
+  contributors: LeaderboardContributor[];
+}
+
+/**
+ * The public "who's chipping at what" rollup: curated conjectures (a target is
+ * curated once it has a slug) with their progress, and the top contributors by
+ * donated compute. No PII, no task content — names, slugs, statuses, counts, and
+ * donated cents only. Drives GET /leaderboard.
+ */
+export async function getLeaderboard(): Promise<Leaderboard> {
+  const conjecturesP = query<LeaderboardConjecture>(
+    `SELECT tg.slug, tg.name, tg.status::text AS status,
+            (SELECT count(*)::int FROM tasks t WHERE t.target_id = tg.id) AS tasks_total,
+            (SELECT count(*)::int FROM contributions c WHERE c.target_id = tg.id) AS contributions,
+            (SELECT count(DISTINCT c.dev_id)::int FROM contributions c WHERE c.target_id = tg.id) AS contributors,
+            (SELECT COALESCE(SUM(c.cost_cents), 0)::bigint FROM contributions c WHERE c.target_id = tg.id) AS compute_cents
+       FROM targets tg
+      WHERE tg.slug IS NOT NULL AND tg.kind::text = ANY($1::text[])
+      ORDER BY compute_cents DESC, tg.name ASC`,
+    [PUBLIC_TARGET_KINDS],
+  );
+  const contributorsP = query<LeaderboardContributor>(
+    `SELECT d.github_handle,
+            count(DISTINCT c.task_id)::int AS tasks,
+            COALESCE(SUM(c.cost_cents), 0)::bigint AS donated_cents
+       FROM contributions c
+       JOIN devs d ON d.id = c.dev_id
+      GROUP BY d.id, d.github_handle
+      ORDER BY donated_cents DESC, tasks DESC
+      LIMIT 20`,
+  );
+  const totalsP = query<{
+    conjectures: number;
+    open: number;
+    settled: number;
+    contributors: number;
+    compute_cents: number;
+  }>(
+    `SELECT
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[])) AS conjectures,
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[]) AND status = 'open') AS open,
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[])
+            AND status IN ('resolved', 'disproven')) AS settled,
+        (SELECT count(DISTINCT dev_id)::int FROM contributions) AS contributors,
+        (SELECT COALESCE(SUM(cost_cents), 0)::bigint FROM contributions) AS compute_cents`,
+    [PUBLIC_TARGET_KINDS],
+  );
+  const [conjectures, contributors, totals] = await Promise.all([
+    conjecturesP,
+    contributorsP,
+    totalsP,
+  ]);
+  return {
+    totals: totals.rows[0],
+    conjectures: conjectures.rows,
+    contributors: contributors.rows,
+  };
+}
