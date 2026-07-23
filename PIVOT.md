@@ -312,6 +312,41 @@ mathematics." Logo and domain stay.
 
 ---
 
+## Licensing & IP of findings
+
+> Stub — the intended posture, **not legal advice**. Get counsel's read before launch.
+
+Two sides that people conflate: the **outbound license** (what the world may do
+with a finding) and the **inbound terms** (what a contributor grants on submit).
+The mathematics itself is largely *unownable* — a theorem, a proof's logic, a
+counterexample are facts and ideas, not copyrightable expression — so what we
+actually license is the *code*, the *write-up*, and *data collections*.
+
+| Artifact | License | Rationale |
+| --- | --- | --- |
+| **Code** — Lean/Coq proofs, search programs | **Apache-2.0** | Patent grant + liability disclaimer; matches this repo *and* Lean `mathlib`, so contributions are upstreamable. |
+| **Data** — verified ranges, tables | **CC0** | Facts should be free; sidesteps EU database rights. |
+| **Write-ups** — expositions, site content | **CC-BY-4.0** | Credit flows to contributors; arXiv/journal-friendly. |
+| **The finding/fact itself** | *unownable — public domain by nature* | We claim nothing; that's both the shield and the ethos. |
+
+- **Inbound:** a **DCO** (`Signed-off-by`), not copyright assignment — the
+  contributor keeps their copyright, attests they have the right to submit, and
+  agrees to the project license (a provenance chain if someone submits third-party
+  work). A CLA is the heavier fallback if scale demands. Contributions must comply
+  with Anthropic's terms for Claude output.
+- **"Covers us" is mostly disclaimers, not the grant.** A prominent correctness
+  disclaimer — *"produced by automated agents, machine-checked where possible, not
+  peer-reviewed, may be wrong, no warranty"* — is the real shield against reliance
+  on a bad result. Reserve the **Givework** trademark so forgeries can't pose as
+  official findings (Apache-2.0 already grants no trademark rights).
+- **"Worth contributing" is the priority ledger.** Permissive-open means the work
+  can't be enclosed; the public, timestamped record of *who found what, when* is
+  the real incentive — mathematicians contribute for credit, not license terms.
+- **Open decisions:** DCO vs CLA (lean DCO — friction kills contribution); CC-BY
+  vs CC-BY-SA for write-ups (lean CC-BY for reuse).
+
+---
+
 ## Phased rollout
 
 Each phase is independently shippable and leaves `main` green (`lint` +

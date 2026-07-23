@@ -81,3 +81,17 @@ Every push and PR runs three jobs (`.github/workflows/ci.yml`): `test`
   separate from behavior changes, so reviewers can use "Hide whitespace".
 - Open a PR against `main`. Make sure `npm run lint`, `npm run typecheck`, and
   `npm test` all pass locally first.
+
+## Licensing of contributions (proposed)
+
+> Stub for the open-mathematics pivot; see [PIVOT.md](PIVOT.md#licensing--ip-of-findings).
+> Not yet in force — the project code is Apache-2.0 today.
+
+The intended posture for *findings* (proofs, formalizations, counterexamples,
+data) once the pivot lands: contributed **code** under Apache-2.0 (matching this
+repo and Lean `mathlib`), **data** under CC0, **write-ups** under CC-BY-4.0, and
+the mathematical facts themselves treated as unownable public domain. Inbound,
+we plan a **Developer Certificate of Origin** (`Signed-off-by`) rather than
+copyright assignment — you keep your copyright and attest you have the right to
+submit. Findings carry a correctness disclaimer (automated, machine-checked where
+possible, not peer-reviewed).
