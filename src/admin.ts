@@ -47,18 +47,57 @@ adminRoutes.post('/devs', async (c) => {
   })(c);
 });
 
+const TARGET_KINDS = new Set(['conjecture', 'research_question', 'org_request']);
+
+/** URL-safe slug from a name/label: lowercase, non-alphanumerics to hyphens. */
+function slugify(s: string): string {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+// Create a target. During the math phase this is how conjectures are seeded:
+// name + slug + statement + kind. contact_email is optional (org-specific,
+// dormant); it's only meaningful for the org_request kind.
 adminRoutes.post('/targets', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
-    if (!body.name || !body.contact_email) {
-      throw new OpError(400, 'bad_input', 'Missing name or contact_email');
+    if (!body.name) throw new OpError(400, 'bad_input', 'Missing name');
+    const kind = body.kind ?? 'conjecture';
+    if (!TARGET_KINDS.has(kind)) {
+      throw new OpError(400, 'bad_input', `kind must be one of ${[...TARGET_KINDS].join(', ')}`);
     }
-    const { rows } = await query(
-      `INSERT INTO targets (name, ein, contact_email, verified)
-       VALUES ($1, $2, $3, $4) RETURNING id, name, ein, contact_email, verified`,
-      [body.name, body.ein ?? null, body.contact_email, body.verified ?? false],
-    );
-    return rows[0];
+    const slug = body.slug ? slugify(body.slug) : null;
+    try {
+      const { rows } = await query(
+        `INSERT INTO targets
+           (name, kind, slug, statement_plain, statement_formal, source_ref, ein, contact_email, verified)
+         VALUES ($1, $2::target_kind, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, name, kind, slug, status, statement_plain, statement_formal, source_ref,
+                   ein, contact_email, verified`,
+        [
+          body.name,
+          kind,
+          slug,
+          body.statement_plain ?? null,
+          body.statement_formal ?? null,
+          body.source_ref ?? null,
+          body.ein ?? null,
+          body.contact_email ?? null,
+          body.verified ?? false,
+        ],
+      );
+      return rows[0];
+    } catch (err: any) {
+      // Unique violation on slug -> a clean 409 instead of a 500.
+      if (err?.code === '23505') {
+        throw new OpError(409, 'slug_taken', 'That slug is already in use');
+      }
+      throw err;
+    }
   })(c);
 });
 

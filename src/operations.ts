@@ -981,3 +981,119 @@ export async function getPublicTransparency(): Promise<Transparency> {
   );
   return { totals, orgs: rows };
 }
+
+// ---------------------------------------------------------------------------
+// public per-target (conjecture) progress
+// ---------------------------------------------------------------------------
+
+export interface TargetProgressMetrics {
+  tasks_total: number;
+  tasks_open: number;
+  tasks_resolved: number; // accepted
+  contributions: number;
+  contributors: number; // distinct devs
+  compute_cents: number; // total donated toward this target
+  last_activity_at: string | null;
+}
+
+export interface TargetProgress {
+  slug: string;
+  name: string;
+  kind: string;
+  status: string;
+  statement_plain: string | null;
+  statement_formal: string | null;
+  source_ref: string | null;
+  state: unknown; // compacted working set (current frontier, next steps)
+  created_at: string;
+  metrics: TargetProgressMetrics;
+  recent_contributions: { outcome: string; summary: string; created_at: string }[];
+}
+
+// Only inherently-public kinds are exposed by slug. org_request work (the future
+// vetted-org path) is never served on the public progress page.
+const PUBLIC_TARGET_KINDS = ['conjecture', 'research_question'];
+
+/**
+ * Public progress for one conjecture, keyed by its human-readable slug: the
+ * statement, current status, the compacted working set, roll-up metrics, and a
+ * feed of the most recent contributions (the handoff notes read as a progress
+ * log). No PII — conjectures are public. Returns null for an unknown slug or a
+ * non-public kind. Backs GET /conjectures/:slug.
+ */
+export async function getTargetProgress(slug: string): Promise<TargetProgress | null> {
+  const { rows } = await query<{
+    id: string;
+    slug: string;
+    name: string;
+    kind: string;
+    status: string;
+    statement_plain: string | null;
+    statement_formal: string | null;
+    source_ref: string | null;
+    state: unknown;
+    created_at: string | Date;
+  }>(
+    `SELECT id, slug, name, kind::text AS kind, status::text AS status,
+            statement_plain, statement_formal, source_ref, state, created_at
+       FROM targets
+      WHERE slug = $1 AND kind::text = ANY($2::text[])`,
+    [slug, PUBLIC_TARGET_KINDS],
+  );
+  const t = rows[0];
+  if (!t) return null;
+
+  const m = await query<{
+    tasks_total: number;
+    tasks_open: number;
+    tasks_resolved: number;
+    contributions: number;
+    contributors: number;
+    compute_cents: number;
+    last_activity_at: string | Date | null;
+  }>(
+    `SELECT
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1) AS tasks_total,
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1 AND status = 'open') AS tasks_open,
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1 AND status = 'accepted') AS tasks_resolved,
+        (SELECT count(*)::int FROM contributions WHERE target_id = $1) AS contributions,
+        (SELECT count(DISTINCT dev_id)::int FROM contributions WHERE target_id = $1) AS contributors,
+        (SELECT COALESCE(SUM(cost_cents), 0)::bigint FROM contributions WHERE target_id = $1) AS compute_cents,
+        (SELECT max(created_at) FROM contributions WHERE target_id = $1) AS last_activity_at`,
+    [t.id],
+  );
+  const recent = await query<{ outcome: string; summary: string; created_at: string | Date }>(
+    `SELECT outcome::text AS outcome, summary, created_at
+       FROM contributions
+      WHERE target_id = $1
+      ORDER BY id DESC
+      LIMIT 10`,
+    [t.id],
+  );
+  const mr = m.rows[0];
+  return {
+    slug: t.slug,
+    name: t.name,
+    kind: t.kind,
+    status: t.status,
+    statement_plain: t.statement_plain,
+    statement_formal: t.statement_formal,
+    source_ref: t.source_ref,
+    state: t.state,
+    created_at: new Date(t.created_at).toISOString(),
+    metrics: {
+      tasks_total: mr.tasks_total,
+      tasks_open: mr.tasks_open,
+      tasks_resolved: mr.tasks_resolved,
+      contributions: mr.contributions,
+      contributors: mr.contributors,
+      compute_cents: mr.compute_cents,
+      last_activity_at: mr.last_activity_at ? new Date(mr.last_activity_at).toISOString() : null,
+    },
+    recent_contributions: recent.rows.map((r) => ({
+      outcome: r.outcome,
+      summary: r.summary,
+      created_at: new Date(r.created_at).toISOString(),
+    })),
+  };
+}

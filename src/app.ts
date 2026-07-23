@@ -12,6 +12,7 @@ import {
   expire,
   getBudget,
   getPublicTransparency,
+  getTargetProgress,
   isDevVerified,
   listOpenTasks,
   OpError,
@@ -102,6 +103,18 @@ app.get('/health', async (c) => {
 // name + counts (no contact info or task content). The marketing site can fetch
 // this to render a "who we work with" section.
 app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
+
+// Public per-conjecture progress — keyed by a human-readable slug (conjectures
+// carry no PII, so no unguessable token is needed). Statement, status, the
+// current compacted working set, roll-up metrics, and a feed of recent
+// contributions. 404 for an unknown slug or a non-public target kind.
+app.get('/conjectures/:slug', (c) =>
+  handle(async () => {
+    const p = await getTargetProgress(c.req.param('slug'));
+    if (!p) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return p;
+  })(c),
+);
 
 // Public per-request status — the capability is the unguessable request id in the
 // link a nonprofit gets by email. Plain-language stage + progress only; 404 for
