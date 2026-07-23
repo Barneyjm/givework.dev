@@ -37,6 +37,9 @@ export interface Budget {
 }
 export interface SubmitResult {
   spent_applied: number;
+  /** Post-verification task state: 'open' means verification rejected the work. */
+  status?: 'submitted' | 'open' | 'accepted';
+  verification?: { verdict: string; target_status: string | null } | null;
 }
 export interface SubmitArgs {
   task_id: string;
@@ -276,6 +279,16 @@ export async function runLoop(
         artifact: exec.artifact,
         state_update: exec.state_update,
       });
+      if (submit.verification?.verdict === 'failed') {
+        // Verification rejected the claim and the task is back in the pool.
+        // Don't pick it up again this run — we'd just re-spend on the same
+        // wrong answer.
+        console.log(
+          `  ✗ verification failed for ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢, task returned to pool`,
+        );
+        failed.add(checkout.task_id);
+        continue;
+      }
       console.log(`✔ submitted ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢`);
       done++;
     }

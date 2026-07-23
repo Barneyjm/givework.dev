@@ -18,11 +18,9 @@ import {
   listOpenTasks,
   OpError,
   releaseTask,
-  submitResult,
 } from './operations.js';
 import { resultsToCsv, resultsToJson } from './results.js';
-import { acceptTaskAndNotify } from './review.js';
-import { runAutoVerification } from './verify.js';
+import { submitAndVerify } from './verify.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -110,13 +108,22 @@ app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
 // carry no PII, so no unguessable token is needed). Statement, status, the
 // current compacted working set, roll-up metrics, and a feed of recent
 // contributions. 404 for an unknown slug or a non-public target kind.
-app.get('/conjectures/:slug', (c) =>
-  handle(async () => {
+//
+// Content-negotiated: a browser (Accept: text/html) gets the static detail page
+// (site/conjecture.html), which client-renders this same JSON; everything else —
+// runners, curl, fetch — gets the JSON. The ASSETS binding only exists on the
+// deployed Worker/wrangler dev, so the Node server (API-only) always serves JSON.
+app.get('/conjectures/:slug', (c) => {
+  const assets = (c.env as { ASSETS?: { fetch: typeof fetch } } | undefined)?.ASSETS;
+  if (assets && c.req.header('accept')?.includes('text/html')) {
+    return assets.fetch(new URL('/conjecture', c.req.url));
+  }
+  return handle(async () => {
     const p = await getTargetProgress(c.req.param('slug'));
     if (!p) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
     return p;
-  })(c),
-);
+  })(c);
+});
 
 // Public leaderboard — curated conjectures with progress + top contributors by
 // donated compute. Drives the marketing site's "what's being worked on" surface.
@@ -201,7 +208,8 @@ app.post('/submit', requireDev, async (c) => {
   const dev = c.get('principal').dev_id!;
   return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
-    const result = await submitResult(
+    const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+    return submitAndVerify(
       dev,
       body.task_id,
       body.result ?? null,
@@ -214,32 +222,8 @@ app.post('/submit', requireDev, async (c) => {
         artifact: body.artifact,
         stateUpdate: body.state_update,
       },
+      binding,
     );
-    // Verify a terminal (candidate_solution) submission. A progress/dead-end
-    // contribution returned the task to the pool (status 'open'), so there's
-    // nothing to verify. Non-fatal; the submit already succeeded.
-    let verification: { verdict: string; target_status: string | null } | null = null;
-    try {
-      if (result.status === 'submitted') {
-        const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-        // Machine verification decides auto_rerun (and holds proof_checker /
-        // replication for Phase 6). human_review is NOT handled here — fall back
-        // to the trust auto-accept: a verified volunteer's work flows straight
-        // through, an unverified one waits for admin review.
-        const v = await runAutoVerification(body.task_id, binding);
-        if (v.handled) {
-          verification = {
-            verdict: v.verdict ?? 'pending',
-            target_status: v.target_status ?? null,
-          };
-        } else if (await isDevVerified(dev)) {
-          await acceptTaskAndNotify(body.task_id, binding);
-        }
-      }
-    } catch (err) {
-      console.error('verification on submit failed', err);
-    }
-    return { ...result, verification };
   })(c);
 });
 

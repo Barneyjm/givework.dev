@@ -634,20 +634,29 @@ export async function acceptTask(taskId: string): Promise<{ task_id: string; sta
  */
 export async function rejectTask(taskId: string): Promise<{ task_id: string; status: 'open' }> {
   return withTransaction(async (client) => {
-    const upd = await client.query<{ dev_id: string; target_id: string }>(
-      `UPDATE tasks
-          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+    // Read the assignee before the UPDATE nulls it — RETURNING evaluates the
+    // NEW row, so returning assigned_dev_id from the UPDATE always yields NULL
+    // and the reject ledger row would lose attribution.
+    const prev = await client.query<{ dev_id: string | null; target_id: string }>(
+      `SELECT assigned_dev_id AS dev_id, target_id
+         FROM tasks
         WHERE id = $1 AND status = 'submitted'
-        RETURNING assigned_dev_id AS dev_id, target_id`,
+        FOR UPDATE`,
       [taskId],
     );
-    if (upd.rowCount === 0) {
+    if (prev.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_submitted', 'Task is not in submitted state');
     }
     await client.query(
+      `UPDATE tasks
+          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+        WHERE id = $1`,
+      [taskId],
+    );
+    await client.query(
       `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'reject', 0)`,
-      [taskId, upd.rows[0].dev_id, upd.rows[0].target_id],
+      [taskId, prev.rows[0].dev_id, prev.rows[0].target_id],
     );
     return { task_id: taskId, status: 'open' };
   });

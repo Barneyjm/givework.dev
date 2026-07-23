@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closePool, pool } from '../src/db.js';
 import { checkoutTask, submitResult } from '../src/operations.js';
 import { app } from '../src/server.js';
-import { runAutoVerification } from '../src/verify.js';
+import { runAutoVerification, submitAndVerify } from '../src/verify.js';
 import { createDev, createTask, mintAdminToken, resetDb, setBudget } from './helpers.js';
 
 // Phase 5: verification core. auto_rerun re-evaluates a counterexample witness
@@ -120,6 +120,70 @@ describe('auto_rerun verification', () => {
     const v = await runAutoVerification(task);
     expect(v.handled).toBe(false);
     expect(await taskStatus(task)).toBe('submitted'); // untouched — waits for review
+    expect(await verificationsFor(task)).toHaveLength(0);
+  });
+});
+
+describe('submitAndVerify (the shared submit rail: HTTP /submit + MCP submit_result)', () => {
+  it('a passing witness reports the post-verification state: accepted + disproven', async () => {
+    const target = await createConjecture({ slug: 'euler-rail', checker: 'euler_sum_of_powers' });
+    const task = await createTask(target, {
+      max: 500,
+      kind: 'counterexample_search',
+      verify_via: 'auto_rerun',
+    });
+    const dev = await createDev('rail-pass');
+    await setBudget(dev, 5000);
+    await checkoutTask(dev, task);
+
+    const res = await submitAndVerify(
+      dev,
+      task,
+      { bases: [27, 84, 110, 133], target: 144 },
+      100,
+      null,
+    );
+    expect(res.status).toBe('accepted'); // not the stale 'submitted'
+    expect(res.verification).toEqual({ verdict: 'passed', target_status: 'disproven' });
+    expect(await taskStatus(task)).toBe('accepted');
+    expect((await targetRow(target)).status).toBe('disproven');
+  });
+
+  it('a failing witness reports open, and the reject ledger row keeps dev attribution', async () => {
+    const target = await createConjecture({ slug: 'euler-rail-2', checker: 'euler_sum_of_powers' });
+    const task = await createTask(target, {
+      max: 500,
+      kind: 'counterexample_search',
+      verify_via: 'auto_rerun',
+    });
+    const dev = await createDev('rail-fail');
+    await setBudget(dev, 5000);
+    await checkoutTask(dev, task);
+
+    const res = await submitAndVerify(dev, task, { bases: [1, 2, 3, 4], target: 5 }, 100, null);
+    expect(res.status).toBe('open'); // verification already returned it to the pool
+    expect(res.verification).toMatchObject({ verdict: 'failed' });
+    expect(await taskStatus(task)).toBe('open');
+
+    // rejectTask must attribute the ledger row to the dev whose claim failed.
+    const { rows } = await pool.query(
+      `SELECT dev_id FROM ledger WHERE task_id = $1 AND event_type = 'reject'`,
+      [task],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dev_id).toBe(dev);
+  });
+
+  it('a progress contribution is not verified (no terminal claim to check)', async () => {
+    const target = await createConjecture({ slug: 'euler-rail-3', checker: 'euler_sum_of_powers' });
+    const task = await createTask(target, { max: 500, verify_via: 'auto_rerun' });
+    const dev = await createDev('rail-progress');
+    await setBudget(dev, 5000);
+    await checkoutTask(dev, task);
+
+    const res = await submitAndVerify(dev, task, null, 50, null, { outcome: 'progress' });
+    expect(res.status).toBe('open'); // back in the pool by design, not by rejection
+    expect(res.verification).toBeNull();
     expect(await verificationsFor(task)).toHaveLength(0);
   });
 });

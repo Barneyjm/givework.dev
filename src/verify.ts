@@ -1,7 +1,14 @@
 import { query } from './db.js';
 import type { VerificationMethod } from './intake/decompose.js';
 import type { SendEmailBinding } from './mailer.js';
-import { OpError, rejectTask } from './operations.js';
+import {
+  type ContributeOptions,
+  isDevVerified,
+  OpError,
+  rejectTask,
+  type SubmitResult,
+  submitResult,
+} from './operations.js';
 import { acceptTaskAndNotify } from './review.js';
 
 // Verification core. Replaces the subjective accept/reject with a recorded
@@ -286,6 +293,62 @@ export async function runAutoVerification(
     detail: { reason: `${method} verification is not yet automated` },
   });
   return { handled: true, method, verdict: 'pending', target_status: null, verification_id: id };
+}
+
+export interface SubmitVerification {
+  verdict: Verdict;
+  target_status: string | null;
+}
+
+export interface VerifiedSubmitResult extends Omit<SubmitResult, 'status'> {
+  /**
+   * The task's state AFTER verification, not just after the submit: a failed
+   * check has already reopened it ('open'), a passed check or trust auto-accept
+   * has already accepted it ('accepted').
+   */
+  status: 'submitted' | 'open' | 'accepted';
+  verification: SubmitVerification | null;
+}
+
+/**
+ * The one submit entrypoint both rails share (HTTP /submit and the MCP
+ * submit_result tool): book the contribution, then verify a terminal
+ * (candidate_solution) submission. A progress/dead-end contribution returned
+ * the task to the pool, so there's nothing to verify. Machine verification
+ * decides auto_rerun (holding proof_checker/replication for Phase 6);
+ * human_review is NOT handled here — fall back to the trust auto-accept, where
+ * a verified volunteer's work flows straight through and an unverified one
+ * waits for admin review. Verification failures are non-fatal: the submit
+ * (and its booked spend) already succeeded.
+ */
+export async function submitAndVerify(
+  devId: string,
+  taskId: string,
+  result: unknown,
+  actualCostCents: number,
+  rawUsage: unknown,
+  opts: ContributeOptions = {},
+  binding?: SendEmailBinding,
+): Promise<VerifiedSubmitResult> {
+  const submitted = await submitResult(devId, taskId, result, actualCostCents, rawUsage, opts);
+  let status: VerifiedSubmitResult['status'] = submitted.status;
+  let verification: SubmitVerification | null = null;
+  try {
+    if (submitted.status === 'submitted') {
+      const v = await runAutoVerification(taskId, binding);
+      if (v.handled) {
+        verification = { verdict: v.verdict ?? 'pending', target_status: v.target_status ?? null };
+        if (v.verdict === 'failed') status = 'open';
+        else if (v.verdict === 'passed') status = 'accepted';
+      } else if (await isDevVerified(devId)) {
+        await acceptTaskAndNotify(taskId, binding);
+        status = 'accepted';
+      }
+    }
+  } catch (err) {
+    console.error('verification on submit failed', err);
+  }
+  return { ...submitted, status, verification };
 }
 
 /**

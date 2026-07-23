@@ -2,14 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { verifyToken } from './auth.js';
-import {
-  checkoutTask,
-  getBudget,
-  listOpenTasks,
-  OpError,
-  releaseTask,
-  submitResult,
-} from './operations.js';
+import { checkoutTask, getBudget, listOpenTasks, OpError, releaseTask } from './operations.js';
+import { submitAndVerify } from './verify.js';
 
 // MCP wrapper around the HTTP-free operations core. This is the rail the dev
 // runner rides: it authenticates as one dev (GIVEWORK_TOKEN) and every tool acts
@@ -129,7 +123,10 @@ async function main() {
     },
     (args) =>
       run(() =>
-        submitResult(
+        // Same entrypoint as HTTP /submit: a terminal submission is verified
+        // (auto_rerun can flip the target) on this rail too. No email binding
+        // under Node — notifications are a Worker concern.
+        submitAndVerify(
           devId,
           args.task_id,
           args.result ?? null,
