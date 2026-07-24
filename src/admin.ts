@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { requireAdmin, signDevToken } from './auth.js';
 import { query } from './db.js';
 import type { SendEmailBinding } from './mailer.js';
-import { OpError, rejectTask } from './operations.js';
-import { acceptTaskAndNotify } from './review.js';
+import { OpError } from './operations.js';
+import { adminVerify, recordHumanReview } from './verify.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
 // tokens so a nonprofit can review its own tasks without an admin credential —
@@ -47,31 +47,72 @@ adminRoutes.post('/devs', async (c) => {
   })(c);
 });
 
-adminRoutes.post('/nonprofits', async (c) => {
+const TARGET_KINDS = new Set(['conjecture', 'research_question', 'org_request']);
+
+/** URL-safe slug from a name/label: lowercase, non-alphanumerics to hyphens. */
+function slugify(s: string): string {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+// Create a target. During the math phase this is how conjectures are seeded:
+// name + slug + statement + kind. contact_email is optional (org-specific,
+// dormant); it's only meaningful for the org_request kind.
+adminRoutes.post('/targets', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
-    if (!body.name || !body.contact_email) {
-      throw new OpError(400, 'bad_input', 'Missing name or contact_email');
+    if (!body.name) throw new OpError(400, 'bad_input', 'Missing name');
+    const kind = body.kind ?? 'conjecture';
+    if (!TARGET_KINDS.has(kind)) {
+      throw new OpError(400, 'bad_input', `kind must be one of ${[...TARGET_KINDS].join(', ')}`);
     }
-    const { rows } = await query(
-      `INSERT INTO nonprofits (name, ein, contact_email, verified)
-       VALUES ($1, $2, $3, $4) RETURNING id, name, ein, contact_email, verified`,
-      [body.name, body.ein ?? null, body.contact_email, body.verified ?? false],
-    );
-    return rows[0];
+    const slug = body.slug ? slugify(body.slug) : null;
+    try {
+      const { rows } = await query(
+        `INSERT INTO targets
+           (name, kind, slug, statement_plain, statement_formal, source_ref, checker,
+            ein, contact_email, verified)
+         VALUES ($1, $2::target_kind, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, name, kind, slug, status, statement_plain, statement_formal, source_ref,
+                   checker, ein, contact_email, verified`,
+        [
+          body.name,
+          kind,
+          slug,
+          body.statement_plain ?? null,
+          body.statement_formal ?? null,
+          body.source_ref ?? null,
+          body.checker ?? null,
+          body.ein ?? null,
+          body.contact_email ?? null,
+          body.verified ?? false,
+        ],
+      );
+      return rows[0];
+    } catch (err: any) {
+      // Unique violation on slug -> a clean 409 instead of a 500.
+      if (err?.code === '23505') {
+        throw new OpError(409, 'slug_taken', 'That slug is already in use');
+      }
+      throw err;
+    }
   })(c);
 });
 
 // List every nonprofit with its identifier and task counts — the admin's
 // management/transparency view of who's in the system.
-adminRoutes.get('/nonprofits', (c) =>
+adminRoutes.get('/targets', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
       `SELECT n.id, n.name, n.contact_email, n.verified, n.listed,
-              (SELECT count(*)::int FROM nonprofit_identifiers i WHERE i.nonprofit_id = n.id) AS identifier_count,
-              (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id) AS tasks_total,
-              (SELECT count(*)::int FROM tasks t WHERE t.nonprofit_id = n.id AND t.status = 'accepted') AS tasks_accepted
-         FROM nonprofits n
+              (SELECT count(*)::int FROM target_identifiers i WHERE i.target_id = n.id) AS identifier_count,
+              (SELECT count(*)::int FROM tasks t WHERE t.target_id = n.id) AS tasks_total,
+              (SELECT count(*)::int FROM tasks t WHERE t.target_id = n.id AND t.status = 'accepted') AS tasks_accepted
+         FROM targets n
         ORDER BY n.created_at ASC`,
     );
     return rows;
@@ -79,37 +120,47 @@ adminRoutes.get('/nonprofits', (c) =>
 );
 
 // One nonprofit plus all its allowlist identifiers — what an admin edits.
-adminRoutes.get('/nonprofits/:id', (c) =>
+adminRoutes.get('/targets/:id', (c) =>
   adminHandle(async () => {
     const { rows } = await query(
-      `SELECT id, name, ein, contact_email, verified, listed FROM nonprofits WHERE id = $1`,
+      `SELECT id, name, ein, contact_email, verified, listed FROM targets WHERE id = $1`,
       [c.req.param('id')],
     );
-    if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
     const ids = await query(
-      `SELECT id, kind, value, created_at FROM nonprofit_identifiers
-        WHERE nonprofit_id = $1 ORDER BY kind, value`,
+      `SELECT id, kind, value, created_at FROM target_identifiers
+        WHERE target_id = $1 ORDER BY kind, value`,
       [c.req.param('id')],
     );
     return { ...rows[0], identifiers: ids.rows };
   })(c),
 );
 
-// Override any of a nonprofit's fields — verify/unverify, list/unlist publicly,
-// or fix its name/contact/EIN. Only provided fields change (COALESCE keeps the
-// rest); pass verified/listed explicitly to flip them.
-adminRoutes.post('/nonprofits/:id', async (c) => {
+const TARGET_STATUSES = new Set(['open', 'partially_resolved', 'resolved', 'disproven', 'closed']);
+
+// Override any of a target's fields — verify/unverify, list/unlist publicly, set
+// its status (resolve/disprove/close a conjecture), or fix its name/contact/EIN.
+// Only provided fields change (COALESCE keeps the rest).
+adminRoutes.post('/targets/:id', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
+    if (body.status != null && !TARGET_STATUSES.has(body.status)) {
+      throw new OpError(
+        400,
+        'bad_input',
+        `status must be one of ${[...TARGET_STATUSES].join(', ')}`,
+      );
+    }
     const { rows } = await query(
-      `UPDATE nonprofits SET
+      `UPDATE targets SET
           name = COALESCE($2, name),
           ein = COALESCE($3, ein),
           contact_email = COALESCE($4, contact_email),
           verified = COALESCE($5::boolean, verified),
-          listed = COALESCE($6::boolean, listed)
+          listed = COALESCE($6::boolean, listed),
+          status = COALESCE($7::target_status, status)
         WHERE id = $1
-        RETURNING id, name, ein, contact_email, verified, listed`,
+        RETURNING id, name, kind, slug, status, ein, contact_email, verified, listed`,
       [
         c.req.param('id'),
         body.name ?? null,
@@ -117,9 +168,10 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
         body.contact_email ?? null,
         body.verified ?? null,
         body.listed ?? null,
+        body.status ?? null,
       ],
     );
-    if (rows.length === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    if (rows.length === 0) throw new OpError(404, 'target_not_found', 'Unknown target');
     return rows[0];
   })(c);
 });
@@ -127,7 +179,7 @@ adminRoutes.post('/nonprofits/:id', async (c) => {
 const IDENTIFIER_KINDS = new Set(['email', 'domain', 'email_deny', 'domain_deny']);
 
 // Add an allowlist identifier (email/domain, allow or deny) to a nonprofit.
-adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
+adminRoutes.post('/targets/:id/identifiers', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
     const kind = String(body.kind ?? '');
@@ -151,12 +203,12 @@ adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
     if (!isEmail && value.includes('@')) {
       throw new OpError(400, 'bad_input', 'a domain identifier must not contain @');
     }
-    const np = await query(`SELECT 1 FROM nonprofits WHERE id = $1`, [c.req.param('id')]);
-    if (np.rowCount === 0) throw new OpError(404, 'nonprofit_not_found', 'Unknown nonprofit');
+    const np = await query(`SELECT 1 FROM targets WHERE id = $1`, [c.req.param('id')]);
+    if (np.rowCount === 0) throw new OpError(404, 'target_not_found', 'Unknown nonprofit');
     try {
       const { rows } = await query(
-        `INSERT INTO nonprofit_identifiers (nonprofit_id, kind, value)
-         VALUES ($1, $2, $3) RETURNING id, nonprofit_id, kind, value, created_at`,
+        `INSERT INTO target_identifiers (target_id, kind, value)
+         VALUES ($1, $2, $3) RETURNING id, target_id, kind, value, created_at`,
         [c.req.param('id'), kind, value],
       );
       return rows[0];
@@ -170,10 +222,10 @@ adminRoutes.post('/nonprofits/:id/identifiers', async (c) => {
 });
 
 // Remove an allowlist identifier.
-adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
+adminRoutes.delete('/targets/:id/identifiers/:identifierId', (c) =>
   adminHandle(async () => {
     const { rowCount } = await query(
-      `DELETE FROM nonprofit_identifiers WHERE id = $1 AND nonprofit_id = $2`,
+      `DELETE FROM target_identifiers WHERE id = $1 AND target_id = $2`,
       [c.req.param('identifierId'), c.req.param('id')],
     );
     if (rowCount === 0)
@@ -185,24 +237,17 @@ adminRoutes.delete('/nonprofits/:id/identifiers/:identifierId', (c) =>
 adminRoutes.post('/tasks', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   return adminHandle(async () => {
-    for (const f of [
-      'nonprofit_id',
-      'title',
-      'spec',
-      'est_cost_cents',
-      'max_cost_cents',
-      'model',
-    ]) {
+    for (const f of ['target_id', 'title', 'spec', 'est_cost_cents', 'max_cost_cents', 'model']) {
       if (body[f] === undefined || body[f] === null) {
         throw new OpError(400, 'bad_input', `Missing field: ${f}`);
       }
     }
     const { rows } = await query(
-      `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
+      `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity, 'public'))
-       RETURNING id, nonprofit_id, title, est_cost_cents, max_cost_cents, model, sensitivity, status`,
+       RETURNING id, target_id, title, est_cost_cents, max_cost_cents, model, sensitivity, status`,
       [
-        body.nonprofit_id,
+        body.target_id,
         body.title,
         JSON.stringify(body.spec),
         body.est_cost_cents,
@@ -259,8 +304,8 @@ adminRoutes.get('/tasks', (c) =>
       throw new OpError(400, 'bad_input', `unknown status: ${status}`);
     }
     const { rows } = await query(
-      `SELECT t.id, t.title, t.status, t.actual_cost_cents, t.intake_request_id,
-              d.github_handle AS dev, t.result
+      `SELECT t.id, t.title, t.status, t.kind::text AS kind, t.verify_via::text AS verify_via,
+              t.actual_cost_cents, t.intake_request_id, d.github_handle AS dev, t.result
          FROM tasks t
          LEFT JOIN devs d ON d.id = t.assigned_dev_id
         WHERE ($1::text IS NULL OR t.status = $1::task_status)
@@ -272,11 +317,39 @@ adminRoutes.get('/tasks', (c) =>
   })(c),
 );
 
+const VERDICTS = new Set(['passed', 'failed', 'inconclusive']);
+
+// Admin-run local checker: the admin runs the real check locally (compile the
+// Lean proof, re-run the range, evaluate the witness) and posts an authoritative
+// verdict. Records the task's actual verify_via method and, on a pass, flips the
+// target when the kind implies a resolution — or when `resolve` is set explicitly.
+adminRoutes.post('/tasks/:id/verify', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return adminHandle(async () => {
+    const verdict = String(body.verdict ?? '');
+    if (!VERDICTS.has(verdict)) {
+      throw new OpError(400, 'bad_input', `verdict must be one of ${[...VERDICTS].join(', ')}`);
+    }
+    if (body.resolve != null && body.resolve !== 'resolved' && body.resolve !== 'disproven') {
+      throw new OpError(400, 'bad_input', 'resolve must be "resolved" or "disproven"');
+    }
+    const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+    return adminVerify(c.req.param('id'), verdict as 'passed' | 'failed' | 'inconclusive', {
+      detail: body.detail,
+      resolve: body.resolve,
+      binding,
+    });
+  })(c);
+});
+
 adminRoutes.post('/tasks/:id/accept', (c) =>
   adminHandle(() => {
     const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-    return acceptTaskAndNotify(c.req.param('id'), binding);
+    // Human-review verdict: accept + notify + record the verification row.
+    return recordHumanReview(c.req.param('id'), 'passed', 'admin', binding);
   })(c),
 );
 
-adminRoutes.post('/tasks/:id/reject', (c) => adminHandle(() => rejectTask(c.req.param('id')))(c));
+adminRoutes.post('/tasks/:id/reject', (c) =>
+  adminHandle(() => recordHumanReview(c.req.param('id'), 'failed', 'admin'))(c),
+);

@@ -93,7 +93,7 @@ export async function history(args: string[]): Promise<void> {
     const amount = `${e.delta_cents > 0 ? '+' : ''}${e.delta_cents}¢`;
     const label = e.task_title ?? e.task_id;
     console.log(
-      `${when}  ${e.event_type.padEnd(8)} ${amount.padStart(7)}  ${label}${e.nonprofit_name ? `  · ${e.nonprofit_name}` : ''}`,
+      `${when}  ${e.event_type.padEnd(8)} ${amount.padStart(7)}  ${label}${e.target_name ? `  · ${e.target_name}` : ''}`,
     );
   }
   if (page.next_before) {
@@ -106,7 +106,7 @@ export async function stats(): Promise<void> {
   const s = await apiRequest<any>(apiUrl(), { path: '/devs/me/stats', token });
   console.log(`donated:    ${s.total_donated_cents}¢ all time`);
   console.log(`tasks:      ${s.tasks_completed} completed · ${s.tasks_accepted} accepted`);
-  console.log(`nonprofits: ${s.nonprofits_helped} helped`);
+  console.log(`conjectures: ${s.targets_helped} advanced`);
   if (s.first_contribution_at) {
     console.log(`since:      ${new Date(s.first_contribution_at).toISOString().slice(0, 10)}`);
   }
@@ -281,7 +281,7 @@ export async function admin(args: string[]): Promise<void> {
       const json = arg(rest, '--json');
       if (!json) {
         console.error(
-          'Provide the task as --json \'{"nonprofit_id":…,"title":…,"spec":…,"est_cost_cents":…,"max_cost_cents":…,"model":…}\'',
+          'Provide the task as --json \'{"target_id":…,"title":…,"spec":…,"est_cost_cents":…,"max_cost_cents":…,"model":…}\'',
         );
         process.exit(1);
       }
@@ -302,8 +302,8 @@ export async function admin(args: string[]): Promise<void> {
       console.log(`✓ created task ${r.id} — "${r.title}" (${r.status})`);
       return;
     }
-    case 'nonprofit':
-      return adminNonprofit(rest);
+    case 'target':
+      return adminTarget(rest);
     case 'decompose':
       return adminDecompose(rest);
     default:
@@ -409,11 +409,11 @@ export function boolArg(args: string[], name: string): boolean | undefined {
 // add/remove authorized senders (emails & domains, allow or deny). The kind of an
 // identifier is inferred from the value — an '@' means an email, otherwise a
 // domain. All routes are admin-gated.
-async function adminNonprofit(args: string[]): Promise<void> {
+async function adminTarget(args: string[]): Promise<void> {
   const sub = args[0];
   const rest = args.slice(1);
   const usage =
-    'givework admin nonprofit list\n' +
+    'givework admin target list\n' +
     '                        show <id>\n' +
     '                        create --name <name> --email <contact> [--ein <ein>] [--verified] [--listed]\n' +
     '                        set <id> [--name <>] [--email <>] [--ein <>] [--verified true|false] [--listed true|false]\n' +
@@ -425,9 +425,9 @@ async function adminNonprofit(args: string[]): Promise<void> {
 
   switch (sub) {
     case 'list': {
-      const rows = await apiRequest<any[]>(base, { path: '/admin/nonprofits', token });
+      const rows = await apiRequest<any[]>(base, { path: '/admin/targets', token });
       if (!rows.length) {
-        console.log('No nonprofits yet.');
+        console.log('No targets yet.');
         return;
       }
       for (const n of rows) {
@@ -444,7 +444,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
         process.exit(1);
       }
       const n = await apiRequest<any>(base, {
-        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`,
+        path: `/admin/targets/${encodeURIComponent(rest[0])}`,
         token,
       });
       console.log(`${n.name}  <${n.contact_email}>${n.ein ? `  EIN ${n.ein}` : ''}`);
@@ -475,7 +475,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
       if (has(rest, '--verified')) body.verified = true;
       const n = await apiRequest<any>(base, {
         method: 'POST',
-        path: '/admin/nonprofits',
+        path: '/admin/targets',
         token,
         body,
       });
@@ -484,7 +484,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
       if (has(rest, '--listed')) {
         await apiRequest<any>(base, {
           method: 'POST',
-          path: `/admin/nonprofits/${n.id}`,
+          path: `/admin/targets/${n.id}`,
           token,
           body: { listed: true },
         });
@@ -518,7 +518,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
       }
       const n = await apiRequest<any>(base, {
         method: 'POST',
-        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}`,
+        path: `/admin/targets/${encodeURIComponent(rest[0])}`,
         token,
         body,
       });
@@ -538,7 +538,7 @@ async function adminNonprofit(args: string[]): Promise<void> {
         sub === 'allow' ? (isEmail ? 'email' : 'domain') : isEmail ? 'email_deny' : 'domain_deny';
       const r = await apiRequest<any>(base, {
         method: 'POST',
-        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers`,
+        path: `/admin/targets/${encodeURIComponent(rest[0])}/identifiers`,
         token,
         body: { kind, value: rest[1] },
       });
@@ -547,12 +547,12 @@ async function adminNonprofit(args: string[]): Promise<void> {
     }
     case 'rm-id': {
       if (!rest[0] || !rest[1]) {
-        console.error('Usage: givework admin nonprofit rm-id <nonprofitId> <identifierId>');
+        console.error('Usage: givework admin nonprofit rm-id <targetId> <identifierId>');
         process.exit(1);
       }
       await apiRequest<any>(base, {
         method: 'DELETE',
-        path: `/admin/nonprofits/${encodeURIComponent(rest[0])}/identifiers/${encodeURIComponent(rest[1])}`,
+        path: `/admin/targets/${encodeURIComponent(rest[0])}/identifiers/${encodeURIComponent(rest[1])}`,
         token,
       });
       console.log('✓ removed identifier');

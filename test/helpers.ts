@@ -22,8 +22,8 @@ if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
-    `TRUNCATE ledger, tasks, intake_attachments, intake_requests,
-              dev_budgets, nonprofit_budgets, nonprofit_identifiers, nonprofits, devs
+    `TRUNCATE ledger, verifications, contributions, tasks, intake_attachments, intake_requests,
+              dev_budgets, target_budgets, target_identifiers, targets, devs
               RESTART IDENTITY CASCADE`,
   );
 }
@@ -40,21 +40,21 @@ export async function setVerified(devId: string, verified = true): Promise<void>
   await pool.query(`UPDATE devs SET verified = $2 WHERE id = $1`, [devId, verified]);
 }
 
-export async function createNonprofit(name = 'Test NP'): Promise<string> {
+export async function createTarget(name = 'Test NP'): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO nonprofits (name, contact_email) VALUES ($1, $2) RETURNING id`,
+    `INSERT INTO targets (name, contact_email) VALUES ($1, $2) RETURNING id`,
     [name, 'np@test.com'],
   );
   return rows[0].id;
 }
 
 /** A verified (allowlisted) nonprofit with a specific contact address. */
-export async function createVerifiedNonprofit(
+export async function createVerifiedTarget(
   contactEmail: string,
   name = 'Verified NP',
 ): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO nonprofits (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
+    `INSERT INTO targets (name, contact_email, verified) VALUES ($1, $2, true) RETURNING id`,
     [name, contactEmail],
   );
   return rows[0].id;
@@ -71,21 +71,32 @@ export async function setBudget(devId: string, budgetCents: number): Promise<voi
 }
 
 export async function createTask(
-  nonprofitId: string,
-  opts: { est?: number; max: number; sensitivity?: string; title?: string } = { max: 500 },
+  targetId: string,
+  opts: {
+    est?: number;
+    max: number;
+    sensitivity?: string;
+    title?: string;
+    kind?: string;
+    verify_via?: string;
+  } = { max: 500 },
 ): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO tasks (nonprofit_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity)
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'))
+    `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, sensitivity,
+                        kind, verify_via)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::data_sensitivity,'public'),
+             COALESCE($8::task_kind,'exploration'), COALESCE($9::verification_method,'human_review'))
      RETURNING id`,
     [
-      nonprofitId,
+      targetId,
       opts.title ?? 'Test task',
       JSON.stringify({ prompt: 'do the thing' }),
       opts.est ?? Math.min(opts.max, 100),
       opts.max,
       'claude-opus-4-8',
       opts.sensitivity ?? null,
+      opts.kind ?? null,
+      opts.verify_via ?? null,
     ],
   );
   return rows[0].id;

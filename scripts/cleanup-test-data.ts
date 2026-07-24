@@ -9,23 +9,21 @@ const NP_NAME = 'Givework Test (dummy)';
 const DEV_HANDLE = process.env.SEED_DEV_HANDLE ?? 'Barneyjm';
 
 async function main() {
-  const np = await pool.query<{ id: string }>(`SELECT id FROM nonprofits WHERE name = $1`, [
-    NP_NAME,
-  ]);
+  const np = await pool.query<{ id: string }>(`SELECT id FROM targets WHERE name = $1`, [NP_NAME]);
   if (np.rowCount === 0) {
     console.log(`Nothing to clean — no '${NP_NAME}' nonprofit.`);
     return;
   }
   const npId = np.rows[0].id;
 
-  const tasks = await pool.query<{ id: string }>(`SELECT id FROM tasks WHERE nonprofit_id = $1`, [
+  const tasks = await pool.query<{ id: string }>(`SELECT id FROM tasks WHERE target_id = $1`, [
     npId,
   ]);
   const taskIds = tasks.rows.map((r) => r.id);
 
-  const led = await pool.query(`DELETE FROM ledger WHERE nonprofit_id = $1`, [npId]);
-  const tsk = await pool.query(`DELETE FROM tasks WHERE nonprofit_id = $1`, [npId]);
-  const npd = await pool.query(`DELETE FROM nonprofits WHERE id = $1`, [npId]);
+  const led = await pool.query(`DELETE FROM ledger WHERE target_id = $1`, [npId]);
+  const tsk = await pool.query(`DELETE FROM tasks WHERE target_id = $1`, [npId]);
+  const npd = await pool.query(`DELETE FROM targets WHERE id = $1`, [npId]);
   console.log(
     `Deleted ${led.rowCount} ledger row(s), ${tsk.rowCount} task(s) (${taskIds.length} ids), ${npd.rowCount} nonprofit.`,
   );

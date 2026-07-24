@@ -79,6 +79,9 @@ name = "SEND_EMAIL"
 # `npm run dev` (raw Node) runs the API only and does NOT serve the landing page.
 [assets]
 directory = "./site"
+# Exposed to the Worker so /conjectures/:slug can content-negotiate: browsers get
+# the static detail page (site/conjecture.html) while API clients get JSON.
+binding = "ASSETS"
 # Default html_handling serves status.html at the clean, extensionless path
 # /status, so the status link is givework.dev/status?task_id=<id> (a query-param
 # page — uncrawled, and the page itself is noindex).

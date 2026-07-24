@@ -17,6 +17,17 @@ export interface CheckoutResult {
   title: string;
   model: string;
   max_cost_cents: number;
+  /** The target's compacted working set (present on newer control planes). */
+  target_state?: unknown;
+  /** Recent chunks tried on this task, newest first (present on newer control planes). */
+  prior_contributions?: Array<{
+    id: number;
+    outcome: string;
+    summary: string;
+    artifact_uri: string | null;
+    cost_cents: number;
+    created_at: string;
+  }>;
 }
 export interface Budget {
   budget_cents: number;
@@ -26,12 +37,24 @@ export interface Budget {
 }
 export interface SubmitResult {
   spent_applied: number;
+  /** Post-verification task state: 'open' means verification rejected the work. */
+  status?: 'submitted' | 'open' | 'accepted';
+  verification?: { verdict: string; target_status: string | null } | null;
 }
 export interface SubmitArgs {
   task_id: string;
   result: unknown;
   actual_cost_cents: number;
   raw_usage: unknown;
+  /**
+   * Continuation fields (optional). Omitted -> the control plane defaults to a
+   * terminal 'candidate_solution' submit, i.e. the original one-shot behaviour.
+   */
+  outcome?: 'progress' | 'dead_end' | 'candidate_solution';
+  summary?: string;
+  artifact_uri?: string;
+  artifact?: unknown;
+  state_update?: unknown;
 }
 export interface ApiVersion {
   service: string;
@@ -249,7 +272,23 @@ export async function runLoop(
         result: exec.result,
         actual_cost_cents: exec.actual_cost_cents,
         raw_usage: exec.raw_usage,
+        // Forwarded when the executor produces them; otherwise a terminal submit.
+        outcome: exec.outcome,
+        summary: exec.summary,
+        artifact_uri: exec.artifact_uri,
+        artifact: exec.artifact,
+        state_update: exec.state_update,
       });
+      if (submit.verification?.verdict === 'failed') {
+        // Verification rejected the claim and the task is back in the pool.
+        // Don't pick it up again this run — we'd just re-spend on the same
+        // wrong answer.
+        console.log(
+          `  ✗ verification failed for ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢, task returned to pool`,
+        );
+        failed.add(checkout.task_id);
+        continue;
+      }
       console.log(`✔ submitted ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢`);
       done++;
     }

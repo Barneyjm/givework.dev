@@ -8,7 +8,7 @@ import {
   receiveIntake,
 } from '../src/intake/operations.js';
 import { app } from '../src/server.js';
-import { createNonprofit, createTask, resetDb } from './helpers.js';
+import { createTarget, createTask, resetDb } from './helpers.js';
 
 afterAll(closePool);
 beforeEach(resetDb);
@@ -123,7 +123,7 @@ describe('completedRequestForTask (completion trigger)', () => {
   });
 
   it('is null for a task that has no intake request (admin-created)', async () => {
-    const np = await createNonprofit();
+    const np = await createTarget();
     const taskId = await createTask(np, { max: 100 });
     await pool.query(`UPDATE tasks SET status='accepted' WHERE id = $1`, [taskId]);
     expect(await completedRequestForTask(taskId)).toBeNull();

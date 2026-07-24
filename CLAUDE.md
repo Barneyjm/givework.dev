@@ -5,11 +5,20 @@ Guidance for Claude Code working in this repo. Keep it short; prefer the README,
 
 ## What this is
 
-Givework — "agentic volunteering." Nonprofits email plain-language needs to
-`intake@givework.dev`; the platform decomposes them into budgeted tasks; volunteer
-developers' runners execute each via their own `claude -p` and submit results. A
-row-level lock plus a database `CHECK` invariant guarantees no volunteer overspends.
-See the README for the full flow and architecture.
+Givework — "agentic volunteering" for **open mathematics**. Open conjectures
+(curated, or proposed via `givework.dev`) are decomposed into budgeted **attack
+tasks**; volunteer developers' runners work each via their own `claude -p` and
+submit **contributions**. Hard tasks are resumable — chipped across many
+contributors via an append-only log + compacted state. Results are **verified**
+(re-run a counterexample, compile a proof, replicate a range), which can flip a
+target to `disproven`/`resolved`. A row-level lock plus a database `CHECK` invariant
+guarantees no volunteer overspends. See the README and `PIVOT.md` for the full flow.
+
+> The codebase was built as a nonprofit-help platform and pivoted to open math (see
+> `PIVOT.md`). The beneficiary entity is a generic `targets` table (`kind`:
+> conjecture | research_question | org_request); the nonprofit vetting surface is
+> kept but dormant. Some deep-reference prose may still say "nonprofit" — the
+> load-bearing identifiers are all `target`.
 
 TypeScript on Node, HTTP via Hono, Postgres via `pg`, MCP via the official SDK.
 Money is integer cents everywhere (`BIGINT`), never floats.

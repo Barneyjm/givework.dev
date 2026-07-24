@@ -82,7 +82,7 @@ async function main() {
   const seed = arg('--seed');
   if (seed) {
     await pool.query(
-      `INSERT INTO nonprofits (name, contact_email, verified)
+      `INSERT INTO targets (name, contact_email, verified)
        VALUES ($1, $2, true)
        ON CONFLICT DO NOTHING`,
       [`Local Test (${seed})`, seed.toLowerCase()],

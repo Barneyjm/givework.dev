@@ -3,7 +3,7 @@ import { adminRoutes } from './admin.js';
 import { type Principal, requireAdmin, requireDev } from './auth.js';
 import { query } from './db.js';
 import { devRoutes } from './devs.js';
-import { getRequestResultsForToken, getRequestStatus } from './intake/operations.js';
+import { getRequestResultsForToken, getRequestStatus, receiveIntake } from './intake/operations.js';
 import { adminIntakeRoutes } from './intake/routes.js';
 import type { SendEmailBinding } from './mailer.js';
 import { oauthRoutes } from './oauth.js';
@@ -11,15 +11,16 @@ import {
   checkoutTask,
   expire,
   getBudget,
+  getLeaderboard,
   getPublicTransparency,
+  getTargetProgress,
   isDevVerified,
   listOpenTasks,
   OpError,
   releaseTask,
-  submitResult,
 } from './operations.js';
 import { resultsToCsv, resultsToJson } from './results.js';
-import { acceptTaskAndNotify } from './review.js';
+import { submitAndVerify } from './verify.js';
 
 type Env = { Variables: { principal: Principal } };
 
@@ -103,6 +104,58 @@ app.get('/health', async (c) => {
 // this to render a "who we work with" section.
 app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
 
+// Public per-conjecture progress — keyed by a human-readable slug (conjectures
+// carry no PII, so no unguessable token is needed). Statement, status, the
+// current compacted working set, roll-up metrics, and a feed of recent
+// contributions. 404 for an unknown slug or a non-public target kind.
+//
+// Content-negotiated: a browser (Accept: text/html) gets the static detail page
+// (site/conjecture.html), which client-renders this same JSON; everything else —
+// runners, curl, fetch — gets the JSON. The ASSETS binding only exists on the
+// deployed Worker/wrangler dev, so the Node server (API-only) always serves JSON.
+app.get('/conjectures/:slug', (c) => {
+  const assets = (c.env as { ASSETS?: { fetch: typeof fetch } } | undefined)?.ASSETS;
+  if (assets && c.req.header('accept')?.includes('text/html')) {
+    return assets.fetch(new URL('/conjecture', c.req.url));
+  }
+  return handle(async () => {
+    const p = await getTargetProgress(c.req.param('slug'));
+    if (!p) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return p;
+  })(c);
+});
+
+// Public leaderboard — curated conjectures with progress + top contributors by
+// donated compute. Drives the marketing site's "what's being worked on" surface.
+app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
+
+// Public problem submission — anyone can propose an open problem in plain
+// language. No allowlist/DMARC vetting (that gated PII; open math has none), and
+// safe to open because nothing is spent until an admin reviews and publishes the
+// draft. Public-safe response: never expose the proposed tasks, costs, or models.
+// STAGE: add rate-limiting before launch (this triggers a stub decomposition).
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+app.post('/submissions', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return handle(async () => {
+    const email = String(body.from_email ?? '').trim();
+    const text = String(body.body ?? '').trim();
+    if (!EMAIL_RE.test(email)) {
+      throw new OpError(400, 'bad_input', 'a valid from_email is required');
+    }
+    if (text.length < 10 || text.length > 10_000) {
+      throw new OpError(400, 'bad_input', 'body must be between 10 and 10000 characters');
+    }
+    const subject = body.subject != null ? String(body.subject).slice(0, 200) : undefined;
+    const r = await receiveIntake({ from_email: email, subject, body: text });
+    return {
+      submission_id: r.intake_id,
+      status: 'received',
+      status_url: `/requests/${r.intake_id}`,
+    };
+  })(c);
+});
+
 // Public per-request status — the capability is the unguessable request id in the
 // link a nonprofit gets by email. Plain-language stage + progress only; 404 for
 // an unknown/invalid id. Backs the status.html page.
@@ -155,24 +208,22 @@ app.post('/submit', requireDev, async (c) => {
   const dev = c.get('principal').dev_id!;
   return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
-    const result = await submitResult(
+    const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
+    return submitAndVerify(
       dev,
       body.task_id,
       body.result ?? null,
       Number(body.actual_cost_cents),
       body.raw_usage ?? null,
+      {
+        outcome: body.outcome,
+        summary: body.summary,
+        artifactUri: body.artifact_uri,
+        artifact: body.artifact,
+        stateUpdate: body.state_update,
+      },
+      binding,
     );
-    // Auto-accept: a verified volunteer's submission flows straight to the
-    // nonprofit — no manual review gate. Non-fatal; the submit already succeeded.
-    try {
-      if (await isDevVerified(dev)) {
-        const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-        await acceptTaskAndNotify(body.task_id, binding);
-      }
-    } catch (err) {
-      console.error('auto-accept on submit failed', err);
-    }
-    return result;
   })(c);
 });
 

@@ -5,7 +5,7 @@ import {
   type SendEmailBinding,
   sendEmail,
 } from '../mailer.js';
-import { findApprovedNonprofitForSender, receiveIntake } from './operations.js';
+import { findApprovedTargetForSender, receiveIntake } from './operations.js';
 
 // Inbound email → intake. This is the production front door for nonprofit
 // requests: Cloudflare Email Routing delivers mail for intake@givework.dev to
@@ -91,7 +91,7 @@ export type IngestResult =
   | {
       accepted: true;
       intake_id: string;
-      nonprofit_id: string;
+      target_id: string;
       // Context for the confirmation reply (with the status link). Always safe
       // here: the sender is allowlisted and DMARC-authenticated.
       reply: ReplyContext;
@@ -171,8 +171,8 @@ export async function ingestInboundEmail(
   if (!parsed.from) return { accepted: false, reason: 'no_sender' };
   if (!passed) return { accepted: false, reason: 'unauthenticated' };
 
-  const nonprofitId = await findApprovedNonprofitForSender(parsed.from);
-  if (!nonprofitId) {
+  const targetId = await findApprovedTargetForSender(parsed.from);
+  if (!targetId) {
     return {
       accepted: false,
       reason: 'sender_not_approved',
@@ -187,12 +187,12 @@ export async function ingestInboundEmail(
     subject: parsed.subject ?? undefined,
     body: parsed.text,
     attachments: parsed.attachments,
-    nonprofit_id: nonprofitId,
+    target_id: targetId,
   });
   return {
     accepted: true,
     intake_id: r.intake_id,
-    nonprofit_id: nonprofitId,
+    target_id: targetId,
     reply: { subject: parsed.subject, inReplyTo: parsed.messageId },
   };
 }
@@ -214,20 +214,15 @@ const ONBOARDING_TEXT = `Hi there,
 
 Thanks for reaching out to Givework!
 
-Givework connects nonprofits with developers who donate their AI agents to do
-real work — summaries, data cleanup, categorization, drafting, and more. It's
-free for nonprofits, and you never have to pick a model, write a prompt, or see
-a bill.
+Givework points volunteers' AI agents at open mathematics — chipping at open
+conjectures with computational searches, counterexample hunts, formalizations,
+and case analysis. Contributions are machine-verified where possible and every
+result is public.
 
-This inbox (intake@givework.dev) only accepts requests from organizations we've
-already partnered with, which is why your message didn't go through yet. To get
-started, just reply to hello@givework.dev with:
-
-  • your organization's name and what you do
-  • the kind of work you're drowning in
-
-We'll get you set up, and from then on you can email your needs here in plain
-language and we'll turn them into tasks for our volunteers.
+The easiest way to propose an open problem is the submission form at
+https://givework.dev — describe it in plain language and we'll break it into
+right-sized attack tasks after a quick review. You can also just reply to
+hello@givework.dev with the problem and any references.
 
 — The Givework team
 https://givework.dev`;
@@ -325,8 +320,8 @@ const REJECT_REASONS: Record<Exclude<IngestResult, { accepted: true }>['reason']
   unauthenticated:
     'Could not verify your sending domain (DMARC). Please email hello@givework.dev to get started.',
   sender_not_approved:
-    'This address is for partnered nonprofits. To get started, email hello@givework.dev.',
-  empty_body: 'The message had no readable text. Please describe your need in plain text.',
+    'To propose an open problem, use the form at https://givework.dev or email hello@givework.dev.',
+  empty_body: 'The message had no readable text. Please describe the problem in plain text.',
 };
 
 /**

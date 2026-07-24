@@ -33,7 +33,7 @@ interface DevBudgetRow {
 
 interface TaskRow {
   id: string;
-  nonprofit_id: string;
+  target_id: string;
   title: string;
   spec: unknown;
   est_cost_cents: number;
@@ -89,6 +89,16 @@ async function reservedPeriodOf(client: Client, taskId: string): Promise<string 
 // checkout
 // ---------------------------------------------------------------------------
 
+/** A recent chunk of work on a task, surfaced to the next agent that picks it up. */
+export interface ContributionSummary {
+  id: number;
+  outcome: string;
+  summary: string;
+  artifact_uri: string | null;
+  cost_cents: number;
+  created_at: string;
+}
+
 export interface CheckoutResult {
   task_id: string;
   spec: unknown;
@@ -96,7 +106,18 @@ export interface CheckoutResult {
   model: string;
   max_cost_cents: number;
   lock_expires_at: string;
+  /**
+   * The target's compacted working set — the board state an incoming agent reads
+   * first (current frontier, live sub-goals, known dead ends, suggested next
+   * step). Kept small deliberately; the full history is in `contributions`.
+   */
+  target_state: unknown;
+  /** The most recent contributions to this task, newest first — what's been tried. */
+  prior_contributions: ContributionSummary[];
 }
+
+/** How many recent contributions to hydrate into a checkout's context. */
+const PRIOR_CONTRIBUTIONS_LIMIT = 5;
 
 /**
  * Atomically reserve budget and lock an open task to a dev for 10 minutes.
@@ -170,7 +191,7 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
               lock_expires_at = now() + interval '10 minutes',
               reserved_period = ${CURRENT_PERIOD}
         WHERE id = $1 AND status = 'open'
-        RETURNING id, nonprofit_id, title, spec, model, max_cost_cents, lock_expires_at`,
+        RETURNING id, target_id, title, spec, model, max_cost_cents, lock_expires_at`,
       [taskId, devId],
     );
     if (claim.rowCount === 0) {
@@ -188,9 +209,25 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 
     // 5. Ledger: +max_cost reserved.
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'checkout', $4)`,
-      [taskId, devId, claimed.nonprofit_id, task.max_cost_cents],
+      [taskId, devId, claimed.target_id, task.max_cost_cents],
+    );
+
+    // 6. Hydrate the incoming agent's context: the target's compacted working
+    //    set plus the most recent chunks tried on this task (progress and dead
+    //    ends), so a bounded budget continues the work instead of restarting it.
+    const stateRes = await client.query<{ state: unknown }>(
+      `SELECT state FROM targets WHERE id = $1`,
+      [claimed.target_id],
+    );
+    const prior = await client.query<ContributionSummary>(
+      `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at
+         FROM contributions
+        WHERE task_id = $1
+        ORDER BY id DESC
+        LIMIT $2`,
+      [taskId, PRIOR_CONTRIBUTIONS_LIMIT],
     );
 
     return {
@@ -200,6 +237,8 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       model: claimed.model,
       max_cost_cents: claimed.max_cost_cents,
       lock_expires_at: claimed.lock_expires_at as string,
+      target_state: stateRes.rows[0]?.state ?? {},
+      prior_contributions: prior.rows,
     };
   });
 }
@@ -208,26 +247,54 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 // submit
 // ---------------------------------------------------------------------------
 
+export type ContributionOutcome = 'progress' | 'dead_end' | 'candidate_solution';
+const CONTRIBUTION_OUTCOMES: readonly ContributionOutcome[] = [
+  'progress',
+  'dead_end',
+  'candidate_solution',
+];
+
+export interface ContributeOptions {
+  /**
+   * What this chunk represents. 'progress' and 'dead_end' return the task to the
+   * pool so the next agent continues from the accumulated state; 'candidate_solution'
+   * (the default) finishes the task into 'submitted' for verification/review — the
+   * original one-shot behaviour.
+   */
+  outcome?: ContributionOutcome;
+  /** The agent's handoff note for whoever picks the task up next. */
+  summary?: string;
+  /** Pointer to a large artifact (code, Lean file) in blob storage. */
+  artifactUri?: string;
+  /** Small inline artifact (a lemma, an extended range). */
+  artifact?: unknown;
+  /** Replacement compacted working set for the target (the cheap-path compaction). */
+  stateUpdate?: unknown;
+}
+
 export interface SubmitResult {
   task_id: string;
-  status: 'submitted';
+  /** 'submitted' for a candidate solution (terminal); 'open' when returned to the pool. */
+  status: 'submitted' | 'open';
+  outcome: ContributionOutcome;
+  contribution_id: number;
   reserved_released: number;
   spent_applied: number;
   overage_clamped: boolean;
 }
 
 /**
- * Atomically record a result for a locked task and move the reservation to
- * spend. Releases exactly the amount reserved at checkout (the task's
- * max_cost_cents) and applies the actual spend.
+ * Record one chunk of work on a locked task: append a `contributions` row, book
+ * the spend, and either finish the task (a candidate solution -> 'submitted') or
+ * return it to the pool for the next agent (progress / dead end -> 'open'). In
+ * every case the reservation made at checkout (max_cost_cents) is released and
+ * the actual spend applied — the budget mechanics are identical to the original
+ * one-shot submit; only the resulting task status and the appended log differ.
  *
- * Overage handling: actual_cost_cents should normally be <= max_cost_cents (the
- * runner aborts before exceeding). But if actual > reserved, naively applying it
- * could push reserved + spent over budget and fail the CHECK constraint. We
- * never let that happen: we clamp the spend increment to max_cost_cents and flag
- * the overage in the ledger's raw_usage. The platform eats the difference in
- * Stage 1 rather than failing the transaction — a wrong tracked total is worse
- * than a capped one, and the budget invariant is sacred.
+ * Overage handling (unchanged): actual_cost_cents should be <= max_cost_cents.
+ * If it exceeds the reservation, naively applying it could push reserved + spent
+ * over budget and fail the CHECK. We clamp the spend to max_cost_cents and flag
+ * the overage in raw_usage — a capped tracked total beats a violated invariant.
  */
 export async function submitResult(
   devId: string,
@@ -235,6 +302,7 @@ export async function submitResult(
   result: unknown,
   actualCostCents: number,
   rawUsage: unknown,
+  opts: ContributeOptions = {},
 ): Promise<SubmitResult> {
   // actual_cost_cents comes straight from the dev's /submit body. Reject
   // negatives, NaN, and non-integers up front: a negative value would refund
@@ -243,6 +311,17 @@ export async function submitResult(
   if (!Number.isInteger(actualCostCents) || actualCostCents < 0) {
     throw new OpError(BAD_INPUT, 'bad_input', 'actual_cost_cents must be a non-negative integer');
   }
+  const outcome = opts.outcome ?? 'candidate_solution';
+  if (!CONTRIBUTION_OUTCOMES.includes(outcome)) {
+    throw new OpError(
+      BAD_INPUT,
+      'bad_input',
+      `outcome must be one of ${CONTRIBUTION_OUTCOMES.join(', ')}`,
+    );
+  }
+  // A candidate solution finishes the task; progress/dead-end keep it alive.
+  const terminal = outcome === 'candidate_solution';
+
   return withTransaction(async (client) => {
     // The reservation was made in the task's reserved_period (which may be a
     // prior month if the lock straddled a boundary). Read it first — a plain
@@ -258,21 +337,35 @@ export async function submitResult(
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
-    // 2. Move the task to submitted, guarded on lock+assignment.
-    const upd = await client.query<{ max_cost_cents: number }>(
-      `UPDATE tasks
-          SET status = 'submitted',
-              actual_cost_cents = $3,
-              result = $4,
-              submitted_at = now()
-        WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-        RETURNING max_cost_cents`,
-      [taskId, devId, actualCostCents, result],
-    );
+    // 2. Settle the task, guarded on lock+assignment. Terminal writes the final
+    //    result; a continuing contribution returns the task to the pool (its
+    //    artifact lives on the contributions row, not the task).
+    const upd = terminal
+      ? await client.query<{ max_cost_cents: number; target_id: string }>(
+          `UPDATE tasks
+              SET status = 'submitted',
+                  actual_cost_cents = $3,
+                  result = $4,
+                  submitted_at = now()
+            WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
+            RETURNING max_cost_cents, target_id`,
+          [taskId, devId, actualCostCents, result],
+        )
+      : await client.query<{ max_cost_cents: number; target_id: string }>(
+          `UPDATE tasks
+              SET status = 'open',
+                  assigned_dev_id = NULL,
+                  lock_expires_at = NULL,
+                  reserved_period = NULL
+            WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
+            RETURNING max_cost_cents, target_id`,
+          [taskId, devId],
+        );
     if (upd.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you or already moved on');
     }
     const reserved = upd.rows[0].max_cost_cents;
+    const targetId = upd.rows[0].target_id;
 
     // Clamp the spend so reserved + spent can never exceed budget.
     let spendApplied = actualCostCents;
@@ -302,20 +395,65 @@ export async function submitResult(
       : rawUsage;
 
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents, raw_usage)
-       SELECT $1, $2, t.nonprofit_id, 'submit', $3, $4
-         FROM tasks t WHERE t.id = $1`,
-      [taskId, devId, spendApplied - reserved, JSON.stringify(usagePayload ?? null)],
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents, raw_usage)
+       VALUES ($1, $2, $3, 'submit', $4, $5)`,
+      [taskId, devId, targetId, spendApplied - reserved, JSON.stringify(usagePayload ?? null)],
     );
+
+    // 5. Append the contribution — the durable, append-only record of this chunk
+    //    (progress or dead end alike). cost_cents is the booked spend.
+    const contrib = await client.query<{ id: number }>(
+      `INSERT INTO contributions
+         (task_id, target_id, dev_id, outcome, summary, artifact_uri, artifact, cost_cents, raw_usage)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      [
+        taskId,
+        targetId,
+        devId,
+        outcome,
+        opts.summary ?? '',
+        opts.artifactUri ?? null,
+        opts.artifact != null ? JSON.stringify(opts.artifact) : null,
+        spendApplied,
+        JSON.stringify(usagePayload ?? null),
+      ],
+    );
+
+    // 6. Refresh the target's compacted working set, if the agent supplied one.
+    if (opts.stateUpdate !== undefined) {
+      await client.query(`UPDATE targets SET state = $2 WHERE id = $1`, [
+        targetId,
+        JSON.stringify(opts.stateUpdate),
+      ]);
+    }
 
     return {
       task_id: taskId,
-      status: 'submitted',
+      status: terminal ? 'submitted' : 'open',
+      outcome,
+      contribution_id: contrib.rows[0].id,
       reserved_released: reserved,
       spent_applied: spendApplied,
       overage_clamped: overageClamped,
     };
   });
+}
+
+/** A task's contributions, newest first — the accumulated log of what's been tried. */
+export async function getTaskContributions(
+  taskId: string,
+  limit = 20,
+): Promise<ContributionSummary[]> {
+  const { rows } = await query<ContributionSummary>(
+    `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at
+       FROM contributions
+      WHERE task_id = $1
+      ORDER BY id DESC
+      LIMIT $2`,
+    [taskId, limit],
+  );
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,11 +475,11 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
-    const upd = await client.query<{ max_cost_cents: number; nonprofit_id: string }>(
+    const upd = await client.query<{ max_cost_cents: number; target_id: string }>(
       `UPDATE tasks
           SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
         WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-        RETURNING max_cost_cents, nonprofit_id`,
+        RETURNING max_cost_cents, target_id`,
       [taskId, devId],
     );
     if (upd.rowCount === 0) {
@@ -357,9 +495,9 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
     );
 
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'release', $4)`,
-      [taskId, devId, upd.rows[0].nonprofit_id, -reserved],
+      [taskId, devId, upd.rows[0].target_id, -reserved],
     );
 
     return { task_id: taskId, status: 'open', reserved_released: reserved };
@@ -391,11 +529,11 @@ export async function expire(): Promise<ExpireResult> {
     const candidates = await client.query<{
       id: string;
       assigned_dev_id: string;
-      nonprofit_id: string;
+      target_id: string;
       max_cost_cents: number;
       reserved_period: string | null;
     }>(
-      `SELECT id, assigned_dev_id, nonprofit_id, max_cost_cents, reserved_period
+      `SELECT id, assigned_dev_id, target_id, max_cost_cents, reserved_period
          FROM tasks
         WHERE status = 'locked' AND lock_expires_at < now()`,
     );
@@ -448,9 +586,9 @@ export async function expire(): Promise<ExpireResult> {
         [r.assigned_dev_id, r.max_cost_cents, r.reserved_period],
       );
       await client.query(
-        `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+        `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
          VALUES ($1, $2, $3, 'expire', $4)`,
-        [r.id, r.assigned_dev_id, r.nonprofit_id, -r.max_cost_cents],
+        [r.id, r.assigned_dev_id, r.target_id, -r.max_cost_cents],
       );
     }
 
@@ -468,20 +606,20 @@ export async function expire(): Promise<ExpireResult> {
 /** Accept a submitted task. Sets accepted_at, logs an accept ledger row (delta 0). */
 export async function acceptTask(taskId: string): Promise<{ task_id: string; status: 'accepted' }> {
   return withTransaction(async (client) => {
-    const upd = await client.query<{ dev_id: string; nonprofit_id: string }>(
+    const upd = await client.query<{ dev_id: string; target_id: string }>(
       `UPDATE tasks
           SET status = 'accepted', accepted_at = now()
         WHERE id = $1 AND status = 'submitted'
-        RETURNING assigned_dev_id AS dev_id, nonprofit_id`,
+        RETURNING assigned_dev_id AS dev_id, target_id`,
       [taskId],
     );
     if (upd.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_submitted', 'Task is not in submitted state');
     }
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'accept', 0)`,
-      [taskId, upd.rows[0].dev_id, upd.rows[0].nonprofit_id],
+      [taskId, upd.rows[0].dev_id, upd.rows[0].target_id],
     );
     return { task_id: taskId, status: 'accepted' };
   });
@@ -496,20 +634,29 @@ export async function acceptTask(taskId: string): Promise<{ task_id: string; sta
  */
 export async function rejectTask(taskId: string): Promise<{ task_id: string; status: 'open' }> {
   return withTransaction(async (client) => {
-    const upd = await client.query<{ dev_id: string; nonprofit_id: string }>(
-      `UPDATE tasks
-          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+    // Read the assignee before the UPDATE nulls it — RETURNING evaluates the
+    // NEW row, so returning assigned_dev_id from the UPDATE always yields NULL
+    // and the reject ledger row would lose attribution.
+    const prev = await client.query<{ dev_id: string | null; target_id: string }>(
+      `SELECT assigned_dev_id AS dev_id, target_id
+         FROM tasks
         WHERE id = $1 AND status = 'submitted'
-        RETURNING assigned_dev_id AS dev_id, nonprofit_id`,
+        FOR UPDATE`,
       [taskId],
     );
-    if (upd.rowCount === 0) {
+    if (prev.rowCount === 0) {
       throw new OpError(CONFLICT, 'not_submitted', 'Task is not in submitted state');
     }
     await client.query(
-      `INSERT INTO ledger (task_id, dev_id, nonprofit_id, event_type, delta_cents)
+      `UPDATE tasks
+          SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL
+        WHERE id = $1`,
+      [taskId],
+    );
+    await client.query(
+      `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents)
        VALUES ($1, $2, $3, 'reject', 0)`,
-      [taskId, upd.rows[0].dev_id, upd.rows[0].nonprofit_id],
+      [taskId, prev.rows[0].dev_id, prev.rows[0].target_id],
     );
     return { task_id: taskId, status: 'open' };
   });
@@ -623,8 +770,8 @@ export interface LedgerEntry {
   id: number;
   task_id: string;
   task_title: string | null;
-  nonprofit_id: string;
-  nonprofit_name: string | null;
+  target_id: string;
+  target_name: string | null;
   event_type: string;
   delta_cents: number;
   created_at: string;
@@ -668,11 +815,11 @@ export async function getDevLedger(
   params.push(limit + 1);
   const { rows } = await query<LedgerEntry>(
     `SELECT l.id, l.task_id, t.title AS task_title,
-            l.nonprofit_id, n.name AS nonprofit_name,
+            l.target_id, n.name AS target_name,
             l.event_type, l.delta_cents, l.created_at
        FROM ledger l
        LEFT JOIN tasks t ON t.id = l.task_id
-       LEFT JOIN nonprofits n ON n.id = l.nonprofit_id
+       LEFT JOIN targets n ON n.id = l.target_id
       WHERE l.dev_id = $1 ${cursor}
       ORDER BY l.id DESC
       LIMIT $${params.length}`,
@@ -697,7 +844,7 @@ export interface DevStats {
   total_donated_cents: number;
   tasks_completed: number;
   tasks_accepted: number;
-  nonprofits_helped: number;
+  targets_helped: number;
   first_contribution_at: string | null;
   last_contribution_at: string | null;
   by_month: { month: string; donated_cents: number; tasks: number }[];
@@ -719,7 +866,7 @@ export async function getDevStats(devId: string): Promise<DevStats> {
     total_donated_cents: number;
     tasks_completed: number;
     tasks_accepted: number;
-    nonprofits_helped: number;
+    targets_helped: number;
     first_contribution_at: string | null;
     last_contribution_at: string | null;
   }>(
@@ -728,8 +875,8 @@ export async function getDevStats(devId: string): Promise<DevStats> {
                  FILTER (WHERE l.event_type = 'submit'), 0)::bigint AS total_donated_cents,
         COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'submit') AS tasks_completed,
         COUNT(DISTINCT l.task_id) FILTER (WHERE l.event_type = 'accept') AS tasks_accepted,
-        COUNT(DISTINCT l.nonprofit_id)
-          FILTER (WHERE l.event_type IN ('submit', 'accept')) AS nonprofits_helped,
+        COUNT(DISTINCT l.target_id)
+          FILTER (WHERE l.event_type IN ('submit', 'accept')) AS targets_helped,
         MIN(l.created_at) FILTER (WHERE l.event_type = 'submit') AS first_contribution_at,
         MAX(l.created_at) FILTER (WHERE l.event_type = 'submit') AS last_contribution_at
        FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id
@@ -752,7 +899,7 @@ export async function getDevStats(devId: string): Promise<DevStats> {
     total_donated_cents: s.total_donated_cents,
     tasks_completed: s.tasks_completed,
     tasks_accepted: s.tasks_accepted,
-    nonprofits_helped: s.nonprofits_helped,
+    targets_helped: s.targets_helped,
     first_contribution_at: s.first_contribution_at,
     last_contribution_at: s.last_contribution_at,
     by_month: months.rows,
@@ -790,7 +937,7 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   const limitParam = `$${params.length}`;
 
   const { rows } = await query<TaskRow>(
-    `SELECT id, nonprofit_id, title, spec, est_cost_cents, max_cost_cents,
+    `SELECT id, target_id, title, spec, est_cost_cents, max_cost_cents,
             model, sensitivity, status, created_at
        FROM tasks
       WHERE ${conditions.join(' AND ')}
@@ -827,8 +974,8 @@ export async function getPublicTransparency(): Promise<Transparency> {
     `SELECT n.name,
             count(t.id)::int AS tasks_total,
             (count(t.id) FILTER (WHERE t.status = 'accepted'))::int AS tasks_accepted
-       FROM nonprofits n
-       LEFT JOIN tasks t ON t.nonprofit_id = n.id
+       FROM targets n
+       LEFT JOIN tasks t ON t.target_id = n.id
       WHERE n.listed = true
       GROUP BY n.id, n.name
       ORDER BY tasks_total DESC, n.name ASC`,
@@ -842,4 +989,211 @@ export async function getPublicTransparency(): Promise<Transparency> {
     { orgs: 0, tasks_total: 0, tasks_accepted: 0 },
   );
   return { totals, orgs: rows };
+}
+
+// ---------------------------------------------------------------------------
+// public per-target (conjecture) progress
+// ---------------------------------------------------------------------------
+
+export interface TargetProgressMetrics {
+  tasks_total: number;
+  tasks_open: number;
+  tasks_resolved: number; // accepted
+  contributions: number;
+  contributors: number; // distinct devs
+  compute_cents: number; // total donated toward this target
+  last_activity_at: string | null;
+}
+
+export interface TargetProgress {
+  slug: string;
+  name: string;
+  kind: string;
+  status: string;
+  statement_plain: string | null;
+  statement_formal: string | null;
+  source_ref: string | null;
+  state: unknown; // compacted working set (current frontier, next steps)
+  created_at: string;
+  metrics: TargetProgressMetrics;
+  recent_contributions: { outcome: string; summary: string; created_at: string }[];
+}
+
+// Only inherently-public kinds are exposed by slug. org_request work (the future
+// vetted-org path) is never served on the public progress page.
+const PUBLIC_TARGET_KINDS = ['conjecture', 'research_question'];
+
+/**
+ * Public progress for one conjecture, keyed by its human-readable slug: the
+ * statement, current status, the compacted working set, roll-up metrics, and a
+ * feed of the most recent contributions (the handoff notes read as a progress
+ * log). No PII — conjectures are public. Returns null for an unknown slug or a
+ * non-public kind. Backs GET /conjectures/:slug.
+ */
+export async function getTargetProgress(slug: string): Promise<TargetProgress | null> {
+  const { rows } = await query<{
+    id: string;
+    slug: string;
+    name: string;
+    kind: string;
+    status: string;
+    statement_plain: string | null;
+    statement_formal: string | null;
+    source_ref: string | null;
+    state: unknown;
+    created_at: string | Date;
+  }>(
+    `SELECT id, slug, name, kind::text AS kind, status::text AS status,
+            statement_plain, statement_formal, source_ref, state, created_at
+       FROM targets
+      WHERE slug = $1 AND kind::text = ANY($2::text[])`,
+    [slug, PUBLIC_TARGET_KINDS],
+  );
+  const t = rows[0];
+  if (!t) return null;
+
+  const m = await query<{
+    tasks_total: number;
+    tasks_open: number;
+    tasks_resolved: number;
+    contributions: number;
+    contributors: number;
+    compute_cents: number;
+    last_activity_at: string | Date | null;
+  }>(
+    `SELECT
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1) AS tasks_total,
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1 AND status = 'open') AS tasks_open,
+        (SELECT count(*)::int FROM tasks WHERE target_id = $1 AND status = 'accepted') AS tasks_resolved,
+        (SELECT count(*)::int FROM contributions WHERE target_id = $1) AS contributions,
+        (SELECT count(DISTINCT dev_id)::int FROM contributions WHERE target_id = $1) AS contributors,
+        (SELECT COALESCE(SUM(cost_cents), 0)::bigint FROM contributions WHERE target_id = $1) AS compute_cents,
+        (SELECT max(created_at) FROM contributions WHERE target_id = $1) AS last_activity_at`,
+    [t.id],
+  );
+  const recent = await query<{ outcome: string; summary: string; created_at: string | Date }>(
+    `SELECT outcome::text AS outcome, summary, created_at
+       FROM contributions
+      WHERE target_id = $1
+      ORDER BY id DESC
+      LIMIT 10`,
+    [t.id],
+  );
+  const mr = m.rows[0];
+  return {
+    slug: t.slug,
+    name: t.name,
+    kind: t.kind,
+    status: t.status,
+    statement_plain: t.statement_plain,
+    statement_formal: t.statement_formal,
+    source_ref: t.source_ref,
+    state: t.state,
+    created_at: new Date(t.created_at).toISOString(),
+    metrics: {
+      tasks_total: mr.tasks_total,
+      tasks_open: mr.tasks_open,
+      tasks_resolved: mr.tasks_resolved,
+      contributions: mr.contributions,
+      contributors: mr.contributors,
+      compute_cents: mr.compute_cents,
+      last_activity_at: mr.last_activity_at ? new Date(mr.last_activity_at).toISOString() : null,
+    },
+    recent_contributions: recent.rows.map((r) => ({
+      outcome: r.outcome,
+      summary: r.summary,
+      created_at: new Date(r.created_at).toISOString(),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// public leaderboard
+// ---------------------------------------------------------------------------
+
+export interface LeaderboardConjecture {
+  slug: string;
+  name: string;
+  status: string;
+  tasks_total: number;
+  contributions: number;
+  contributors: number;
+  compute_cents: number;
+}
+
+export interface LeaderboardContributor {
+  github_handle: string;
+  tasks: number;
+  donated_cents: number;
+}
+
+export interface Leaderboard {
+  totals: {
+    conjectures: number;
+    open: number;
+    settled: number;
+    contributors: number;
+    compute_cents: number;
+  };
+  conjectures: LeaderboardConjecture[];
+  contributors: LeaderboardContributor[];
+}
+
+/**
+ * The public "who's chipping at what" rollup: curated conjectures (a target is
+ * curated once it has a slug) with their progress, and the top contributors by
+ * donated compute. No PII, no task content — names, slugs, statuses, counts, and
+ * donated cents only. Drives GET /leaderboard.
+ */
+export async function getLeaderboard(): Promise<Leaderboard> {
+  const conjecturesP = query<LeaderboardConjecture>(
+    `SELECT tg.slug, tg.name, tg.status::text AS status,
+            (SELECT count(*)::int FROM tasks t WHERE t.target_id = tg.id) AS tasks_total,
+            (SELECT count(*)::int FROM contributions c WHERE c.target_id = tg.id) AS contributions,
+            (SELECT count(DISTINCT c.dev_id)::int FROM contributions c WHERE c.target_id = tg.id) AS contributors,
+            (SELECT COALESCE(SUM(c.cost_cents), 0)::bigint FROM contributions c WHERE c.target_id = tg.id) AS compute_cents
+       FROM targets tg
+      WHERE tg.slug IS NOT NULL AND tg.kind::text = ANY($1::text[])
+      ORDER BY compute_cents DESC, tg.name ASC`,
+    [PUBLIC_TARGET_KINDS],
+  );
+  const contributorsP = query<LeaderboardContributor>(
+    `SELECT d.github_handle,
+            count(DISTINCT c.task_id)::int AS tasks,
+            COALESCE(SUM(c.cost_cents), 0)::bigint AS donated_cents
+       FROM contributions c
+       JOIN devs d ON d.id = c.dev_id
+      GROUP BY d.id, d.github_handle
+      ORDER BY donated_cents DESC, tasks DESC
+      LIMIT 20`,
+  );
+  const totalsP = query<{
+    conjectures: number;
+    open: number;
+    settled: number;
+    contributors: number;
+    compute_cents: number;
+  }>(
+    `SELECT
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[])) AS conjectures,
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[]) AND status = 'open') AS open,
+        (SELECT count(*)::int FROM targets
+          WHERE slug IS NOT NULL AND kind::text = ANY($1::text[])
+            AND status IN ('resolved', 'disproven')) AS settled,
+        (SELECT count(DISTINCT dev_id)::int FROM contributions) AS contributors,
+        (SELECT COALESCE(SUM(cost_cents), 0)::bigint FROM contributions) AS compute_cents`,
+    [PUBLIC_TARGET_KINDS],
+  );
+  const [conjectures, contributors, totals] = await Promise.all([
+    conjecturesP,
+    contributorsP,
+    totalsP,
+  ]);
+  return {
+    totals: totals.rows[0],
+    conjectures: conjectures.rows,
+    contributors: contributors.rows,
+  };
 }

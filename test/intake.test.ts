@@ -14,53 +14,55 @@ import {
   uploadDraft,
 } from '../src/intake/operations.js';
 import { checkoutTask } from '../src/operations.js';
-import { createDev, resetDb, setBudget, setVerified } from './helpers.js';
+import { createDev, resetDb, setBudget } from './helpers.js';
 
 afterAll(closePool);
 beforeEach(resetDb);
 
 describe('receive', () => {
-  it('creates a provisional nonprofit, stores the request, and auto-drafts tasks', async () => {
+  it('creates a provisional target, stores the request, and auto-drafts attack tasks', async () => {
     const r = await receiveIntake({
-      from_email: 'director@shelter.org',
-      subject: 'Need help',
-      body: 'Please categorize 50 client intake forms by primary need.',
+      from_email: 'proposer@math.org',
+      subject: 'Collatz',
+      body: 'Verify the conjecture holds for the first 50 integers.',
     });
 
     expect(r.status).toBe('decomposed');
     expect(r.proposed.length).toBeGreaterThan(0);
-    // 50 forms / 10 per task = 5 tasks.
+    // 50 integers / 10 per task = 5 computational range-sweep tasks.
     expect(r.proposed.length).toBe(5);
-    // Inbound defaults to sensitive.
-    expect(r.proposed.every((t) => t.sensitivity === 'sensitive')).toBe(true);
+    // Open math is public; each batch is computational, verified by replication.
+    expect(r.proposed.every((t) => t.sensitivity === 'public')).toBe(true);
+    expect(r.proposed.every((t) => t.kind === 'computational')).toBe(true);
+    expect(r.proposed.every((t) => t.verify_via === 'replication')).toBe(true);
 
-    const np = await pool.query(`SELECT verified FROM nonprofits WHERE id = $1`, [r.nonprofit_id]);
+    const np = await pool.query(`SELECT verified FROM targets WHERE id = $1`, [r.target_id]);
     expect(np.rows[0].verified).toBe(false); // provisional
 
     const full = await getIntake(r.intake_id);
     expect(full.triaged_by).toBe('stub'); // default decomposer; honestly recorded
-    expect(full.from_email).toBe('director@shelter.org');
+    expect(full.from_email).toBe('proposer@math.org');
   });
 
-  it('reuses the same provisional nonprofit for repeat emails from one sender', async () => {
+  it('reuses the same provisional target for repeat emails from one sender', async () => {
     const a = await receiveIntake({ from_email: 'x@org.org', body: 'first ask' });
     const b = await receiveIntake({ from_email: 'x@org.org', body: 'second ask' });
-    expect(a.nonprofit_id).toBe(b.nonprofit_id);
+    expect(a.target_id).toBe(b.target_id);
   });
 
-  it('maps a bad caller-supplied nonprofit_id to a clean 400, not a 500', async () => {
-    // The admin manual path can pass nonprofit_id directly; a stale/typo'd value
+  it('maps a bad caller-supplied target_id to a clean 400, not a 500', async () => {
+    // The admin manual path can pass target_id directly; a stale/typo'd value
     // must surface as bad_input rather than an unhandled FK/UUID error.
     await expect(
-      receiveIntake({ from_email: 'x@org.org', body: 'hi', nonprofit_id: 'not-a-uuid' }),
-    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+      receiveIntake({ from_email: 'x@org.org', body: 'hi', target_id: 'not-a-uuid' }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_target_id' });
     await expect(
       receiveIntake({
         from_email: 'x@org.org',
         body: 'hi',
-        nonprofit_id: '00000000-0000-0000-0000-000000000000',
+        target_id: '00000000-0000-0000-0000-000000000000',
       }),
-    ).rejects.toMatchObject({ status: 400, code: 'bad_nonprofit_id' });
+    ).rejects.toMatchObject({ status: 400, code: 'bad_target_id' });
   });
 });
 
@@ -83,11 +85,10 @@ describe('publish', () => {
     expect(t.rows[0].authored_by).toBe('admin');
 
     // End-to-end: a funded dev can check the published task out through the ledger
-    // core. Intake-decomposed tasks default to sensitivity='sensitive' (intake
-    // often carries personal data), so the dev must be verified to claim it.
+    // core. Attack tasks are public mathematics, so no verification is required —
+    // an unverified, funded dev can claim one straight away.
     const dev = await createDev('alice');
     await setBudget(dev, 5000);
-    await setVerified(dev);
     const co = await checkoutTask(dev, pub.task_ids[0]);
     expect(co.task_id).toBe(pub.task_ids[0]);
   });
@@ -111,31 +112,36 @@ describe('publish', () => {
 describe('StubDecomposer sizing', () => {
   const d = new StubDecomposer();
 
-  it('splits a quantity into batches of 10 and reports triagedBy stub', async () => {
+  it('splits a numeric bound into computational batches of 10 and reports triagedBy stub', async () => {
     const { tasks, triagedBy } = await d.decompose({
       from_email: 'x',
-      body: 'tag 23 emails',
+      body: 'check 23 cases',
       attachment_count: 0,
     });
     expect(tasks.length).toBe(3); // 10 + 10 + 3
     expect(tasks[2].spec.unit_count).toBe(3);
+    expect(tasks.every((t) => t.kind === 'computational' && t.verify_via === 'replication')).toBe(
+      true,
+    );
     expect(triagedBy).toBe('stub');
   });
 
-  it('makes a single task when there is no quantity', async () => {
+  it('makes a single exploration task when there is no numeric bound', async () => {
     const { tasks } = await d.decompose({
       from_email: 'x',
-      body: 'write a thank-you note',
+      body: 'is every even number the sum of two primes',
       attachment_count: 0,
     });
     expect(tasks.length).toBe(1);
     expect(tasks[0].spec.unit_count).toBe(1);
+    expect(tasks[0].kind).toBe('exploration');
+    expect(tasks[0].verify_via).toBe('human_review');
   });
 
-  it('caps the number of tasks for huge quantities', async () => {
+  it('caps the number of tasks for huge bounds', async () => {
     const { tasks } = await d.decompose({
       from_email: 'x',
-      body: 'process 100000 records',
+      body: 'check 100000 integers',
       attachment_count: 0,
     });
     expect(tasks.length).toBeLessThanOrEqual(20);
@@ -155,14 +161,14 @@ describe('LocalLLMDecomposer', () => {
       reply(
         JSON.stringify({
           tasks: [
-            // deliberately messy: max < est, bad model, bad sensitivity, float cents
+            // deliberately messy: max < est, bad model, bad kind, float cents
             {
               title: 'T',
+              kind: 'nonsense',
               spec: { prompt: 'do it', unit_count: 3.7 },
               est_cost_cents: 200.5,
               max_cost_cents: 50,
               model: 'gpt-4',
-              sensitivity: 'spicy',
             },
           ],
         }),
@@ -175,7 +181,9 @@ describe('LocalLLMDecomposer', () => {
     expect(t.max_cost_cents).toBeGreaterThanOrEqual(t.est_cost_cents); // clamped
     expect(t.est_cost_cents).toBe(201); // rounded int
     expect(['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']).toContain(t.model);
-    expect(t.sensitivity).toBe('sensitive'); // invalid -> safe default
+    expect(t.kind).toBe('exploration'); // invalid -> safe default
+    expect(t.verify_via).toBe('human_review'); // derived from the defaulted kind
+    expect(t.sensitivity).toBe('public'); // math is public
     expect(t.spec.unit_count).toBe(4); // rounded int
   });
 
@@ -188,11 +196,12 @@ describe('LocalLLMDecomposer', () => {
           tasks: [
             {
               title: 'T',
+              kind: 'computational',
+              verify_via: 'replication',
               spec: { prompt: 'go' },
               est_cost_cents: 50,
               max_cost_cents: 75,
               model: 'claude-sonnet-4-6',
-              sensitivity: 'sensitive',
             },
           ],
         }),
@@ -204,7 +213,8 @@ describe('LocalLLMDecomposer', () => {
     // the model is constrained to our exact draft shape — no field drift possible
     expect(schema.properties.tasks.items.required).toContain('title');
     expect(schema.properties.tasks.items.properties.model.enum).toContain('claude-sonnet-4-6');
-    expect(schema.properties.tasks.items.properties.sensitivity.enum).toContain('sensitive');
+    expect(schema.properties.tasks.items.properties.kind.enum).toContain('computational');
+    expect(schema.properties.tasks.items.properties.verify_via.enum).toContain('replication');
   });
 
   it('falls back to the stub when the endpoint is unreachable (reports stub, not local)', async () => {

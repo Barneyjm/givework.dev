@@ -3,7 +3,7 @@ import { closePool } from '../src/db.js';
 import { checkoutTask, OpError } from '../src/operations.js';
 import {
   createDev,
-  createNonprofit,
+  createTarget,
   createTask,
   getBudgetRow,
   getTaskRow,
@@ -35,7 +35,7 @@ describe('double-checkout race (criterion 4)', () => {
     const dev2 = await createDev('bob');
     await setBudget(dev1, 2000);
     await setBudget(dev2, 2000);
-    const np = await createNonprofit();
+    const np = await createTarget();
     const task = await createTask(np, { max: 500 });
 
     // Fire both genuinely concurrently — each checkoutTask opens its own txn.
@@ -61,7 +61,7 @@ describe('same-dev concurrent spend (criterion 5)', () => {
   it('one dev, $5 budget, two $5 tasks, concurrent checkouts -> one 200, one 402', async () => {
     const dev = await createDev('alice');
     await setBudget(dev, 500); // $5
-    const np = await createNonprofit();
+    const np = await createTarget();
     const t1 = await createTask(np, { max: 500 });
     const t2 = await createTask(np, { max: 500 });
 

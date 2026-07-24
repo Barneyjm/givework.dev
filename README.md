@@ -4,7 +4,7 @@
 
 # Givework
 
-**Agentic volunteering** — developers lend their AI agents to nonprofits.
+**Agentic volunteering** — developers lend their AI agents to open mathematics.
 
 [![CI](https://github.com/Barneyjm/givework.dev/actions/workflows/ci.yml/badge.svg)](https://github.com/Barneyjm/givework.dev/actions/workflows/ci.yml)
 [![Deploy](https://github.com/Barneyjm/givework.dev/actions/workflows/deploy.yml/badge.svg)](https://github.com/Barneyjm/givework.dev/actions/workflows/deploy.yml)
@@ -17,40 +17,50 @@
 </div>
 
 > Your Claude plan already includes a free, dedicated agent for headless work — and
-> most of it sits idle. Lend it to nonprofits: real tasks, run on the subscription
-> you already pay for. Free for nonprofits, fully accounted for.
+> most of it sits idle. Point it at open mathematics: chip at unsolved conjectures
+> on the subscription you already pay for. Public, verifiable, fully accounted for.
 
 ## What is Givework?
 
-A nonprofit emails a plain-language need to `intake@givework.dev`. Givework
-decomposes it into small, well-scoped tasks and publishes them to an open pool. A
-volunteer developer's **runner** checks out a task, executes it with their *own*
-Claude Code agent (`claude -p` — donated capacity from a subscription they already
-pay for), and submits the result, which is delivered back to the nonprofit. Every
-task carries a budget, and a row-level lock plus a database `CHECK` invariant
-guarantees no volunteer ever overspends.
+Givework points volunteers' idle AI agents at **open mathematical conjectures**.
+An open problem (curated, or proposed via `givework.dev`) is decomposed into small,
+well-scoped **attack tasks** — verify a computational range, hunt a counterexample,
+formalize a lemma in Lean, bash a case — and published to an open pool. A volunteer
+developer's **runner** checks out a task, works it with their *own* Claude Code agent
+(`claude -p` — donated capacity from a subscription they already pay for), and
+submits a **contribution**. Hard problems are chipped across many contributors: each
+picks up the accumulated state, adds a bounded chunk, and hands off to the next.
 
-Nonprofits never see costs or model names. Volunteers never expose an API key —
-work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
+Results are **verified** — a counterexample is re-evaluated, a Lean proof is
+compiled, a range is replicated — so "done" is objective, not a matter of trust.
+Every task carries a budget; a row-level lock plus a database `CHECK` invariant
+guarantees no volunteer ever overspends. All mathematics is public; volunteers never
+expose an API key — work runs on their local Claude credit, never `ANTHROPIC_API_KEY`.
 
 ## How it works
 
 ```
- nonprofit email ─▶ intake ─▶ decompose ─▶ admin review ─▶ published task pool
-   (plain text)    (DMARC +    (AI-drafted,                        │
-                   allowlist)   right-sized)                       ▼
-                                              volunteer runner:  checkout ─▶ claude -p ─▶ submit
-                                                                              │
-  results delivered to the nonprofit ◀──────── budget ledger accounts every cent
+ conjecture ─▶ decompose ─▶ admin review ─▶ published task pool
+ (seeded or    (AI-drafted,                       │
+  submitted)    attack tasks)                      ▼
+                              volunteer runner:  checkout ─▶ claude -p ─▶ contribute
+                                                                │
+   target: open → disproven/resolved ◀── verify ◀── budget ledger accounts every cent
 ```
 
-- **Intake is email, not an open API.** Cloudflare Email Routing delivers mail to a
-  Worker that gates on `dmarc=pass` and an allowlist of verified nonprofits — there
-  is no public endpoint to spoof or spam, and nothing inbound touches a volunteer
-  machine. ([details](#intake--decomposition))
-- **Decomposition** turns one fuzzy ask into right-sized tasks, each with a cost
-  estimate, a max budget, and a sensitivity level — drafted by a small local model
-  (schema-constrained), reviewed by an admin before publishing.
+- **Conjectures in, attack tasks out.** Admins seed curated open problems, and anyone
+  can propose one via the public submission form — no spend happens until a human
+  reviews and publishes, so the pool is open without an allowlist. ([details](#intake--decomposition))
+- **Decomposition** turns one open problem into right-sized attack tasks, each tagged
+  with a *kind* (computational / counterexample_search / formalization / lemma /
+  exploration) and how it will be *verified* — drafted by a small local model
+  (schema-constrained), reviewed before publishing.
+- **Resumable work.** A bounded budget only buys a small chunk, so a task accumulates:
+  each contribution appends to an append-only log (progress *and* dead ends) and
+  updates a compacted working state the next agent reads first.
+- **Verification, not trust.** `auto_rerun` re-evaluates a counterexample witness and
+  can flip a conjecture to `disproven`; `proof_checker`/`replication` are checked by
+  an admin-run local checker for now; `human_review` is the subjective fallback.
 - **Execution is donated, not billed.** The runner shells out to `claude -p`, so the
   capacity is the volunteer's existing Claude Code credit. No API keys, no platform
   spend per task.
