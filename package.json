@@ -14,6 +14,7 @@
     "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "seed": "node --env-file-if-exists=.env --import tsx scripts/seed-demo.ts",
     "seed-conjectures": "node --env-file-if-exists=.env --import tsx scripts/seed-conjectures.ts",
+    "seed-wiki-conjectures": "node --env-file-if-exists=.env --import tsx scripts/seed-wiki-conjectures.ts",
     "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "mcp": "node --env-file-if-exists=.env --import tsx src/mcp.ts",
