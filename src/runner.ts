@@ -74,6 +74,9 @@ class McpBackend implements Backend {
   submit(args: SubmitArgs) {
     return this.call<SubmitResult>('submit_result', args as unknown as Record<string, unknown>);
   }
+  async heartbeat(taskId: string) {
+    await this.call('heartbeat_task', { task_id: taskId });
+  }
   async release(taskId: string) {
     await this.call('release_task', { task_id: taskId });
   }

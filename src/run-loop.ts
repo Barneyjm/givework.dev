@@ -89,6 +89,8 @@ export interface Backend {
   }): Promise<OpenTask[]>;
   checkout(taskId: string): Promise<CheckoutResult>;
   submit(args: SubmitArgs): Promise<SubmitResult>;
+  /** Renew the checkout lease — pinged periodically during long executions. */
+  heartbeat(taskId: string): Promise<void>;
   release(taskId: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -153,6 +155,9 @@ export class HttpBackend implements Backend {
   }
   submit(args: SubmitArgs) {
     return this.req<SubmitResult>('POST', '/submit', args);
+  }
+  async heartbeat(taskId: string) {
+    await this.req('POST', '/heartbeat', { task_id: taskId });
   }
   async release(taskId: string) {
     await this.req('POST', '/release', { task_id: taskId });
@@ -248,7 +253,18 @@ export async function runLoop(
       // Run the work. If execution fails (e.g. the real Claude call errors), do
       // NOT submit — release the task so another volunteer can pick it up.
       // Submitting fabricated output would corrupt the ledger and the deliverable.
+      // A heartbeat renews the 10-minute lease every 5 minutes while execution
+      // runs, so long CPU work units keep their claim; failures are non-fatal
+      // (a dead lease just returns the task to the pool, as designed).
       let exec: Awaited<ReturnType<typeof executor.execute>>;
+      const lease = setInterval(
+        () => {
+          backend
+            .heartbeat(checkout.task_id)
+            .catch((err) => console.error(`  ! heartbeat failed: ${(err as Error).message}`));
+        },
+        5 * 60 * 1000,
+      );
       try {
         exec = await executor.execute(checkout as ExecTask);
       } catch (err) {
@@ -265,6 +281,8 @@ export async function runLoop(
           break;
         }
         continue;
+      } finally {
+        clearInterval(lease);
       }
       consecutiveFailures = 0;
 

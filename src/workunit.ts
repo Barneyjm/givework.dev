@@ -1,0 +1,186 @@
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { ExecResult, ExecTask, Executor } from './executor.js';
+
+// Work-unit execution — the CPU half of the "folding@home driven by code"
+// design (CODE_CONTRIB.md). A task whose spec carries `code` names merged
+// contrib-repo code at a pinned SHA; the runner fetches exactly that SHA from
+// exactly the allowlisted repo and executes it inside a podman sandbox with no
+// network. CPU time is the donation here, not tokens: actual_cost_cents is 0,
+// and runs may take hours — the run-loop's lease heartbeat keeps the claim
+// alive while this executes.
+
+const DEFAULT_ALLOWED_REPO = 'Barneyjm/givework-contrib';
+const DEFAULT_IMAGE = 'docker.io/library/python:3.12-alpine';
+/** CPU time is cheap; default to 6h. Override with WORKUNIT_TIMEOUT_MS. */
+const DEFAULT_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
+export interface WorkUnitSpec {
+  repo: string;
+  /** Full 40-hex commit SHA — content-addressed, never a branch or tag. */
+  sha: string;
+  /** Repo-relative path of the script to run. */
+  entrypoint: string;
+  /** JSON handed to the script on stdin (defaults to {}). */
+  input?: unknown;
+}
+
+function isSafeRelPath(p: string): boolean {
+  if (typeof p !== 'string' || p.length === 0 || p.length > 300) return false;
+  if (p.startsWith('/') || p.includes('\\') || p.includes('\0')) return false;
+  const segments = p.split('/');
+  return segments.every((s) => s.length > 0 && s !== '.' && s !== '..' && s !== '.git');
+}
+
+/** Pull a well-formed work-unit spec out of a task spec, or null. */
+export function extractWorkUnit(spec: unknown): WorkUnitSpec | null {
+  const code = (spec as { code?: unknown } | null)?.code as WorkUnitSpec | undefined;
+  if (!code || typeof code !== 'object') return null;
+  if (typeof code.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(code.repo)) return null;
+  if (typeof code.sha !== 'string' || !/^[0-9a-f]{40}$/.test(code.sha)) return null;
+  if (!isSafeRelPath(code.entrypoint)) return null;
+  return { repo: code.repo, sha: code.sha, entrypoint: code.entrypoint, input: code.input };
+}
+
+export interface ProcOpts {
+  cwd?: string;
+  input?: string;
+  timeoutMs?: number;
+}
+type RunProc = (cmd: string, args: string[], opts?: ProcOpts) => Promise<string>;
+
+function execProc(cmd: string, args: string[], opts: ProcOpts = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error(`${cmd} timed out after ${opts.timeoutMs}ms`));
+        }, opts.timeoutMs)
+      : null;
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('error', (e) => {
+      if (timer) clearTimeout(timer);
+      reject(new Error(`${cmd} failed to spawn: ${e.message}`));
+    });
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(new Error(`${cmd} exited ${code}: ${err.slice(0, 300)}`));
+    });
+    // EPIPE from a fast-exiting child must not crash the runner.
+    child.stdin.on('error', () => {});
+    if (opts.input !== undefined) child.stdin.write(opts.input);
+    child.stdin.end();
+  });
+}
+
+/**
+ * Executes a work unit: fetch the pinned SHA from the allowlisted repo, run
+ * the entrypoint in a podman sandbox (no network, capped memory/pids,
+ * read-only checkout), and parse its stdout as the task result. Refuses to
+ * run without the sandbox — there is no unsandboxed fallback.
+ */
+export class WorkUnitExecutor implements Executor {
+  private run: RunProc;
+  private timeoutMs: number;
+  private allowedRepo: string;
+  private image: string;
+
+  constructor(
+    opts: { run?: RunProc; timeoutMs?: number; allowedRepo?: string; image?: string } = {},
+  ) {
+    this.run = opts.run ?? execProc;
+    const envTimeout = Number(process.env.WORKUNIT_TIMEOUT_MS);
+    this.timeoutMs =
+      opts.timeoutMs ??
+      (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : DEFAULT_TIMEOUT_MS);
+    this.allowedRepo =
+      opts.allowedRepo ?? process.env.GIVEWORK_CONTRIB_REPO ?? DEFAULT_ALLOWED_REPO;
+    this.image = opts.image ?? process.env.WORKUNIT_IMAGE ?? DEFAULT_IMAGE;
+  }
+
+  async execute(task: ExecTask): Promise<ExecResult> {
+    const wu = extractWorkUnit(task.spec);
+    if (!wu) throw new Error('task has no valid work-unit spec');
+    if (wu.repo !== this.allowedRepo) {
+      throw new Error(`work-unit repo not allowlisted: ${wu.repo} (allowed: ${this.allowedRepo})`);
+    }
+    // No sandbox, no execution — a volunteer without podman releases the task
+    // rather than running contributed code on the bare machine.
+    await this.run('podman', ['--version']).catch(() => {
+      throw new Error('podman is required to run work units (sandbox unavailable)');
+    });
+
+    const dir = await mkdtemp(path.join(tmpdir(), 'givework-wu-'));
+    const started = Date.now();
+    try {
+      // Fetch exactly the pinned SHA — never a branch, never HEAD.
+      await this.run('git', ['init', '-q'], { cwd: dir });
+      await this.run('git', ['remote', 'add', 'origin', `https://github.com/${wu.repo}.git`], {
+        cwd: dir,
+      });
+      await this.run('git', ['fetch', '-q', '--depth', '1', 'origin', wu.sha], { cwd: dir });
+      await this.run('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: dir });
+
+      const out = await this.run(
+        'podman',
+        [
+          'run',
+          '--rm',
+          '-i',
+          '--network=none',
+          '--memory=1g',
+          '--cpus=2',
+          '--pids-limit=256',
+          '--read-only',
+          '--tmpfs',
+          '/tmp',
+          '-v',
+          `${dir}:/work:ro`,
+          '-w',
+          '/work',
+          this.image,
+          'python3',
+          wu.entrypoint,
+        ],
+        { input: JSON.stringify(wu.input ?? {}), timeoutMs: this.timeoutMs },
+      );
+
+      let result: unknown;
+      try {
+        result = JSON.parse(out);
+      } catch {
+        throw new Error(`work unit produced non-JSON output: ${out.slice(0, 200)}`);
+      }
+      // A work-unit script may steer the contribution loop by including the
+      // continuation fields in its output, exactly like an LLM executor.
+      const r = result as {
+        outcome?: 'progress' | 'dead_end' | 'candidate_solution';
+        summary?: unknown;
+        state_update?: unknown;
+      };
+      return {
+        result,
+        outcome: r.outcome,
+        summary: typeof r.summary === 'string' ? r.summary.slice(0, 500) : undefined,
+        state_update: r.state_update,
+        actual_cost_cents: 0, // CPU donation — no token spend to book
+        raw_usage: {
+          workunit: true,
+          repo: wu.repo,
+          sha: wu.sha,
+          entrypoint: wu.entrypoint,
+          duration_ms: Date.now() - started,
+        },
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+}

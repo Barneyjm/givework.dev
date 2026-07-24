@@ -136,11 +136,21 @@ describe('StubExecutor + factory', () => {
     expect(r.actual_cost_cents).toBe(400);
   });
 
-  it('getExecutor defaults to the stub', () => {
+  it('getExecutor defaults to stub semantics and routes work units to the sandbox', async () => {
     const prev = process.env.EXECUTOR;
     delete process.env.EXECUTOR;
-    expect(getExecutor()).toBeInstanceOf(StubExecutor);
-    expect(getExecutor.length).toBe(0);
+    const ex = getExecutor();
+    // A plain task is handled by the stub…
+    const res = await ex.execute(task);
+    expect((res.result as { stub?: boolean }).stub).toBe(true);
+    // …while a spec.code task goes to the work-unit path (which enforces the
+    // repo allowlist before anything else).
+    await expect(
+      ex.execute({
+        ...task,
+        spec: { code: { repo: 'someone/else', sha: 'a'.repeat(40), entrypoint: 'x.py' } },
+      }),
+    ).rejects.toThrow(/not allowlisted/);
     if (prev !== undefined) process.env.EXECUTOR = prev;
   });
 });

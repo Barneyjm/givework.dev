@@ -457,6 +457,34 @@ export async function getTaskContributions(
 }
 
 // ---------------------------------------------------------------------------
+// heartbeat
+// ---------------------------------------------------------------------------
+
+/**
+ * Renew the checkout lease on a task the dev currently holds. Long-running
+ * work units (CPU jobs that may take hours) ping this while executing so the
+ * 10-minute lock doesn't expire under them; a crashed runner's silence lets
+ * expire() reclaim the task as before. No budget interaction — the
+ * reservation was made at checkout and is settled at submit/release.
+ */
+export async function heartbeatTask(
+  devId: string,
+  taskId: string,
+): Promise<{ task_id: string; lock_expires_at: string }> {
+  const { rows } = await query<{ lock_expires_at: string | Date }>(
+    `UPDATE tasks
+        SET lock_expires_at = now() + interval '10 minutes'
+      WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
+      RETURNING lock_expires_at`,
+    [taskId, devId],
+  );
+  if (!rows[0]) {
+    throw new OpError(CONFLICT, 'not_locked_by_you', 'Task is not locked to you');
+  }
+  return { task_id: taskId, lock_expires_at: new Date(rows[0].lock_expires_at).toISOString() };
+}
+
+// ---------------------------------------------------------------------------
 // release
 // ---------------------------------------------------------------------------
 

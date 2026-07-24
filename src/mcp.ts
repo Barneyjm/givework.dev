@@ -2,7 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { verifyToken } from './auth.js';
-import { checkoutTask, getBudget, listOpenTasks, OpError, releaseTask } from './operations.js';
+import {
+  checkoutTask,
+  getBudget,
+  heartbeatTask,
+  listOpenTasks,
+  OpError,
+  releaseTask,
+} from './operations.js';
 import { submitAndVerify } from './verify.js';
 
 // MCP wrapper around the HTTP-free operations core. This is the rail the dev
@@ -141,6 +148,17 @@ async function main() {
           },
         ),
       ),
+  );
+
+  server.registerTool(
+    'heartbeat_task',
+    {
+      description:
+        'Renew the 10-minute lease on a task locked to you — call periodically while a ' +
+        'long-running work unit executes so the lock does not expire mid-run.',
+      inputSchema: { task_id: z.string().uuid() },
+    },
+    (args) => run(() => heartbeatTask(devId, args.task_id)),
   );
 
   server.registerTool(
