@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { extractWorkUnit, WorkUnitExecutor } from './workunit.js';
 
 // Task execution — the actual donated work. The donation is each monthly
 // subscriber's `claude -p` (Claude Code CLI) capacity — the credit Anthropic
@@ -285,13 +286,33 @@ export class ClaudeCliExecutor implements Executor {
  *   otherwise       → StubExecutor (deterministic; default, used by tests)
  * There is intentionally no API-key/SDK option — donated capacity is `claude -p`.
  */
+/**
+ * Routes each task to the right executor: a task whose spec carries `code`
+ * is a CPU work unit (merged contrib code at a pinned SHA, run sandboxed —
+ * see src/workunit.ts) regardless of which LLM executor is configured;
+ * everything else goes to the inner LLM/stub executor.
+ */
+class DispatchingExecutor implements Executor {
+  constructor(
+    private readonly llm: Executor,
+    private readonly workunit: Executor,
+  ) {}
+  execute(task: ExecTask): Promise<ExecResult> {
+    const isWorkUnit = !!extractWorkUnit(task.spec);
+    return isWorkUnit ? this.workunit.execute(task) : this.llm.execute(task);
+  }
+}
+
 export function getExecutor(): Executor {
+  let llm: Executor;
   if (process.env.EXECUTOR === 'claude') {
     // EXECUTOR_TIMEOUT_MS: how long one `claude -p` run may take before the
     // runner gives up and releases the task (default 180s). Volunteers raise it
     // for deep single-shot tasks on slower models.
     const timeoutMs = Number(process.env.EXECUTOR_TIMEOUT_MS);
-    return new ClaudeCliExecutor(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {});
+    llm = new ClaudeCliExecutor(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {});
+  } else {
+    llm = new StubExecutor();
   }
-  return new StubExecutor();
+  return new DispatchingExecutor(llm, new WorkUnitExecutor());
 }

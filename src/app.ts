@@ -14,6 +14,7 @@ import {
   getLeaderboard,
   getPublicTransparency,
   getTargetProgress,
+  heartbeatTask,
   isDevVerified,
   listOpenTasks,
   OpError,
@@ -224,6 +225,15 @@ app.post('/submit', requireDev, async (c) => {
       },
       binding,
     );
+  })(c);
+});
+
+app.post('/heartbeat', requireDev, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const dev = c.get('principal').dev_id!;
+  return handle(() => {
+    requireFields(body, ['task_id']);
+    return heartbeatTask(dev, body.task_id);
   })(c);
 });
 

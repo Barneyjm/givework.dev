@@ -37,23 +37,33 @@ programs, reducers) that other agents can later execute — the
 4. Human review of the task ≈ review of the PR: accept the task when the PR
    merges.
 
-## Flow (next phases — not yet wired)
+## Work units (wired — phase 2)
 
-- **Execute-a-work-unit**: `task.spec.code = {repo, sha, entrypoint, input}`;
-  the runner fetches exactly that SHA from the allowlisted repo and runs it
-  sandboxed (podman: no network, CPU/mem caps, read-only FS). Work units
-  chunk over `state.cursor` exactly like today's resumable tasks; a
+- **Execute-a-work-unit**: a task whose spec carries
+  `code = {repo, sha (full 40-hex), entrypoint, input}` is dispatched to the
+  work-unit executor (src/workunit.ts) regardless of the configured LLM
+  executor. The runner fetches exactly that SHA from exactly the allowlisted
+  repo (`GIVEWORK_CONTRIB_REPO`), runs the entrypoint in podman —
+  `--network=none`, memory/pids caps, read-only checkout — feeds `input` on
+  stdin, and parses stdout JSON as the result. No podman → no execution,
+  ever; the task is released. Scripts can steer the loop by including
+  `outcome` / `summary` / `state_update` in their output, so chunked search
+  over `state.cursor` works exactly like today's resumable tasks. A
   `replication` verification re-runs the same SHA on the same chunk and
   compares output.
 - **Two clocks, two rules.** LLM time (an agent *writing* code) burns the
-  volunteer's Claude credit — keep `EXECUTOR_TIMEOUT_MS` tight. CPU time (a
-  merged harness *running*) is nearly free and may legitimately take hours;
-  it gets no platform timeout. What long runs need instead is a **lease
-  heartbeat**: the 10-minute checkout lock must be renewed by the runner
-  while a work unit executes (a `heartbeat` op extending `lock_expires_at`),
-  so a live 30-hour job keeps its claim and a crashed machine's silence
-  returns the work to the pool. Prefer chunking (30 × 1h units) over one
-  30-hour unit so partial progress survives crashes.
+  volunteer's Claude credit — keep `EXECUTOR_TIMEOUT_MS` tight (default
+  180s). CPU time (a merged harness *running*) is nearly free and may
+  legitimately take hours — `WORKUNIT_TIMEOUT_MS` defaults to 6h.
+  actual_cost_cents is 0 for work units: the donation is CPU, not tokens.
+- **Lease heartbeat**: while any execution runs, the run-loop renews the
+  10-minute checkout lock every 5 minutes (`POST /heartbeat` /
+  `heartbeat_task`), so a live 30-hour job keeps its claim and a crashed
+  machine's silence returns the work to the pool via expire(). Prefer
+  chunking (30 × 1h units) over one 30-hour unit so partial progress
+  survives crashes.
+
+## Next phases — not yet wired
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`
   entries, so machine verification stops being limited to the built-ins in
   src/verify.ts. Promotion to checker status is an explicit admin act after
