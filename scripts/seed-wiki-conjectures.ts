@@ -637,7 +637,7 @@ const CONJECTURES: WikiConjecture[] = [
     name: 'Jacobian conjecture',
     statement:
       'A polynomial map C^n → C^n whose Jacobian determinant is a nonzero constant has a polynomial inverse.',
-    why: 'Infamous for a graveyard of failed proofs; equivalent to the Dixmier conjecture on Weyl algebras.',
+    why: 'DISPROVEN July 2026: an AI-assisted counterexample in C³ (three inputs colliding, constant determinant) settles every dimension n ≥ 3 after 87 years — Keller’s original plane case (n = 2) remains open.',
     tags: ['algebra', 'algebraic-geometry'],
     article: 'Jacobian_conjecture',
   },

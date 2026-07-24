@@ -1018,7 +1018,12 @@ export interface TargetProgress {
   state: unknown; // compacted working set (current frontier, next steps)
   created_at: string;
   metrics: TargetProgressMetrics;
-  recent_contributions: { outcome: string; summary: string; created_at: string }[];
+  recent_contributions: {
+    outcome: string;
+    summary: string;
+    verdict: string | null;
+    created_at: string;
+  }[];
 }
 
 // Only inherently-public kinds are exposed by slug. org_request work (the future
@@ -1075,11 +1080,24 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
         (SELECT max(created_at) FROM contributions WHERE target_id = $1) AS last_activity_at`,
     [t.id],
   );
-  const recent = await query<{ outcome: string; summary: string; created_at: string | Date }>(
-    `SELECT outcome::text AS outcome, summary, created_at
-       FROM contributions
-      WHERE target_id = $1
-      ORDER BY id DESC
+  // Each contribution carries its latest verification verdict (if any) so the
+  // public feed can distinguish a machine-verified solution from a mere claim.
+  const recent = await query<{
+    outcome: string;
+    summary: string;
+    verdict: string | null;
+    created_at: string | Date;
+  }>(
+    `SELECT c.outcome::text AS outcome, c.summary, v.verdict, c.created_at
+       FROM contributions c
+       LEFT JOIN LATERAL (
+         SELECT verdict FROM verifications v
+          WHERE v.contribution_id = c.id
+          ORDER BY v.id DESC
+          LIMIT 1
+       ) v ON true
+      WHERE c.target_id = $1
+      ORDER BY c.id DESC
       LIMIT 10`,
     [t.id],
   );
@@ -1108,6 +1126,7 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     recent_contributions: recent.rows.map((r) => ({
       outcome: r.outcome,
       summary: r.summary,
+      verdict: r.verdict,
       created_at: new Date(r.created_at).toISOString(),
     })),
   };
