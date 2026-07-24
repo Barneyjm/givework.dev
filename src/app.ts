@@ -42,16 +42,20 @@ interface R2LikeBucket {
   get(key: string, opts?: { range?: R2Range }): Promise<R2LikeObject | null>;
 }
 
-/** Parse a `Range: bytes=start-end` header into an R2 range, or null. */
+/**
+ * Parse a `Range: bytes=start-end` header into an R2 range, or null (which
+ * serves the full body — always a valid response to a Range request). Suffix
+ * ranges (`bytes=-N`, the last N bytes) aren't expressible as R2's {offset,
+ * length} without the object size, so we fall back to the full body rather than
+ * risk serving the wrong bytes; browsers seek with `bytes=start-`, which we do
+ * support.
+ */
 function parseRange(header: string | undefined): R2Range | null {
   if (!header) return null;
-  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!m) return null;
-  const [, s, e] = m;
-  if (s === '' && e === '') return null;
-  if (s === '') return { length: Number(e) }; // suffix: last N bytes
-  const offset = Number(s);
-  return e === '' ? { offset } : { offset, length: Number(e) - offset + 1 };
+  const m = /^bytes=(\d+)-(\d*)$/.exec(header.trim());
+  if (!m) return null; // no start (suffix range) or malformed → full body
+  const offset = Number(m[1]);
+  return m[2] === '' ? { offset } : { offset, length: Number(m[2]) - offset + 1 };
 }
 
 // The Hono app, with no runtime binding. Both entrypoints import this:
