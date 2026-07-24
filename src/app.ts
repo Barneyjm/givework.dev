@@ -25,6 +25,35 @@ import { submitAndVerify } from './verify.js';
 
 type Env = { Variables: { principal: Principal } };
 
+// Minimal shape of the R2 binding we use — avoids a @cloudflare/workers-types
+// dependency (the codebase types bindings inline, e.g. ASSETS/SEND_EMAIL).
+interface R2Range {
+  offset?: number;
+  length?: number;
+}
+interface R2LikeObject {
+  body: ReadableStream;
+  size: number;
+  httpEtag: string;
+  range?: R2Range;
+  writeHttpMetadata(headers: Headers): void;
+}
+interface R2LikeBucket {
+  get(key: string, opts?: { range?: R2Range }): Promise<R2LikeObject | null>;
+}
+
+/** Parse a `Range: bytes=start-end` header into an R2 range, or null. */
+function parseRange(header: string | undefined): R2Range | null {
+  if (!header) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return null;
+  const [, s, e] = m;
+  if (s === '' && e === '') return null;
+  if (s === '') return { length: Number(e) }; // suffix: last N bytes
+  const offset = Number(s);
+  return e === '' ? { offset } : { offset, length: Number(e) - offset + 1 };
+}
+
 // The Hono app, with no runtime binding. Both entrypoints import this:
 // src/server.ts serves it under Node (@hono/node-server) for local dev, and
 // src/worker.ts exports it as a Cloudflare Worker. Keep this file free of
@@ -104,6 +133,30 @@ app.get('/health', async (c) => {
 // name + counts (no contact info or task content). The marketing site can fetch
 // this to render a "who we work with" section.
 app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
+
+// Media (conjecture explainer videos) streamed from R2 — stored there, never in
+// the repo. Range requests are honored so browsers can seek within a video. The
+// MEDIA binding only exists on the deployed Worker; Node dev returns 404.
+app.get('/videos/:key', async (c) => {
+  const media = (c.env as { MEDIA?: R2LikeBucket } | undefined)?.MEDIA;
+  const key = c.req.param('key');
+  if (!media || !/^[\w.-]+$/.test(key)) return c.notFound();
+  const range = parseRange(c.req.header('range'));
+  const obj = await media.get(key, range ? { range } : undefined);
+  if (!obj) return c.notFound();
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set('etag', obj.httpEtag);
+  headers.set('accept-ranges', 'bytes');
+  headers.set('cache-control', 'public, max-age=86400');
+  if (obj.range && range) {
+    const start = obj.range.offset ?? 0;
+    const end = start + (obj.range.length ?? obj.size - start) - 1;
+    headers.set('content-range', `bytes ${start}-${end}/${obj.size}`);
+    return new Response(obj.body, { status: 206, headers });
+  }
+  return new Response(obj.body, { status: 200, headers });
+});
 
 // Public per-conjecture progress — keyed by a human-readable slug (conjectures
 // carry no PII, so no unguessable token is needed). Statement, status, the

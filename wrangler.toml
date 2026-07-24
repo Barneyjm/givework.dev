@@ -85,3 +85,11 @@ binding = "ASSETS"
 # Default html_handling serves status.html at the clean, extensionless path
 # /status, so the status link is givework.dev/status?task_id=<id> (a query-param
 # page — uncrawled, and the page itself is noindex).
+
+# Conjecture explainer videos (and other media) live in R2, not the repo — the
+# Worker streams them at /videos/<key> with range support. Bucket names are not
+# secrets, so this is safe to commit. Upload with:
+#   wrangler r2 object put givework-media/<slug>.mp4 --file <local>.mp4
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "givework-media"

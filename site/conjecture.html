@@ -43,6 +43,10 @@
   .why .k { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
             letter-spacing:.05em; display:block; margin-bottom:.3rem; }
   .why p { margin:0; font-weight:300; }
+  .video { margin:1.6rem 0 0; max-width:64ch; }
+  .video .k { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+              letter-spacing:.05em; display:block; margin-bottom:.5rem; opacity:.7; }
+  .video video { width:100%; display:block; border: var(--line); background: var(--ink); }
   .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin:2rem 0 0; }
   .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
   .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
@@ -151,6 +155,10 @@
     if (d.significance) {
       h += '<div class="why"><span class="k">Why it matters</span><p>' + esc(d.significance) + '</p></div>';
     }
+    // Explainer video, if one exists in R2 for this slug. Placeholder now; a HEAD
+    // probe after render fills it only when the video is actually there, so
+    // conjectures without a video show nothing.
+    h += '<div id="cj-video"></div>';
     if (d.source_ref) {
       // External references open in a new tab so the long URL can't hijack the
       // page (and can't overflow the layout as raw text).
@@ -200,6 +208,22 @@
       h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
     }
     page.innerHTML = h;
+    maybeAddVideo(slug);
+  }
+
+  // Show the explainer only if /videos/<slug>.mp4 exists (HEAD probe avoids a
+  // broken-player flash on conjectures that don't have a video yet).
+  function maybeAddVideo(slug) {
+    var src = '/videos/' + encodeURIComponent(slug) + '.mp4';
+    fetch(src, { method: 'HEAD' })
+      .then(function (r) {
+        var slot = document.getElementById('cj-video');
+        if (!r.ok || !slot) return;
+        slot.innerHTML =
+          '<div class="video"><span class="k">Watch: what this conjecture is</span>' +
+          '<video controls preload="metadata" playsinline src="' + src + '"></video></div>';
+      })
+      .catch(function () {});
   }
 
   fetch('/conjectures/' + encodeURIComponent(slug), { headers: { accept: 'application/json' } })
