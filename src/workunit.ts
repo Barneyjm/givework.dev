@@ -31,7 +31,13 @@ function isSafeRelPath(p: string): boolean {
   if (typeof p !== 'string' || p.length === 0 || p.length > 300) return false;
   if (p.startsWith('/') || p.includes('\\') || p.includes('\0')) return false;
   const segments = p.split('/');
-  return segments.every((s) => s.length > 0 && s !== '.' && s !== '..' && s !== '.git');
+  return segments.every((s) => {
+    if (s.length === 0 || s === '.' || s === '..') return false;
+    // Case-insensitive, matching src/code-contrib.ts: '.GIT'/'.github' resolve
+    // to the real dirs on case-insensitive filesystems.
+    const lower = s.toLowerCase();
+    return lower !== '.git' && lower !== '.github';
+  });
 }
 
 /** Pull a well-formed work-unit spec out of a task spec, or null. */
@@ -128,29 +134,42 @@ export class WorkUnitExecutor implements Executor {
       await this.run('git', ['fetch', '-q', '--depth', '1', 'origin', wu.sha], { cwd: dir });
       await this.run('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: dir });
 
-      const out = await this.run(
-        'podman',
-        [
-          'run',
-          '--rm',
-          '-i',
-          '--network=none',
-          '--memory=1g',
-          '--cpus=2',
-          '--pids-limit=256',
-          '--read-only',
-          '--tmpfs',
-          '/tmp',
-          '-v',
-          `${dir}:/work:ro`,
-          '-w',
-          '/work',
-          this.image,
-          'python3',
-          wu.entrypoint,
-        ],
-        { input: JSON.stringify(wu.input ?? {}), timeoutMs: this.timeoutMs },
-      );
+      // Name the container so a timeout can force-remove it: killing the podman
+      // client (SIGKILL on timeout) does NOT stop the container it launched, so
+      // without this a timed-out work unit leaks a running container.
+      const containerName = `givework-wu-${path.basename(dir)}`;
+      let out: string;
+      try {
+        out = await this.run(
+          'podman',
+          [
+            'run',
+            '--rm',
+            '-i',
+            '--name',
+            containerName,
+            '--network=none',
+            '--memory=1g',
+            '--cpus=2',
+            '--pids-limit=256',
+            '--read-only',
+            '--tmpfs',
+            '/tmp',
+            '-v',
+            `${dir}:/work:ro`,
+            '-w',
+            '/work',
+            this.image,
+            'python3',
+            wu.entrypoint,
+          ],
+          { input: JSON.stringify(wu.input ?? {}), timeoutMs: this.timeoutMs },
+        );
+      } catch (err) {
+        // Best-effort reap of a container that outlived a killed client.
+        await this.run('podman', ['rm', '-f', containerName]).catch(() => {});
+        throw err;
+      }
 
       let result: unknown;
       try {
