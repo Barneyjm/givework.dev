@@ -60,6 +60,16 @@ const CONJECTURES: SeedConjecture[] = [
     tags: ['algebra', 'algebraic-geometry'],
   },
   {
+    name: 'Four-thirds conjecture (metric TSP subtour LP)',
+    slug: 'tsp-four-thirds',
+    statement_plain:
+      'For every metric TSP instance, the optimal tour costs at most 4/3 times the value of the subtour-elimination (Held–Karp) LP relaxation.',
+    source_ref: 'https://arxiv.org/abs/2007.01409',
+    significance:
+      'The flagship integrality-gap question of approximation algorithms: known instance families approach 4/3 from below, while the proven upper bound only recently dipped under Christofides’ 3/2 — and a gap-exceeding instance would be verifiable with a single LP solve.',
+    tags: ['computer-science', 'combinatorics'],
+  },
+  {
     name: "Euler's sum of powers conjecture (k = 5)",
     slug: 'euler-sum-of-powers',
     statement_plain:
