@@ -1,3 +1,4 @@
+import { extractCodeContribution, publishCodeContribution } from './code-contrib.js';
 import type { ExecTask, Executor } from './executor.js';
 
 // The transport-agnostic runner core: the Backend abstraction, the production
@@ -267,6 +268,26 @@ export async function runLoop(
       }
       consecutiveFailures = 0;
 
+      // Code contributions ride the volunteer's own git+gh identity to the
+      // public contrib repo; the PR URL becomes the contribution's artifact.
+      // Publish failure is non-fatal — the code is still inline in `result`,
+      // so the submit below never loses work.
+      let artifactUri = exec.artifact_uri;
+      let summary = exec.summary;
+      const code = extractCodeContribution(exec.result);
+      if (code) {
+        try {
+          const pub = await publishCodeContribution(code, { taskId: checkout.task_id });
+          artifactUri = pub.pr_url;
+          summary = summary ?? `${code.title} — PR: ${pub.pr_url}`;
+          console.log(`  ⇪ code contribution → ${pub.pr_url}`);
+        } catch (err) {
+          console.error(
+            `  ! code PR failed (${(err as Error).message}) — submitting with code inline only`,
+          );
+        }
+      }
+
       const submit = await backend.submit({
         task_id: checkout.task_id,
         result: exec.result,
@@ -274,8 +295,8 @@ export async function runLoop(
         raw_usage: exec.raw_usage,
         // Forwarded when the executor produces them; otherwise a terminal submit.
         outcome: exec.outcome,
-        summary: exec.summary,
-        artifact_uri: exec.artifact_uri,
+        summary,
+        artifact_uri: artifactUri,
         artifact: exec.artifact,
         state_update: exec.state_update,
       });

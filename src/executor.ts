@@ -77,11 +77,32 @@ function stripCodeFence(s: string): string {
  * and if it still isn't JSON, keep the raw text under `output` rather than fail.
  */
 export function coerceResult(text: string): unknown {
+  const t = text.trim();
   try {
-    return JSON.parse(stripCodeFence(text));
+    return JSON.parse(stripCodeFence(t));
   } catch {
-    return { output: text.trim() };
+    // fall through to the prose-tolerant paths
   }
+  // Models sometimes wrap the JSON in explanatory prose ("here is the
+  // contribution: ```json ...```"). Try every fenced block, then the widest
+  // brace-delimited span, before falling back to raw text under `output`.
+  for (const m of t.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/g)) {
+    try {
+      return JSON.parse(m[1].trim());
+    } catch {
+      // not this block — keep looking
+    }
+  }
+  const first = t.indexOf('{');
+  const last = t.lastIndexOf('}');
+  if (first !== -1 && last > first) {
+    try {
+      return JSON.parse(t.slice(first, last + 1));
+    } catch {
+      // not parseable either — fall back to raw text
+    }
+  }
+  return { output: t };
 }
 
 /** cents per token for a $/1M-token rate. */
