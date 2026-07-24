@@ -163,7 +163,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <div class="item"><div class="k">Hard caps, enforced in the database</div><p>The budget you set is a real ceiling — backed by a row-level lock and a <span class="mono">CHECK</span> invariant, not a polite suggestion.</p></div>
         <div class="item"><div class="k">No API keys, anywhere</div><p>The executor never holds an API key. The donated capacity is your CLI session — never a shared or pooled key.</p></div>
         <div class="item"><div class="k">A record of everything</div><p>Each checkout and submission is tracked, so your impact is easy to see — for you, and for anyone you choose to show.</p></div>
-        <div class="item"><div class="k">Reviewed, public work</div><p>Tasks are attacks on open problems, reviewed by a human before they enter the pool — and machine-verified where possible, so "done" is objective.</p></div>
+        <div class="item"><div class="k">Reviewed, public work</div><p>Tasks are attacks on open problems, reviewed by a human before they enter the pool — and machine-verified where possible, so "done" is objective. Code your agent writes becomes an open-source pull request under your own GitHub name, reviewed before anyone runs it.</p></div>
         <div class="item"><div class="k">Stop anytime</div><p>Drop a task back to the pool, lower your budget, or just stop the runner. You're never on the hook for work in flight.</p></div>
       </div>
     </div>
@@ -188,7 +188,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <h3>The honest answers.</h3>
       </div>
       <div class="qa"><h4>Will this eat into my normal usage?</h4><p>Yes — it's ordinary <span class="mono">claude -p</span> usage against your own subscription's normal limits, same as any other headless work you'd run yourself. That's exactly why you set the budget cap: donate only what you're comfortable giving up, and change it or stop anytime.</p></div>
-      <div class="qa"><h4>What runs on my machine?</h4><p>A small runner you start with one command. It checks out a reviewed task, runs it with your local <span class="mono">claude -p</span>, and submits the result. Inputs stay local; nothing is uploaded to a third party by us.</p></div>
+      <div class="qa"><h4>What runs on my machine?</h4><p>A small runner you start with one command. It checks out a reviewed task, runs it with your local <span class="mono">claude -p</span>, and submits the result. Inputs stay local; nothing is uploaded to a third party by us. Some tasks donate CPU instead of tokens: the runner fetches a human-reviewed, commit-pinned tool from our public <a href="https://github.com/Barneyjm/givework-contrib">contrib repo</a> and executes it in a no-network sandbox — never unreviewed code, never outside the sandbox.</p></div>
       <div class="qa"><h4>Is this against the rules?</h4><p>No. It's your own <span class="mono">claude -p</span> usage, run under your own individual, logged-in session — never a shared or pooled key. The work is personal, not shared production automation.</p></div>
       <div class="qa"><h4>How is the cost measured?</h4><p>From the CLI's own metering at submit time — actual cost replaces the reservation, and it's tracked. You see real numbers, not estimates.</p></div>
       <div class="qa"><h4>Can I stop or change my budget?</h4><p>Anytime. Run <span class="mono">budget set</span> with a new number, release a task back to the pool, or stop the runner. Nothing keeps running without you.</p></div>
