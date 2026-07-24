@@ -51,11 +51,15 @@
   .cj .tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0 0; padding:0; list-style:none; }
   .cj .tag { font-family:'Space Mono',monospace; font-size:.62rem; text-transform:uppercase;
              padding:.1rem .4rem; border:2px solid var(--ink); opacity:.8; }
-  .board-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 1.4rem; }
+  .board-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 .8rem; }
   .bf { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
         padding:.3rem .7rem; border: var(--line); background:#fff; cursor:pointer; }
   .bf:hover { background: var(--yellow); }
   .bf[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .board-controls { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:0 0 1.4rem; }
+  .board-controls .lbl { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase; opacity:.7; }
+  .bf-select { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
+               padding:.3rem .5rem; border: var(--line); background:#fff; cursor:pointer; color:inherit; }
   /* Conjectures-only: the "what agents can chip at" example cards. */
   .examples { border-top: var(--line); border-bottom: var(--line); }
   .ex-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(230px,1fr)); gap: 1rem; margin-top: 2rem; }
@@ -145,6 +149,19 @@
       </div>
       <p class="board-totals" id="board-totals"></p>
       <div class="board-filters" id="board-filters"></div>
+      <div class="board-controls" id="board-controls" hidden>
+        <span class="lbl">Status</span>
+        <button class="bf" data-status="" aria-pressed="true">All</button>
+        <button class="bf" data-status="open" aria-pressed="false">Open</button>
+        <button class="bf" data-status="settled" aria-pressed="false">Settled</button>
+        <span class="lbl" style="margin-left:.8rem">Sort</span>
+        <select class="bf-select" id="board-sort" aria-label="Sort conjectures">
+          <option value="donated">Most donated</option>
+          <option value="contributions">Most contributions</option>
+          <option value="tasks">Most tasks</option>
+          <option value="name">Name A–Z</option>
+        </select>
+      </div>
       <div class="board-grid" id="board-grid"><p class="board-msg">Loading the board…</p></div>
     </div>
   </section>
@@ -282,6 +299,15 @@
   var OPEN = { open: 1, partially_resolved: 1 };
   var all = [];
   var active = null; // active tag filter, or null for all
+  var controls = document.getElementById('board-controls');
+  var sortSel = document.getElementById('board-sort');
+  var activeStatus = null; // null | 'open' | 'settled'
+  var SORTS = {
+    donated: function (a, b) { return b.compute_cents - a.compute_cents || a.name.localeCompare(b.name); },
+    contributions: function (a, b) { return b.contributions - a.contributions || a.name.localeCompare(b.name); },
+    tasks: function (a, b) { return b.tasks_total - a.tasks_total || a.name.localeCompare(b.name); },
+    name: function (a, b) { return a.name.localeCompare(b.name); },
+  };
 
   function card(c) {
     var settled = !OPEN[c.status];
@@ -302,10 +328,16 @@
   }
 
   function renderCards() {
-    var shown = active ? all.filter(function (c) { return (c.tags || []).indexOf(active) !== -1; }) : all;
+    var shown = all.filter(function (c) {
+      if (active && (c.tags || []).indexOf(active) === -1) return false;
+      if (activeStatus === 'open' && !OPEN[c.status]) return false;
+      if (activeStatus === 'settled' && OPEN[c.status]) return false;
+      return true;
+    });
+    shown = shown.slice().sort(SORTS[sortSel.value] || SORTS.donated);
     grid.innerHTML = shown.length
       ? shown.map(card).join('')
-      : '<p class="board-msg">Nothing on the board' + (active ? ' under this tag' : '') + ' yet.</p>';
+      : '<p class="board-msg">Nothing on the board matches these filters.</p>';
   }
 
   function renderFilters() {
@@ -329,6 +361,17 @@
     renderCards();
   });
 
+  controls.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.bf[data-status]');
+    if (!btn) return;
+    activeStatus = btn.getAttribute('data-status') || null;
+    controls.querySelectorAll('.bf[data-status]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+    renderCards();
+  });
+  sortSel.addEventListener('change', renderCards);
+
   fetch('/leaderboard')
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) {
@@ -337,6 +380,7 @@
         t.settled + '</b> settled · <b>' + t.contributors + '</b> contributors · <b>' +
         dollars(t.compute_cents) + '</b> of compute donated';
       all = d.conjectures || [];
+      controls.hidden = !all.length;
       renderFilters();
       renderCards();
       if (!all.length) grid.innerHTML = '<p class="board-msg">Nothing on the board yet — propose the first problem.</p>';
