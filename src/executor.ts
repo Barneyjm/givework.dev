@@ -30,6 +30,13 @@ export interface ExecTask {
     acceptance?: string;
     [k: string]: unknown;
   };
+  /**
+   * The target's compacted working set at checkout — the accumulated frontier a
+   * resumable task hands to whoever picks it up next. Work units merge it into
+   * the driver's stdin so a re-picked task advances from the live cursor rather
+   * than restarting from the static spec input.
+   */
+  target_state?: unknown;
 }
 
 export interface ExecResult {
