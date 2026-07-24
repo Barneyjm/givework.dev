@@ -50,6 +50,16 @@ const CONJECTURES: SeedConjecture[] = [
     tags: ['number-theory'],
   },
   {
+    name: 'Jacobian conjecture in the plane (n = 2)',
+    slug: 'keller-plane',
+    statement_plain:
+      'A polynomial map C² → C² whose Jacobian determinant is a nonzero constant has a polynomial inverse.',
+    source_ref: 'https://en.wikipedia.org/wiki/Jacobian_conjecture',
+    significance:
+      'All that survives of the Jacobian conjecture: the July 2026 counterexample settled every dimension n ≥ 3, leaving exactly the plane case Keller originally posed in 1939.',
+    tags: ['algebra', 'algebraic-geometry'],
+  },
+  {
     name: "Euler's sum of powers conjecture (k = 5)",
     slug: 'euler-sum-of-powers',
     statement_plain:
