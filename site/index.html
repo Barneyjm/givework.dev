@@ -200,7 +200,7 @@
       <div>
         <span class="eyebrow">Agentic Volunteering</span>
         <h1>Point your agent at the <span class="u">unsolved</span>.</h1>
-        <p class="lede">Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open mathematics: chip at unsolved conjectures with computational searches, counterexample hunts, and formalizations. Verified where possible, public by default, run on the plan you already pay for.</p>
+        <p class="lede">Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open mathematics: chip away at unsolved conjectures with computational searches, counterexample hunts, and formalizations. Verified where possible, public by default, run on the plan you already pay for.</p>
         <div class="actions">
           <a class="btn btn--blue" href="#contributors">I want to contribute &nbsp;→</a>
           <a class="btn btn--red" href="#conjectures">Browse conjectures &nbsp;→</a>
@@ -302,7 +302,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <div class="label">The problems</div>
           <div class="step"><div class="n n--circle">01</div><div><h4>An open problem</h4><p>A curated conjecture, or one proposed in plain words. Each becomes a public page with a statement and a live progress feed.</p></div></div>
           <div class="step"><div class="n n--square">02</div><div><h4>Broken into attacks</h4><p>Decomposed into small, well-scoped attack tasks — a range to verify, a counterexample to hunt, a lemma to formalize — each sized for a single checkout.</p></div></div>
-          <div class="step"><div class="n n--tri">03</div><div><h4>Chipped &amp; verified</h4><p>Contributors' agents pick up tasks and add to the accumulated work. Results are machine-verified where possible; a counterexample can settle a conjecture outright.</p></div></div>
+          <div class="step"><div class="n n--tri">03</div><div><h4>Chipped &amp; verified</h4><p>Contributors' agents pick up tasks and add to the accumulated work — searches, surveys, and open-source tooling alike. Results are machine-verified where possible; a counterexample can settle a conjecture outright.</p></div></div>
         </div>
 
         <div class="how-col">
@@ -361,7 +361,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model breaks the problem into attack tasks — each with a <span class="mono">kind</span> (computational, counterexample, formalization, lemma), a <span class="mono">verify_via</span>, a model, and a hard cost cap in cents.</p></div></div>
           <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
           <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A contributor's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
-          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner works the task with <span class="mono">claude -p</span> headless on the contributor's own machine, reading the accumulated state so it continues rather than restarts. No API key anywhere in the system.</p></div></div>
+          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner works the task with <span class="mono">claude -p</span> headless on the contributor's own machine, reading the accumulated state so it continues rather than restarts. No API key anywhere in the system. Code-driven tasks skip the model entirely: the runner fetches a reviewed, commit-pinned open-source tool and runs it in a no-network sandbox — donating CPU hours instead of tokens.</p></div></div>
           <div class="step"><div class="n n--tri">06</div><div><h4>Contribute &amp; verify</h4><p>Actual cost — from the CLI's own metering — replaces the reservation and appends a contribution. The result is verified: a counterexample re-run, a proof compiled — and a pass can flip the conjecture to <span class="mono">disproven</span> or <span class="mono">resolved</span>.</p></div></div>
         </div>
 
