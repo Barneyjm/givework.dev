@@ -1013,6 +1013,8 @@ export interface TargetProgress {
   statement_plain: string | null;
   statement_formal: string | null;
   source_ref: string | null;
+  significance: string | null; // why the problem matters, in plain words
+  tags: string[]; // coarse subject tags (number-theory, graph-theory, …)
   state: unknown; // compacted working set (current frontier, next steps)
   created_at: string;
   metrics: TargetProgressMetrics;
@@ -1040,11 +1042,13 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     statement_plain: string | null;
     statement_formal: string | null;
     source_ref: string | null;
+    significance: string | null;
+    tags: string[];
     state: unknown;
     created_at: string | Date;
   }>(
     `SELECT id, slug, name, kind::text AS kind, status::text AS status,
-            statement_plain, statement_formal, source_ref, state, created_at
+            statement_plain, statement_formal, source_ref, significance, tags, state, created_at
        FROM targets
       WHERE slug = $1 AND kind::text = ANY($2::text[])`,
     [slug, PUBLIC_TARGET_KINDS],
@@ -1088,6 +1092,8 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     statement_plain: t.statement_plain,
     statement_formal: t.statement_formal,
     source_ref: t.source_ref,
+    significance: t.significance,
+    tags: t.tags,
     state: t.state,
     created_at: new Date(t.created_at).toISOString(),
     metrics: {
@@ -1115,6 +1121,7 @@ export interface LeaderboardConjecture {
   slug: string;
   name: string;
   status: string;
+  tags: string[];
   tasks_total: number;
   contributions: number;
   contributors: number;
@@ -1147,7 +1154,7 @@ export interface Leaderboard {
  */
 export async function getLeaderboard(): Promise<Leaderboard> {
   const conjecturesP = query<LeaderboardConjecture>(
-    `SELECT tg.slug, tg.name, tg.status::text AS status,
+    `SELECT tg.slug, tg.name, tg.status::text AS status, tg.tags,
             (SELECT count(*)::int FROM tasks t WHERE t.target_id = tg.id) AS tasks_total,
             (SELECT count(*)::int FROM contributions c WHERE c.target_id = tg.id) AS contributions,
             (SELECT count(DISTINCT c.dev_id)::int FROM contributions c WHERE c.target_id = tg.id) AS contributors,

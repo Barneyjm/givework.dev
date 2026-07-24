@@ -31,8 +31,18 @@
   .badge--settled { background: var(--ink); color: var(--paper); }
   .stmt { font-size:1.15rem; font-weight:300; max-width:64ch; margin:1.2rem 0 .4rem; }
   .mono { font-family:'Space Mono',monospace; }
-  .src { font-size:.82rem; opacity:.7; margin:.2rem 0 0; }
+  .src { font-size:.82rem; opacity:.7; margin:.6rem 0 0; overflow-wrap:anywhere; }
+  .src a { color:inherit; text-decoration:underline; }
+  .src a:hover { color: var(--red); opacity:1; }
   .formal { font-size:.9rem; margin:.6rem 0 0; overflow-x:auto; }
+  .tags { display:flex; flex-wrap:wrap; gap:.4rem; margin:.9rem 0 0; padding:0; list-style:none; }
+  .tag { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+         padding:.15rem .5rem; border:2px solid var(--ink); background:#fff; }
+  .why { border-left: 6px solid var(--yellow); background:#fff; padding:.9rem 1.1rem;
+         margin:1.4rem 0 0; max-width:64ch; }
+  .why .k { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+            letter-spacing:.05em; display:block; margin-bottom:.3rem; }
+  .why p { margin:0; font-weight:300; }
   .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin:2rem 0 0; }
   .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
   .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
@@ -126,7 +136,22 @@
       esc(d.status.replace('_', ' ')) + '</span></div>';
     h += '<p class="stmt">' + esc(d.statement_plain || 'No plain statement recorded yet.') + '</p>';
     if (d.statement_formal) h += '<p class="mono formal">' + esc(d.statement_formal) + '</p>';
-    if (d.source_ref) h += '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    if (d.tags && d.tags.length) {
+      h += '<ul class="tags">' + d.tags.map(function (t) {
+        return '<li class="tag">' + esc(t.replace(/-/g, ' ')) + '</li>';
+      }).join('') + '</ul>';
+    }
+    if (d.significance) {
+      h += '<div class="why"><span class="k">Why it matters</span><p>' + esc(d.significance) + '</p></div>';
+    }
+    if (d.source_ref) {
+      // External references open in a new tab so the long URL can't hijack the
+      // page (and can't overflow the layout as raw text).
+      h += /^https?:\/\//.test(d.source_ref)
+        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
+        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    }
     h += '<div class="metrics">' +
       '<div class="metric"><span class="v">' + m.tasks_open + '/' + m.tasks_total + '</span><span class="k">tasks open</span></div>' +
       '<div class="metric"><span class="v">' + m.contributions + '</span><span class="k">contributions</span></div>' +

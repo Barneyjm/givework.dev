@@ -48,6 +48,14 @@
   .cj .badge--settled { background: var(--ink); color: var(--paper); }
   .cj .stats { margin:0; font-family:'Space Mono',monospace; font-size:.78rem; opacity:.85; }
   .cj .go { margin:.6rem 0 0; font-family:'Space Mono',monospace; font-size:.78rem; }
+  .cj .tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0 0; padding:0; list-style:none; }
+  .cj .tag { font-family:'Space Mono',monospace; font-size:.62rem; text-transform:uppercase;
+             padding:.1rem .4rem; border:2px solid var(--ink); opacity:.8; }
+  .board-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 1.4rem; }
+  .bf { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
+        padding:.3rem .7rem; border: var(--line); background:#fff; cursor:pointer; }
+  .bf:hover { background: var(--yellow); }
+  .bf[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
   /* Conjectures-only: the "what agents can chip at" example cards. */
   .examples { border-top: var(--line); border-bottom: var(--line); }
   .ex-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(230px,1fr)); gap: 1rem; margin-top: 2rem; }
@@ -136,6 +144,7 @@
         <h3>On the board now.</h3>
       </div>
       <p class="board-totals" id="board-totals"></p>
+      <div class="board-filters" id="board-filters"></div>
       <div class="board-grid" id="board-grid"><p class="board-msg">Loading the board…</p></div>
     </div>
   </section>
@@ -263,6 +272,7 @@
 (function () {
   var grid = document.getElementById('board-grid');
   var totals = document.getElementById('board-totals');
+  var filters = document.getElementById('board-filters');
   var esc = function (s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -270,9 +280,14 @@
   };
   var dollars = function (cents) { return '$' + (cents / 100).toFixed(2); };
   var OPEN = { open: 1, partially_resolved: 1 };
+  var all = [];
+  var active = null; // active tag filter, or null for all
 
   function card(c) {
     var settled = !OPEN[c.status];
+    var tags = (c.tags || []).map(function (t) {
+      return '<li class="tag">' + esc(t.replace(/-/g, ' ')) + '</li>';
+    }).join('');
     return (
       '<a class="cj" href="/conjectures/' + encodeURIComponent(c.slug) + '">' +
       '<div class="row"><h4>' + esc(c.name) + '</h4>' +
@@ -280,10 +295,39 @@
       '<p class="stats">' + c.tasks_total + ' task' + (c.tasks_total === 1 ? '' : 's') + ' · ' +
       c.contributions + ' contribution' + (c.contributions === 1 ? '' : 's') + ' · ' +
       dollars(c.compute_cents) + ' donated</p>' +
+      (tags ? '<ul class="tags">' + tags + '</ul>' : '') +
       '<p class="go">Progress page →</p>' +
       '</a>'
     );
   }
+
+  function renderCards() {
+    var shown = active ? all.filter(function (c) { return (c.tags || []).indexOf(active) !== -1; }) : all;
+    grid.innerHTML = shown.length
+      ? shown.map(card).join('')
+      : '<p class="board-msg">Nothing on the board' + (active ? ' under this tag' : '') + ' yet.</p>';
+  }
+
+  function renderFilters() {
+    var counts = {};
+    all.forEach(function (c) { (c.tags || []).forEach(function (t) { counts[t] = (counts[t] || 0) + 1; }); });
+    var tags = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); });
+    if (!tags.length) { filters.innerHTML = ''; return; }
+    filters.innerHTML =
+      '<button class="bf" data-tag="" aria-pressed="' + (active === null) + '">All (' + all.length + ')</button>' +
+      tags.map(function (t) {
+        return '<button class="bf" data-tag="' + esc(t) + '" aria-pressed="' + (active === t) + '">' +
+          esc(t.replace(/-/g, ' ')) + ' (' + counts[t] + ')</button>';
+      }).join('');
+  }
+
+  filters.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.bf');
+    if (!btn) return;
+    active = btn.getAttribute('data-tag') || null;
+    renderFilters();
+    renderCards();
+  });
 
   fetch('/leaderboard')
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -292,9 +336,10 @@
       totals.innerHTML = '<b>' + t.conjectures + '</b> conjectures · <b>' + t.open + '</b> open · <b>' +
         t.settled + '</b> settled · <b>' + t.contributors + '</b> contributors · <b>' +
         dollars(t.compute_cents) + '</b> of compute donated';
-      grid.innerHTML = d.conjectures.length
-        ? d.conjectures.map(card).join('')
-        : '<p class="board-msg">Nothing on the board yet — propose the first problem.</p>';
+      all = d.conjectures || [];
+      renderFilters();
+      renderCards();
+      if (!all.length) grid.innerHTML = '<p class="board-msg">Nothing on the board yet — propose the first problem.</p>';
     })
     .catch(function () {
       grid.innerHTML = '<p class="board-msg">Couldn’t load the live board. The raw feed is at <span class="mono">/leaderboard</span>.</p>';
