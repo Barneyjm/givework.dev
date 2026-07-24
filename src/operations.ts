@@ -1022,6 +1022,8 @@ export interface TargetProgress {
     outcome: string;
     summary: string;
     verdict: string | null;
+    /** How the verdict was reached (auto_rerun, human_review, …), if verified. */
+    verified_via: string | null;
     created_at: string;
   }[];
 }
@@ -1086,12 +1088,13 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     outcome: string;
     summary: string;
     verdict: string | null;
+    verified_via: string | null;
     created_at: string | Date;
   }>(
-    `SELECT c.outcome::text AS outcome, c.summary, v.verdict, c.created_at
+    `SELECT c.outcome::text AS outcome, c.summary, v.verdict, v.method AS verified_via, c.created_at
        FROM contributions c
        LEFT JOIN LATERAL (
-         SELECT verdict FROM verifications v
+         SELECT verdict, method::text AS method FROM verifications v
           WHERE v.contribution_id = c.id
           ORDER BY v.id DESC
           LIMIT 1
@@ -1127,6 +1130,7 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
       outcome: r.outcome,
       summary: r.summary,
       verdict: r.verdict,
+      verified_via: r.verified_via,
       created_at: new Date(r.created_at).toISOString(),
     })),
   };

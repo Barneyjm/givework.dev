@@ -63,6 +63,7 @@
   .feed .oc--progress { background: #fff; }
   .feed .oc--dead_end { background: var(--red); color:#fff; border-color: var(--ink); }
   .feed .oc--verified { background: #1e7d46; color:#fff; }
+  .feed .oc--accepted { background:#fff; border-color:#1e7d46; color:#1e7d46; }
   .feed .oc--refuted { background: var(--red); color:#fff; }
   .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
   .board-msg { font-weight:300; }
@@ -172,13 +173,20 @@
     if (d.recent_contributions && d.recent_contributions.length) {
       h += '<ul class="feed">';
       d.recent_contributions.forEach(function (r) {
-        // A candidate solution whose machine check passed is the real thing —
-        // badge it as verified; a failed check is an honestly-logged refutation.
+        // The feed is a work ledger, and the badge says only what actually
+        // happened. Green "machine-verified" is reserved for a checker-confirmed
+        // result; work a human reviewer accepted says just that; a failed check
+        // is an honestly-logged refutation.
         var cls = 'oc--' + r.outcome;
         var label = r.outcome.replace('_', ' ');
         if (r.outcome === 'candidate_solution' && r.verdict === 'passed') {
-          cls = 'oc--verified';
-          label = 'verified solution';
+          if (r.verified_via === 'human_review') {
+            cls = 'oc--accepted';
+            label = 'accepted';
+          } else {
+            cls = 'oc--verified';
+            label = 'machine-verified';
+          }
         } else if (r.outcome === 'candidate_solution' && r.verdict === 'failed') {
           cls = 'oc--refuted';
           label = 'refuted claim';
