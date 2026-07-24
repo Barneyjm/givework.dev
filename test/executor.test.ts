@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClaudeCliExecutor,
+  coerceResult,
   type ExecTask,
   getExecutor,
   StubExecutor,
@@ -14,6 +15,30 @@ const task: ExecTask = {
   max_cost_cents: 200,
   spec: { prompt: 'summarize this', output_schema: { summary: 'string' }, acceptance: 'a summary' },
 };
+
+describe('coerceResult', () => {
+  it('parses bare JSON and single-fenced JSON', () => {
+    expect(coerceResult('{"a": 1}')).toEqual({ a: 1 });
+    expect(coerceResult('```json\n{"a": 1}\n```')).toEqual({ a: 1 });
+  });
+
+  it('digs JSON out of surrounding prose (the shape a real run produced)', () => {
+    const prose =
+      'I could not write files in this sandbox, so here is the contribution.\n\n' +
+      '```json\n{"code_contribution": {"title": "x"}, "summary": "s"}\n```\n\nGood luck!';
+    expect(coerceResult(prose)).toEqual({ code_contribution: { title: 'x' }, summary: 's' });
+  });
+
+  it('tries later fences when an earlier one is not JSON', () => {
+    const s = '```python\nprint(1)\n```\nresult:\n```json\n{"ok": true}\n```';
+    expect(coerceResult(s)).toEqual({ ok: true });
+  });
+
+  it('falls back to a brace span, then to raw output', () => {
+    expect(coerceResult('the answer is {"n": 7} indeed')).toEqual({ n: 7 });
+    expect(coerceResult('no json here')).toEqual({ output: 'no json here' });
+  });
+});
 
 describe('usageToCents', () => {
   it('meters input+output tokens into rounded-up cents per model pricing', () => {
