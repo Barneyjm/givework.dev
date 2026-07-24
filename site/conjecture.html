@@ -52,7 +52,11 @@
   .frontier .k { color: var(--yellow); text-transform:uppercase; font-size:.7rem; display:block; margin-bottom:.4rem; }
   .feed-head { margin:2.6rem 0 0; }
   .feed { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
-  .feed li { border-bottom: 1px solid #16131033; padding:.8rem .2rem; font-weight:300; display:flex; gap:.9rem; align-items:baseline; }
+  /* flex-wrap + a shrinkable summary keep the nowrap date from overflowing the
+     viewport on narrow screens — it drops to its own line instead. */
+  .feed li { border-bottom: 1px solid #16131033; padding:.8rem .2rem; font-weight:300;
+             display:flex; gap:.5rem .9rem; align-items:baseline; flex-wrap:wrap; }
+  .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; }
   .feed .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
               padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
   .feed .oc--candidate_solution { background: var(--yellow); }
@@ -167,7 +171,7 @@
       h += '<ul class="feed">';
       d.recent_contributions.forEach(function (r) {
         h += '<li><span class="oc oc--' + esc(r.outcome) + '">' + esc(r.outcome.replace('_', ' ')) + '</span>' +
-          '<span>' + esc(r.summary || '(no summary)') + '</span>' +
+          '<span class="sum">' + esc(r.summary || '(no summary)') + '</span>' +
           '<span class="when">' + when(r.created_at) + '</span></li>';
       });
       h += '</ul>';
