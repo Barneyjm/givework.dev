@@ -29,7 +29,15 @@ function isSafeRelPath(p: string): boolean {
   if (typeof p !== 'string' || p.length === 0 || p.length > 300) return false;
   if (p.startsWith('/') || p.includes('\\') || p.includes('\0')) return false;
   const segments = p.split('/');
-  return segments.every((s) => s.length > 0 && s !== '.' && s !== '..' && s !== '.git');
+  return segments.every((s) => {
+    if (s.length === 0 || s === '.' || s === '..') return false;
+    // Case-insensitive: on case-insensitive filesystems (macOS/Windows) '.GIT'
+    // resolves to the real .git dir, so a git-config/hook write would run on the
+    // volunteer's next `git add`. Also block '.github': workflow files there run
+    // as unreviewed CI on the direct-push path, before any PR review.
+    const lower = s.toLowerCase();
+    return lower !== '.git' && lower !== '.github';
+  });
 }
 
 /**

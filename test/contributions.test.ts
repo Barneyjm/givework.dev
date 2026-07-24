@@ -196,4 +196,46 @@ describe('contributions / resumable tasks', () => {
     const rows = await contributionRows(task);
     expect(Number(rows[0].cost_cents)).toBe(500);
   });
+
+  it('preserves result on a non-terminal submit (as the inline artifact)', async () => {
+    const dev = await createDev('dev-keep');
+    const target = await createTarget();
+    const task = await createTask(target, { max: 500 });
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task);
+
+    // progress submit with computed data in `result` and no explicit artifact —
+    // the data must not be dropped when the task returns to the pool.
+    await submitResult(dev, task, { verified_range: '1e9..2e9', hits: [] }, 100, null, {
+      outcome: 'progress',
+      summary: 'swept a block',
+    });
+    const rows = await contributionRows(task);
+    expect(rows[0].artifact).toEqual({ verified_range: '1e9..2e9', hits: [] });
+  });
+
+  it('truncates an oversized summary and rejects an oversized state_update', async () => {
+    const dev = await createDev('dev-limits');
+    const target = await createTarget();
+    const task = await createTask(target, { max: 500 });
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task);
+
+    // Oversized state_update is refused before any spend is booked.
+    await expect(
+      submitResult(dev, task, null, 50, null, {
+        outcome: 'progress',
+        stateUpdate: { blob: 'x'.repeat(70_000) },
+      }),
+    ).rejects.toMatchObject({ code: 'bad_input' });
+
+    // The task is still ours (the reject happened before the settle), so a
+    // valid submit with a very long summary truncates rather than storing it whole.
+    await submitResult(dev, task, null, 50, null, {
+      outcome: 'progress',
+      summary: 'y'.repeat(5000),
+    });
+    const rows = await contributionRows(task);
+    expect((rows[0].summary as string).length).toBe(2000);
+  });
 });

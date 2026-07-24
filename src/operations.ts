@@ -20,6 +20,10 @@ const BAD_INPUT = 400;
 const RESERVE_INSUFFICIENT_BUDGET = 402;
 const CONFLICT = 409;
 
+/** Caps on the free-form contribution fields (public + hydrated into prompts). */
+const MAX_SUMMARY_CHARS = 2000;
+const MAX_STATE_BYTES = 64 * 1024;
+
 /** SQL expression for the current accounting period (first day of this month). */
 const CURRENT_PERIOD = `date_trunc('month', now())::date`;
 
@@ -322,6 +326,24 @@ export async function submitResult(
   // A candidate solution finishes the task; progress/dead-end keep it alive.
   const terminal = outcome === 'candidate_solution';
 
+  // Server-side bounds on the free-form fields. summary and target state are
+  // published on the public page and hydrated verbatim into the next agent's
+  // prompt context, so an unbounded value is both a storage-bloat and a
+  // content-injection vector. Truncate the note; reject an oversized state.
+  const summary = typeof opts.summary === 'string' ? opts.summary.slice(0, MAX_SUMMARY_CHARS) : '';
+  if (opts.stateUpdate !== undefined) {
+    const size = Buffer.byteLength(JSON.stringify(opts.stateUpdate) ?? 'null');
+    if (size > MAX_STATE_BYTES) {
+      throw new OpError(BAD_INPUT, 'bad_input', `state_update exceeds ${MAX_STATE_BYTES} bytes`);
+    }
+  }
+  // A non-terminal contribution returns the task to the pool, so `result` has
+  // nowhere to live on the task row. Preserve it as the contribution's inline
+  // artifact (unless the agent already supplied one) rather than dropping the
+  // computed work on the floor.
+  const artifact =
+    opts.artifact !== undefined ? opts.artifact : terminal ? undefined : (result ?? undefined);
+
   return withTransaction(async (client) => {
     // The reservation was made in the task's reserved_period (which may be a
     // prior month if the lock straddled a boundary). Read it first — a plain
@@ -412,9 +434,9 @@ export async function submitResult(
         targetId,
         devId,
         outcome,
-        opts.summary ?? '',
+        summary,
         opts.artifactUri ?? null,
-        opts.artifact != null ? JSON.stringify(opts.artifact) : null,
+        artifact != null ? JSON.stringify(artifact) : null,
         spendApplied,
         JSON.stringify(usagePayload ?? null),
       ],
@@ -1221,9 +1243,12 @@ export async function getLeaderboard(): Promise<Leaderboard> {
             COALESCE(SUM(c.cost_cents), 0)::bigint AS donated_cents
        FROM contributions c
        JOIN devs d ON d.id = c.dev_id
+       JOIN targets t ON t.id = c.target_id
+      WHERE t.slug IS NOT NULL AND t.kind::text = ANY($1::text[])
       GROUP BY d.id, d.github_handle
       ORDER BY donated_cents DESC, tasks DESC
       LIMIT 20`,
+    [PUBLIC_TARGET_KINDS],
   );
   const totalsP = query<{
     conjectures: number;
@@ -1240,8 +1265,15 @@ export async function getLeaderboard(): Promise<Leaderboard> {
         (SELECT count(*)::int FROM targets
           WHERE slug IS NOT NULL AND kind::text = ANY($1::text[])
             AND status IN ('resolved', 'disproven')) AS settled,
-        (SELECT count(DISTINCT dev_id)::int FROM contributions) AS contributors,
-        (SELECT COALESCE(SUM(cost_cents), 0)::bigint FROM contributions) AS compute_cents`,
+        -- Scope the contribution rollups to the same public, slugged targets the
+        -- cards show, so the totals never exceed the sum of the cards (and never
+        -- leak aggregate activity on non-public org_request work).
+        (SELECT count(DISTINCT c.dev_id)::int
+           FROM contributions c JOIN targets t ON t.id = c.target_id
+          WHERE t.slug IS NOT NULL AND t.kind::text = ANY($1::text[])) AS contributors,
+        (SELECT COALESCE(SUM(c.cost_cents), 0)::bigint
+           FROM contributions c JOIN targets t ON t.id = c.target_id
+          WHERE t.slug IS NOT NULL AND t.kind::text = ANY($1::text[])) AS compute_cents`,
     [PUBLIC_TARGET_KINDS],
   );
   const [conjectures, contributors, totals] = await Promise.all([
