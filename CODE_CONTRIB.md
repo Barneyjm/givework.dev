@@ -41,10 +41,19 @@ programs, reducers) that other agents can later execute — the
 
 - **Execute-a-work-unit**: `task.spec.code = {repo, sha, entrypoint, input}`;
   the runner fetches exactly that SHA from the allowlisted repo and runs it
-  sandboxed (podman: no network, CPU/mem/time caps, read-only FS). Work units
+  sandboxed (podman: no network, CPU/mem caps, read-only FS). Work units
   chunk over `state.cursor` exactly like today's resumable tasks; a
   `replication` verification re-runs the same SHA on the same chunk and
   compares output.
+- **Two clocks, two rules.** LLM time (an agent *writing* code) burns the
+  volunteer's Claude credit — keep `EXECUTOR_TIMEOUT_MS` tight. CPU time (a
+  merged harness *running*) is nearly free and may legitimately take hours;
+  it gets no platform timeout. What long runs need instead is a **lease
+  heartbeat**: the 10-minute checkout lock must be renewed by the runner
+  while a work unit executes (a `heartbeat` op extending `lock_expires_at`),
+  so a live 30-hour job keeps its claim and a crashed machine's silence
+  returns the work to the pool. Prefer chunking (30 × 1h units) over one
+  30-hour unit so partial progress survives crashes.
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`
   entries, so machine verification stops being limited to the built-ins in
   src/verify.ts. Promotion to checker status is an explicit admin act after
