@@ -235,8 +235,17 @@ export class ClaudeCliExecutor implements Executor {
         ? Math.ceil(data.total_cost_usd * 100)
         : usageToCents(model, data.usage ?? {});
 
+    // If the model's JSON includes a `summary` string, forward it as the
+    // contribution's handoff note — otherwise the public feed shows an entry
+    // with no summary at all.
+    const summary =
+      typeof (result as { summary?: unknown })?.summary === 'string'
+        ? ((result as { summary: string }).summary.slice(0, 500) as string)
+        : undefined;
+
     return {
       result,
+      summary,
       actual_cost_cents: cents,
       raw_usage: {
         model,
@@ -256,6 +265,12 @@ export class ClaudeCliExecutor implements Executor {
  * There is intentionally no API-key/SDK option — donated capacity is `claude -p`.
  */
 export function getExecutor(): Executor {
-  if (process.env.EXECUTOR === 'claude') return new ClaudeCliExecutor();
+  if (process.env.EXECUTOR === 'claude') {
+    // EXECUTOR_TIMEOUT_MS: how long one `claude -p` run may take before the
+    // runner gives up and releases the task (default 180s). Volunteers raise it
+    // for deep single-shot tasks on slower models.
+    const timeoutMs = Number(process.env.EXECUTOR_TIMEOUT_MS);
+    return new ClaudeCliExecutor(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {});
+  }
   return new StubExecutor();
 }
