@@ -306,18 +306,31 @@ export async function runLoop(
         }
       }
 
-      const submit = await backend.submit({
-        task_id: checkout.task_id,
-        result: exec.result,
-        actual_cost_cents: exec.actual_cost_cents,
-        raw_usage: exec.raw_usage,
-        // Forwarded when the executor produces them; otherwise a terminal submit.
-        outcome: exec.outcome,
-        summary,
-        artifact_uri: artifactUri,
-        artifact: exec.artifact,
-        state_update: exec.state_update,
-      });
+      let submit: SubmitResult;
+      try {
+        submit = await backend.submit({
+          task_id: checkout.task_id,
+          result: exec.result,
+          actual_cost_cents: exec.actual_cost_cents,
+          raw_usage: exec.raw_usage,
+          // Forwarded when the executor produces them; otherwise a terminal submit.
+          outcome: exec.outcome,
+          summary,
+          artifact_uri: artifactUri,
+          artifact: exec.artifact,
+          state_update: exec.state_update,
+        });
+      } catch (err) {
+        // A submit can legitimately fail — most often because the lease expired
+        // during a long run and expire() reclaimed the task (ToolError
+        // 'not_locked'/'task_not_open'). That's a lost unit of work, not a
+        // runner-fatal condition: log it and move on rather than aborting.
+        console.error(
+          `  ! submit rejected for ${checkout.task_id.slice(0, 8)} (${(err as Error).message}) — work not recorded, continuing`,
+        );
+        failed.add(checkout.task_id);
+        continue;
+      }
       if (submit.verification?.verdict === 'failed') {
         // Verification rejected the claim and the task is back in the pool.
         // Don't pick it up again this run — we'd just re-spend on the same

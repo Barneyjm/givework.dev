@@ -17,8 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-status.sh\" PostToolUse 2>/dev/null || true",
-            "if": "Bash(git push*)",
+            "command": "jq -e '.tool_input.command // \"\" | test(\"git +push\")' >/dev/null 2>&1 && \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-status.sh\" PostToolUse 2>/dev/null || true",
             "timeout": 20,
             "statusMessage": "Checking PR/CI status"
           }

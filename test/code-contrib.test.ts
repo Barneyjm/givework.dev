@@ -21,8 +21,18 @@ describe('extractCodeContribution', () => {
     expect(extractCodeContribution({ code_contribution: { title: 'x', files: [] } })).toBeNull();
   });
 
-  it('rejects unsafe paths (traversal, absolute, .git)', () => {
-    for (const p of ['../evil.py', '/abs.py', 'a/../../b.py', '.git/hooks/pre-commit', 'a\\b']) {
+  it('rejects unsafe paths (traversal, absolute, .git, .github, case variants)', () => {
+    for (const p of [
+      '../evil.py',
+      '/abs.py',
+      'a/../../b.py',
+      '.git/hooks/pre-commit',
+      '.GIT/config', // case-insensitive fs would resolve to real .git
+      '.Git/config',
+      '.github/workflows/x.yml', // unreviewed CI on direct push
+      '.GITHUB/workflows/x.yml',
+      'a\\b',
+    ]) {
       expect(
         extractCodeContribution({
           code_contribution: { title: 'x', files: [{ path: p, content: 'x' }] },
