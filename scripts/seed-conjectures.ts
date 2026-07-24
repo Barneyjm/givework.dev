@@ -53,10 +53,10 @@ const CONJECTURES: SeedConjecture[] = [
     name: "Euler's sum of powers conjecture (k = 5)",
     slug: 'euler-sum-of-powers',
     statement_plain:
-      'No fifth power of a positive integer is the sum of four smaller positive fifth powers. (Historically disproven — a live demo of machine-verified disproof.)',
+      'No fifth power of a positive integer is the sum of four smaller positive fifth powers.',
     source_ref: 'Lander & Parkin, 1966',
     significance:
-      "Euler's 1769 generalization of Fermat stood for two centuries until a computer search found 27⁵+84⁵+110⁵+133⁵ = 144⁵ — the platform re-verifies that witness live.",
+      "Euler's 1769 generalization of Fermat stood for two centuries until a 1966 computer search found a counterexample — among the first famous conjectures ever settled by machine.",
     tags: ['number-theory'],
     checker: 'euler_sum_of_powers',
   },

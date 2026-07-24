@@ -62,6 +62,8 @@
   .feed .oc--candidate_solution { background: var(--yellow); }
   .feed .oc--progress { background: #fff; }
   .feed .oc--dead_end { background: var(--red); color:#fff; border-color: var(--ink); }
+  .feed .oc--verified { background: #1e7d46; color:#fff; }
+  .feed .oc--refuted { background: var(--red); color:#fff; }
   .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
   .board-msg { font-weight:300; }
 </style>
@@ -170,7 +172,18 @@
     if (d.recent_contributions && d.recent_contributions.length) {
       h += '<ul class="feed">';
       d.recent_contributions.forEach(function (r) {
-        h += '<li><span class="oc oc--' + esc(r.outcome) + '">' + esc(r.outcome.replace('_', ' ')) + '</span>' +
+        // A candidate solution whose machine check passed is the real thing —
+        // badge it as verified; a failed check is an honestly-logged refutation.
+        var cls = 'oc--' + r.outcome;
+        var label = r.outcome.replace('_', ' ');
+        if (r.outcome === 'candidate_solution' && r.verdict === 'passed') {
+          cls = 'oc--verified';
+          label = 'verified solution';
+        } else if (r.outcome === 'candidate_solution' && r.verdict === 'failed') {
+          cls = 'oc--refuted';
+          label = 'refuted claim';
+        }
+        h += '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
           '<span class="sum">' + esc(r.summary || '(no summary)') + '</span>' +
           '<span class="when">' + when(r.created_at) + '</span></li>';
       });
