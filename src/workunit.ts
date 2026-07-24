@@ -40,6 +40,23 @@ function isSafeRelPath(p: string): boolean {
   });
 }
 
+/**
+ * Build the JSON a work-unit driver reads on stdin: the static spec input (fixed
+ * params like n/budget/seed) as the base, with the target's live compacted state
+ * overlaid on top so the moving fields (cursor, best-so-far) win. A plain object
+ * merge — both are JSON. If either side isn't an object it's ignored (spec input
+ * defaults to {}), so a malformed state can never wipe the spec params.
+ */
+export function mergeWorkUnitInput(specInput: unknown, targetState: unknown): unknown {
+  const base =
+    specInput && typeof specInput === 'object' && !Array.isArray(specInput) ? specInput : {};
+  const overlay =
+    targetState && typeof targetState === 'object' && !Array.isArray(targetState)
+      ? targetState
+      : {};
+  return { ...base, ...overlay };
+}
+
 /** Pull a well-formed work-unit spec out of a task spec, or null. */
 export function extractWorkUnit(spec: unknown): WorkUnitSpec | null {
   const code = (spec as { code?: unknown } | null)?.code as WorkUnitSpec | undefined;
@@ -117,6 +134,12 @@ export class WorkUnitExecutor implements Executor {
     if (wu.repo !== this.allowedRepo) {
       throw new Error(`work-unit repo not allowlisted: ${wu.repo} (allowed: ${this.allowedRepo})`);
     }
+    // Feed the live cursor: overlay the target's compacted state (advanced by
+    // each prior run's state_update) on the static spec input, so a re-picked
+    // resumable task continues from where the last run left off instead of
+    // restarting. Spec input provides the fixed params (n, budget, seed); the
+    // state provides the moving cursor and carried-forward best-so-far.
+    const stdinInput = mergeWorkUnitInput(wu.input, task.target_state);
     // No sandbox, no execution — a volunteer without podman releases the task
     // rather than running contributed code on the bare machine.
     await this.run('podman', ['--version']).catch(() => {
@@ -163,7 +186,7 @@ export class WorkUnitExecutor implements Executor {
             'python3',
             wu.entrypoint,
           ],
-          { input: JSON.stringify(wu.input ?? {}), timeoutMs: this.timeoutMs },
+          { input: JSON.stringify(stdinInput), timeoutMs: this.timeoutMs },
         );
       } catch (err) {
         // Best-effort reap of a container that outlived a killed client.
