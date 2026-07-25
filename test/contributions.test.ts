@@ -176,7 +176,7 @@ describe('contributions / resumable tasks', () => {
     ).rejects.toMatchObject({ code: 'bad_input' });
   });
 
-  it('clamps an overage on a continuing contribution and flags it', async () => {
+  it('books the real cost of an overrunning contribution, and credits it in full', async () => {
     const dev = await createDev('dev1');
     const target = await createTarget();
     const task = await createTask(target, { est: 100, max: 500 });
@@ -188,13 +188,15 @@ describe('contributions / resumable tasks', () => {
       summary: 'overran the cap',
     });
 
-    expect(res.overage_clamped).toBe(true);
-    expect(res.spent_applied).toBe(500); // clamped to the reservation
+    expect(res.overage_clamped).toBe(true); // flagged, so a bad estimate surfaces
+    expect(res.spent_applied).toBe(900); // …and booked as spent
     const b = await getBudgetRow(dev);
     expect(b.reserved_cents).toBe(0);
-    expect(b.spent_cents).toBe(500); // never exceeds budget
+    expect(b.spent_cents).toBe(900);
+    // the contribution — which drives the public "compute donated" totals — must
+    // credit the volunteer for what they actually gave, not the reservation
     const rows = await contributionRows(task);
-    expect(Number(rows[0].cost_cents)).toBe(500);
+    expect(Number(rows[0].cost_cents)).toBe(900);
   });
 
   it('preserves result on a non-terminal submit (as the inline artifact)', async () => {

@@ -64,10 +64,13 @@ expose an API key — work runs on their local Claude credit, never `ANTHROPIC_A
 - **Execution is donated, not billed.** The runner shells out to `claude -p`, so the
   capacity is the volunteer's existing Claude Code credit. No API keys, no platform
   spend per task.
-- **Fully accounted for.** The invariant `reserved_cents + spent_cents <= budget_cents`
-  is enforced by a DB `CHECK` plus a `FOR UPDATE` row lock on every state change, and
-  the `ledger` tracks every change — the sum of a dev's deltas always
-  equals their live `reserved + spent`.
+- **Fully accounted for.** Checkout takes a `FOR UPDATE` row lock and refuses a task
+  unless `reserved + spent + max_cost <= budget`, so nothing can be *started* beyond
+  what a volunteer pledged. A finished task books what it actually cost — that money
+  is already spent on their own subscription, and recording less would understate the
+  donation — so an overrun can push `spent` past `budget`, and the next checkout is
+  refused until they raise the cap. The `ledger` tracks every change: the sum of a
+  dev's deltas always equals their live `reserved + spent`.
 
 ## Architecture
 

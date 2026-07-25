@@ -193,28 +193,56 @@ describe('submit on unlocked task (criterion 8)', () => {
 });
 
 describe('actual exceeds reservation (criterion 9)', () => {
-  it('spend is clamped to max_cost, CHECK never violated, overage flagged', async () => {
+  it('books what was actually spent, flags the overage, and lets it exceed budget', async () => {
     await setBudget(dev, 600);
     const task = await createTask(np, { max: 500 });
     await checkoutTask(dev, task);
 
-    // Runner reports 700 but only 500 was reserved.
+    // Runner reports 700 but only 500 was reserved. That 700 is already gone from
+    // the volunteer's own subscription, so it is what we record.
     const sub = await submitResult(dev, task, {}, 700, { tokens: 99999 });
-    expect(sub.overage_clamped).toBe(true);
-    expect(sub.spent_applied).toBe(500);
+    expect(sub.overage_clamped).toBe(true); // still flagged
+    expect(sub.spent_applied).toBe(700); // …but booked in full
 
     const b = await getBudgetRow(dev);
     expect(b.reserved_cents).toBe(0);
-    expect(b.spent_cents).toBe(500); // clamped, not 700
-    expect(b.reserved_cents + b.spent_cents).toBeLessThanOrEqual(b.budget_cents);
+    expect(b.spent_cents).toBe(700); // the truth, not the 500 we wished for
+    // and it is allowed to exceed the budget, because it already happened
+    expect(b.spent_cents).toBeGreaterThan(b.budget_cents);
 
     const submitRow = (await getLedger(dev)).find((l) => l.event_type === 'submit');
-    expect(submitRow.delta_cents).toBe(0); // 500 spent - 500 reserved
+    expect(submitRow.delta_cents).toBe(200); // 700 spent - 500 released
     expect(submitRow.raw_usage).toMatchObject({
       overage: true,
       reported_cost_cents: 700,
-      clamped_to_cents: 500,
+      reserved_cents: 500,
     });
+  });
+
+  it('refuses the next checkout once the overage has eaten the budget', async () => {
+    await setBudget(dev, 600);
+    const first = await createTask(np, { max: 500 });
+    await checkoutTask(dev, first);
+    await submitResult(dev, first, {}, 700, null); // 700 spent of a 600 budget
+
+    // available is now negative; taking on new work must be refused.
+    const next = await createTask(np, { max: 100 });
+    await expect(checkoutTask(dev, next)).rejects.toMatchObject({ status: 402 });
+  });
+
+  it('rejects an implausible cost rather than emptying the budget on one bad number', async () => {
+    await setBudget(dev, 100000);
+    const task = await createTask(np, { max: 500 });
+    await checkoutTask(dev, task);
+
+    // 10x the reservation is the ceiling; beyond that it is a bug, not a donation.
+    await expect(submitResult(dev, task, {}, 5001, null)).rejects.toMatchObject({
+      code: 'bad_input',
+    });
+    // the reservation survives, so the task can still be submitted honestly
+    const b = await getBudgetRow(dev);
+    expect(b.reserved_cents).toBe(500);
+    expect(b.spent_cents).toBe(0);
   });
 });
 
