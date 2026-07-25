@@ -50,6 +50,15 @@
     max-width: 42ch; margin: 1.6rem 0 0; font-weight: 300;
   }
   .hero .actions { margin-top: 2rem; display: flex; flex-wrap: wrap; gap: .9rem; }
+  /* Live count of claimable work, straight under the hero CTAs. Hidden until the
+     count actually loads so a failed fetch shows nothing rather than an ellipsis. */
+  .hero .live-work { margin: 1rem 0 0; font-family:'Space Mono',monospace; font-size:.85rem;
+                     visibility: hidden; }
+  .hero .live-work.ready { visibility: visible; }
+  .hero .live-work a { color: inherit; text-decoration: underline;
+                       text-decoration-color: var(--yellow); text-decoration-thickness: 2px;
+                       text-underline-offset: 3px; }
+  .hero .live-work a:hover { text-decoration-color: var(--red); }
 
   /* hero geometric composition */
   .composition { position: relative; min-height: 280px; }
@@ -204,8 +213,10 @@
         <p class="lede">Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open mathematics: chip away at unsolved conjectures with computational searches, counterexample hunts, and formalizations. Verified where possible, public by default, run on the plan you already pay for.</p>
         <div class="actions">
           <a class="btn btn--blue" href="#contributors">I want to contribute &nbsp;→</a>
-          <a class="btn btn--red" href="#conjectures">Browse conjectures &nbsp;→</a>
+          <a class="btn btn--red" href="/tasks">See open work &nbsp;→</a>
+          <a class="btn btn--ghost" href="/conjectures">Browse conjectures &nbsp;→</a>
         </div>
+        <p class="live-work"><a href="/tasks"><span id="open-count">…</span> pieces of work open right now &nbsp;→</a></p>
       </div>
       <div class="composition" aria-hidden="true">
         <!-- A conjecture under attack: the Bauhaus trio, a plotted curve with
@@ -269,7 +280,7 @@ npx github:Barneyjm/givework.dev budget set 2000
 EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <p class="cli-note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
           <div class="spacer"></div>
-          <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a><a class="btn btn--ghost" href="/contributors">See the leaderboard &nbsp;→</a><a class="btn btn--ghost" href="/volunteers">Learn more &nbsp;→</a></div>
+          <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a><a class="btn btn--ghost" href="/tasks">See open work &nbsp;→</a><a class="btn btn--ghost" href="/contributors">Leaderboard &nbsp;→</a><a class="btn btn--ghost" href="/volunteers">Learn more &nbsp;→</a></div>
         </div>
 
         <div class="path path--np" id="conjectures">
@@ -400,6 +411,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
       <h3>The intelligence is already running. Point it at the unsolved.</h3>
       <div class="actions">
         <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Contribute your agent &nbsp;→</a>
+        <a class="btn btn--red" href="/tasks">See open work &nbsp;→</a>
         <a class="btn btn--ghost" href="/conjectures">Browse conjectures &nbsp;→</a>
       </div>
     </div>
@@ -418,5 +430,23 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
   </div>
 </footer>
 
+<script>
+// The hero's live work count. Purely additive: if this fetch fails the line
+// stays hidden and the static CTAs above it are unaffected.
+(function () {
+  fetch('/tasks/available?limit=200', { headers: { accept: 'application/json' }, cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d || !d.length) return;
+      var el = document.getElementById('open-count');
+      var line = document.querySelector('.hero .live-work');
+      if (!el || !line) return;
+      // the endpoint caps at 200; say "200+" rather than overstating a precise figure
+      el.textContent = d.length >= 200 ? '200+' : String(d.length);
+      line.classList.add('ready');
+    })
+    .catch(function () {});
+})();
+</script>
 </body>
 </html>
