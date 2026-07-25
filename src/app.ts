@@ -74,7 +74,16 @@ async function renderWithOg(
     .join('\n');
   const out = html.replace(/<head>/i, `<head>\n${inject}`);
   return new Response(out, {
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' },
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+      // CRITICAL: this page and its JSON twin share a URL, negotiated by Accept.
+      // Without Vary, a cache (browser or edge) can hand this cached HTML back
+      // to the page's own `fetch(..., {accept: application/json})` call, which
+      // then fails to parse — the "Couldn't load" bug. Vary keys the cache on
+      // Accept so the JSON request misses the HTML entry and hits the origin.
+      vary: 'Accept',
+    },
   });
 }
 
