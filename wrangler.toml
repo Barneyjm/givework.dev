@@ -1,6 +1,14 @@
 name = "givework"
 main = "src/worker.ts"
 
+# Let the bundler embed binary assets used by the branded OG-image renderer
+# (src/og/image.ts): the resvg-wasm module and the Space Mono font files. The
+# .wasm rule yields a WebAssembly.Module; the .ttf rule an ArrayBuffer.
+rules = [
+  { type = "CompiledWasm", globs = ["**/*.wasm"] },
+  { type = "Data", globs = ["**/*.ttf"] },
+]
+
 # nodejs_compat is required for the `pg` driver (Cloudflare's recommended
 # Postgres driver). A compatibility date >= 2025-04-01 also turns on
 # nodejs_compat_populate_process_env, which copies Worker secrets/vars onto

@@ -305,15 +305,19 @@ app.get('/contributors/:handle', (c) => {
           t.contributions > 0
             ? `${t.contributions} contribution${t.contributions === 1 ? '' : 's'} across ${t.conjectures} conjecture${t.conjectures === 1 ? '' : 's'} — $${(t.compute_cents / 100).toFixed(2)} of compute donated to open mathematics.`
             : 'A volunteer contributing compute to open mathematics on Givework.';
-        const avatar = `https://github.com/${p.github_handle}.png?size=460`;
+        // Branded 1200x630 composite (avatar + wordmark + stats), rendered by
+        // the Worker-only route in src/og/image.ts.
+        const card = `${origin}/og/contributor/${p.github_handle}.png`;
         tags.push(['property', 'og:title', `@${p.github_handle} — Givework`]);
         tags.push(['property', 'og:description', desc]);
         tags.push(['property', 'og:url', `${origin}/contributors/${p.github_handle}`]);
-        tags.push(['property', 'og:image', avatar]);
-        tags.push(['name', 'twitter:card', 'summary']);
+        tags.push(['property', 'og:image', card]);
+        tags.push(['property', 'og:image:width', '1200']);
+        tags.push(['property', 'og:image:height', '630']);
+        tags.push(['name', 'twitter:card', 'summary_large_image']);
         tags.push(['name', 'twitter:title', `@${p.github_handle} on Givework`]);
         tags.push(['name', 'twitter:description', desc]);
-        tags.push(['name', 'twitter:image', avatar]);
+        tags.push(['name', 'twitter:image', card]);
       }
       return renderWithOg(assets, '/contributor', c.req.url, tags);
     })();
