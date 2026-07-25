@@ -62,17 +62,19 @@
              display:flex; gap:.5rem .9rem; align-items:baseline; flex-wrap:wrap; }
   .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; }
   .tasklist { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
-  .tasklist li { border-bottom:1px solid #16131033; padding:.75rem .2rem; display:flex;
-                 gap:.6rem .9rem; align-items:baseline; flex-wrap:wrap; }
+  .tasklist li { border-bottom:1px solid #16131033; padding:.75rem .2rem;
+                 display:grid; grid-template-columns: 1fr auto; gap:.4rem .9rem;
+                 align-items:start; }
   .tasklist .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
-                  padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
+                  padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap;
+                  grid-column:1; grid-row:1; justify-self:start; }
   .tasklist .tk--video { background: var(--blue); color:#fff; border-color: var(--blue); }
   .tasklist .tk--math { background:#fff; }
-  .tasklist .tk-main { flex:1 1 22ch; min-width:0; }
+  .tasklist .tk-main { grid-column:1; grid-row:2; min-width:0; }
   .tasklist .tk-t { font-weight:600; display:block; overflow-wrap:anywhere; }
   .tasklist .tk-a { font-weight:300; opacity:.75; font-size:.9rem; overflow-wrap:anywhere; }
   .tasklist .tk-cap { font-family:'Space Mono',monospace; font-size:.78rem; opacity:.6;
-                      white-space:nowrap; margin-left:auto; }
+                      white-space:nowrap; grid-column:2; grid-row:1; justify-self:end; }
   .tk-note { font-weight:300; font-size:.9rem; opacity:.85; margin:.9rem 0 0; }
   .tk-note a { color:inherit; }
   .feed .by { font-family:'Space Mono',monospace; font-size:.82em; color:inherit;
@@ -269,6 +271,10 @@
 
   // The open pool for this conjecture: what a volunteer's agent could claim right
   // now. Rendered only when something is actually open.
+  // Short badge labels — the raw enum is too long for a phone-width row.
+  var TK_LABEL = { counterexample_search: 'counterexample', computational: 'compute',
+                   exploration: 'explore', lemma: 'lemma', formalization: 'proof' };
+
   function maybeAddTasks(slug) {
     fetch('/tasks/available?limit=12&slug=' + encodeURIComponent(slug), {
       headers: { accept: 'application/json' },
@@ -283,7 +289,7 @@
         list.forEach(function (t) {
           var isVid = t.deliverable === 'explainer_video';
           h += '<li><span class="oc ' + (isVid ? 'tk--video' : 'tk--math') + '">' +
-            (isVid ? 'video' : esc(String(t.kind).replace(/_/g, ' '))) + '</span>' +
+            (isVid ? 'video' : esc(TK_LABEL[t.kind] || String(t.kind).replace(/_/g, ' '))) + '</span>' +
             '<span class="tk-main"><span class="tk-t">' + esc(t.title) + '</span>' +
             (t.angle ? '<span class="tk-a">' + esc(t.angle) + '</span>' : '') + '</span>' +
             '<span class="tk-cap">up to $' + (t.max_cost_cents / 100).toFixed(2) + '</span></li>';
