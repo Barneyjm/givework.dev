@@ -111,7 +111,7 @@ describe('contributor attribution + profile', () => {
       slug: 'goldbach',
       kind: 'conjecture',
     });
-    const targetId = (await create.json()).id;
+    const targetId = ((await create.json()) as { id: string }).id;
     const task = await createTask(targetId, { max: 500 });
     const dev = await createDev('ada');
     await setBudget(dev, 2000);
@@ -122,11 +122,17 @@ describe('contributor attribution + profile', () => {
     });
 
     // the conjecture feed now carries the contributor handle
-    const prog = await (await req('/conjectures/goldbach')).json();
+    const prog = (await (await req('/conjectures/goldbach')).json()) as {
+      recent_contributions: { contributor: string | null }[];
+    };
     expect(prog.recent_contributions[0].contributor).toBe('ada');
 
     // and the contributor has a public profile at /contributors/:handle
-    const profile = await (await req('/contributors/ada')).json();
+    const profile = (await (await req('/contributors/ada')).json()) as {
+      github_handle: string;
+      totals: { contributions: number; conjectures: number };
+      contributions: { conjecture_slug: string }[];
+    };
     expect(profile.github_handle).toBe('ada');
     expect(profile.totals.contributions).toBe(1);
     expect(profile.totals.conjectures).toBe(1);
