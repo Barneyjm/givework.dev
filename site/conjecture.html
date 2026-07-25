@@ -62,7 +62,9 @@
              display:flex; gap:.5rem .9rem; align-items:baseline; flex-wrap:wrap; }
   .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; }
   .feed .by { font-family:'Space Mono',monospace; font-size:.82em; color:inherit;
-              text-decoration:none; border-bottom:2px solid var(--yellow); }
+              text-decoration:none; border-bottom:2px solid var(--yellow); white-space:nowrap; }
+  .feed .by .av { width:1em; height:1em; border-radius:50%; vertical-align:-0.15em;
+                  margin-right:.25em; background:var(--ink); }
   .feed .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
               padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
   .feed .oc--candidate_solution { background: var(--yellow); }
@@ -202,7 +204,9 @@
           label = 'refuted claim';
         }
         var who = r.contributor
-          ? '<a class="by" href="/contributors/' + encodeURIComponent(r.contributor) + '">@' + esc(r.contributor) + '</a> '
+          ? '<a class="by" href="/contributors/' + encodeURIComponent(r.contributor) + '">' +
+            '<img class="av" src="https://github.com/' + encodeURIComponent(r.contributor) + '.png?size=48" alt="" loading="lazy" onerror="this.style.display=\'none\'" />' +
+            '@' + esc(r.contributor) + '</a> '
           : '';
         h += '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
           '<span class="sum">' + who + esc(r.summary || '(no summary)') + '</span>' +
