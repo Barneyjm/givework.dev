@@ -1,0 +1,32 @@
+{
+  "slug": "reconstruction",
+  "name": "The Reconstruction Conjecture",
+  "subtitle": "Rebuilding the whole from its pieces",
+  "statement": "Any network of three or more dots-and-lines can be rebuilt perfectly from the collection of smaller networks left after erasing each dot one at a time.",
+  "tex": "\\text{Deck}(G) = \\text{Deck}(H) \\implies G \\cong H \\quad (n \\ge 3)",
+  "background": [
+    "Posed by Paul Kelly in his 1942 PhD work, spread widely by Stanislaw Ulam around 1960.",
+    "Picture a graph: dots joined by lines. Delete one dot and keep what remains — that's a card.",
+    "Do this for every dot and you get a deck of cards, one per vertex.",
+    "The claim: the deck alone always fixes the original graph, uniquely."
+  ],
+  "why": [
+    "A clean test of a deep question: does the whole hide entirely in its parts?",
+    "Kelly proved it for trees; regular and disconnected graphs are settled too.",
+    "Brendan McKay checked every graph up to thirteen dots by computer — no exceptions."
+  ],
+  "impact": [
+    "A central open problem in graph theory: how much do a graph's parts fix the whole?",
+    "Edge count, degree sequence, and connectivity are all provably readable from the deck alone.",
+    "The directed-graph version is false — a warning that orientation can destroy information.",
+    "Its theme, rebuilding a whole from overlapping partial views, echoes in tomography and imaging."
+  ],
+  "narration": {
+    "title": "Here's a puzzle about whether a whole thing is truly hidden inside its own pieces — the Reconstruction Conjecture.",
+    "statement": "Take any network of dots connected by lines. Now erase one dot, and its lines, and photograph what's left. Do that for every single dot, and you end up with a deck of photographs. The conjecture says that deck of pieces always contains enough information to rebuild the original network exactly, with no ambiguity, as long as it started with at least three dots.",
+    "background": "Paul Kelly first wrote this down in his doctoral work in nineteen forty-two, and Stanislaw Ulam spread it far and wide around nineteen sixty. The intuition is almost hypnotic. Each photograph is missing one dot, so no single card tells you the whole story. But lay them all side by side and the overlaps seem to pin everything down.",
+    "why": "It's a beautifully sharp version of a very old question. Does the whole live entirely inside its parts? Kelly himself proved it for tree-shaped networks, and mathematicians have since confirmed it for regular graphs and disconnected ones. Brendan McKay checked every possible network up to thirteen dots by computer and found not one exception.",
+    "impact": "Honestly, this one lives mostly inside mathematics — but it runs deep. A whole toolkit of graph properties, like the number of edges and the overall pattern of connections, is already known to be readable from the deck alone. Tellingly, the one-way-street version of the puzzle, for directed networks, is actually false, which is a genuine warning that direction can erase information you can never recover. And the spirit of the problem, rebuilding a whole from overlapping partial glimpses, echoes across fields like medical imaging and network science.",
+    "close": "Verifiable math, chipped away in the open."
+  }
+}

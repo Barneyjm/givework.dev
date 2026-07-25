@@ -31,7 +31,8 @@
     "format": "biome format --write",
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "seed-erdos": "tsx scripts/seed-erdos.ts"
+    "seed-erdos": "tsx scripts/seed-erdos.ts",
+    "seed-video-tasks": "tsx scripts/seed-video-tasks.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
