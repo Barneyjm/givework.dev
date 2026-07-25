@@ -150,3 +150,64 @@ describe('contributor attribution + profile', () => {
     expect((await req('/contributors/has spaces')).status).toBe(404);
   });
 });
+
+describe('work-unit provenance on the feed', () => {
+  it('cites the exact pinned code that produced a contribution, and leaks nothing else', async () => {
+    const create = await createTargetVia({
+      name: 'Euler sum of powers',
+      slug: 'euler-demo',
+      kind: 'conjecture',
+    });
+    const targetId = ((await create.json()) as { id: string }).id;
+    const task = await createTask(targetId, { max: 500 });
+    const dev = await createDev('ada');
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task);
+    await submitResult(
+      dev,
+      task,
+      { found: false },
+      0,
+      {
+        workunit: true,
+        repo: 'Barneyjm/givework-contrib',
+        sha: 'b22346012688b6c70057717549bd905f8083e119',
+        entrypoint: 'euler-sum-of-powers/counterexample-search/euler_search.py',
+        duration_ms: 910,
+      },
+      { outcome: 'progress', summary: 'searched a window' },
+    );
+
+    const prog = (await (await req('/conjectures/euler-demo')).json()) as {
+      recent_contributions: Record<string, unknown>[];
+    };
+    const c = prog.recent_contributions[0];
+    expect(c.code).toEqual({
+      repo: 'Barneyjm/givework-contrib',
+      sha: 'b22346012688b6c70057717549bd905f8083e119',
+      entrypoint: 'euler-sum-of-powers/counterexample-search/euler_search.py',
+    });
+    // the raw usage blob itself (token counts etc.) is never exposed
+    expect(c.raw_usage).toBeUndefined();
+    expect(Object.keys(c).sort()).toEqual(
+      ['code', 'contributor', 'created_at', 'outcome', 'summary', 'verdict', 'verified_via'].sort(),
+    );
+  });
+
+  it('reports null code for a contribution that did not run pinned code', async () => {
+    const create = await createTargetVia({ name: 'Plain', slug: 'plain', kind: 'conjecture' });
+    const targetId = ((await create.json()) as { id: string }).id;
+    const task = await createTask(targetId, { max: 500 });
+    const dev = await createDev('bob');
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task);
+    await submitResult(dev, task, null, 120, null, {
+      outcome: 'progress',
+      summary: 'thought about it',
+    });
+    const prog = (await (await req('/conjectures/plain')).json()) as {
+      recent_contributions: { code: unknown }[];
+    };
+    expect(prog.recent_contributions[0].code).toBeNull();
+  });
+});

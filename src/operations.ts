@@ -1076,6 +1076,12 @@ export interface TargetProgress {
     verified_via: string | null;
     /** The contributor's GitHub handle (public, as on the leaderboard), or null. */
     contributor: string | null;
+    /**
+     * For a work-unit contribution, the exact code that produced it, pinned by
+     * commit SHA — the provenance that makes a result reproducible and
+     * tamper-evident. Null for LLM/other contributions.
+     */
+    code: { repo: string; sha: string; entrypoint: string } | null;
     created_at: string;
   }[];
 }
@@ -1142,10 +1148,21 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     verdict: string | null;
     verified_via: string | null;
     contributor: string | null;
+    code_repo: string | null;
+    code_sha: string | null;
+    code_entrypoint: string | null;
     created_at: string | Date;
   }>(
+    // Pull only the three public provenance fields out of raw_usage — never the
+    // blob itself, which carries token/usage detail for LLM contributions.
     `SELECT c.outcome::text AS outcome, c.summary, v.verdict, v.method AS verified_via,
-            d.github_handle AS contributor, c.created_at
+            d.github_handle AS contributor, c.created_at,
+            CASE WHEN c.raw_usage->>'workunit' = 'true'
+                 THEN c.raw_usage->>'repo' END AS code_repo,
+            CASE WHEN c.raw_usage->>'workunit' = 'true'
+                 THEN c.raw_usage->>'sha' END AS code_sha,
+            CASE WHEN c.raw_usage->>'workunit' = 'true'
+                 THEN c.raw_usage->>'entrypoint' END AS code_entrypoint
        FROM contributions c
        LEFT JOIN devs d ON d.id = c.dev_id
        LEFT JOIN LATERAL (
@@ -1187,6 +1204,10 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
       verdict: r.verdict,
       verified_via: r.verified_via,
       contributor: r.contributor,
+      code:
+        r.code_repo && r.code_sha && r.code_entrypoint
+          ? { repo: r.code_repo, sha: r.code_sha, entrypoint: r.code_entrypoint }
+          : null,
       created_at: new Date(r.created_at).toISOString(),
     })),
   };
