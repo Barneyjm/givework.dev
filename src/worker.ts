@@ -16,6 +16,17 @@ import { emailHandler } from './intake/email.js';
 // holding long-lived connections. Our transactions are all transaction-scoped
 // (BEGIN..COMMIT with FOR UPDATE), which PgBouncer transaction pooling supports.
 export default {
-  fetch: (req: Request, env: unknown, ctx: unknown) => app.fetch(req, env as any, ctx as any),
+  fetch: async (req: Request, env: unknown, ctx: unknown) => {
+    // Branded contributor share cards are rendered by a Worker-only module
+    // (resvg-wasm + bundled fonts). Import it lazily so the wasm/font assets
+    // only load on the isolate that actually serves a card, and never leak into
+    // the Node code paths that share app.ts.
+    if (new URL(req.url).pathname.startsWith('/og/contributor/')) {
+      const { handleOgContributor } = await import('./og/image.js');
+      const res = await handleOgContributor(req);
+      if (res) return res;
+    }
+    return app.fetch(req, env as any, ctx as any);
+  },
   email: emailHandler,
 };

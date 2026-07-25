@@ -41,6 +41,41 @@ interface R2LikeObject {
 }
 interface R2LikeBucket {
   get(key: string, opts?: { range?: R2Range }): Promise<R2LikeObject | null>;
+  head(key: string): Promise<{ key: string } | null>;
+}
+
+type AssetsBinding = { fetch: typeof fetch };
+type OgTag = [attr: 'property' | 'name', key: string, value: string];
+
+function escAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Fetch a static page from ASSETS and inject per-page OG/Twitter meta into its
+ * <head>, so social crawlers (which don't run our client JS) get a rich share
+ * card instead of the generic static tags. Injected right after <head> so ours
+ * win. Short edge cache keeps the extra DB/R2 read cheap.
+ */
+async function renderWithOg(
+  assets: AssetsBinding,
+  assetPath: string,
+  reqUrl: string,
+  tags: OgTag[],
+): Promise<Response> {
+  const res = await assets.fetch(new URL(assetPath, reqUrl));
+  const html = await res.text();
+  const inject = tags
+    .map(([attr, key, value]) => `<meta ${attr}="${key}" content="${escAttr(value)}" />`)
+    .join('\n');
+  const out = html.replace(/<head>/i, `<head>\n${inject}`);
+  return new Response(out, {
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' },
+  });
 }
 
 /**
@@ -173,15 +208,79 @@ app.get('/videos/:key', async (c) => {
 // runners, curl, fetch — gets the JSON. The ASSETS binding only exists on the
 // deployed Worker/wrangler dev, so the Node server (API-only) always serves JSON.
 app.get('/conjectures/:slug', (c) => {
-  const assets = (c.env as { ASSETS?: { fetch: typeof fetch } } | undefined)?.ASSETS;
-  if (assets && c.req.header('accept')?.includes('text/html')) {
-    return assets.fetch(new URL('/conjecture', c.req.url));
+  const env = c.env as { ASSETS?: AssetsBinding; MEDIA?: R2LikeBucket } | undefined;
+  const slug = c.req.param('slug');
+  if (env?.ASSETS && c.req.header('accept')?.includes('text/html')) {
+    return (async () => {
+      const [p, hasVideo] = await Promise.all([
+        getTargetProgress(slug).catch(() => null),
+        env.MEDIA
+          ? env.MEDIA.head(`${slug}.mp4`)
+              .then((o) => !!o)
+              .catch(() => false)
+          : false,
+      ]);
+      const origin = new URL(c.req.url).origin;
+      const tags: OgTag[] = [];
+      if (p) {
+        const desc = (
+          p.significance ||
+          p.statement_plain ||
+          'An open conjecture, worked in the open.'
+        ).slice(0, 300);
+        tags.push(['property', 'og:title', `${p.name} — Givework`]);
+        tags.push(['property', 'og:description', desc]);
+        tags.push(['property', 'og:url', `${origin}/conjectures/${slug}`]);
+        tags.push(['name', 'twitter:title', p.name]);
+        tags.push(['name', 'twitter:description', desc]);
+        if (hasVideo) {
+          const mp4 = `${origin}/videos/${slug}.mp4`;
+          const poster = `${origin}/videos/${slug}-poster.jpg`;
+          tags.push(['property', 'og:type', 'video.other']);
+          tags.push(['property', 'og:image', poster]);
+          tags.push(['property', 'og:video', mp4]);
+          tags.push(['property', 'og:video:secure_url', mp4]);
+          tags.push(['property', 'og:video:type', 'video/mp4']);
+          tags.push(['property', 'og:video:width', '1920']);
+          tags.push(['property', 'og:video:height', '1080']);
+          tags.push(['name', 'twitter:card', 'player']);
+          tags.push(['name', 'twitter:player', `${origin}/embed/${slug}`]);
+          tags.push(['name', 'twitter:player:width', '1920']);
+          tags.push(['name', 'twitter:player:height', '1080']);
+          tags.push(['name', 'twitter:image', poster]);
+        } else {
+          tags.push(['property', 'og:image', `${origin}/og.png`]);
+          tags.push(['name', 'twitter:card', 'summary_large_image']);
+          tags.push(['name', 'twitter:image', `${origin}/og.png`]);
+        }
+      }
+      return renderWithOg(env.ASSETS as AssetsBinding, '/conjecture', c.req.url, tags);
+    })();
   }
   return handle(async () => {
-    const p = await getTargetProgress(c.req.param('slug'));
+    const p = await getTargetProgress(slug);
     if (!p) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
     return p;
   })(c);
+});
+
+// Minimal embeddable video player for twitter:player cards — the conjecture's
+// explainer, full-bleed. Only serves when the video exists in R2.
+app.get('/embed/:slug', async (c) => {
+  const media = (c.env as { MEDIA?: R2LikeBucket } | undefined)?.MEDIA;
+  const slug = c.req.param('slug');
+  if (!/^[\w-]+$/.test(slug) || !media || !(await media.head(`${slug}.mp4`).catch(() => null))) {
+    return c.notFound();
+  }
+  const src = `/videos/${escAttr(slug)}.mp4`;
+  const html =
+    `<!doctype html><html><head><meta charset="utf-8"/>` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1"/>` +
+    `<style>html,body{margin:0;height:100%;background:#161310}video{width:100%;height:100%;object-fit:contain}</style>` +
+    `</head><body><video controls playsinline autoplay src="${src}"></video></body></html>`;
+  return new Response(html, {
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' },
+  });
 });
 
 // Public leaderboard — curated conjectures with progress + top contributors by
@@ -194,9 +293,34 @@ app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
 app.get('/contributors/:handle', (c) => {
   const handleParam = c.req.param('handle');
   if (!/^[\w-]{1,39}$/.test(handleParam)) return c.notFound();
-  const assets = (c.env as { ASSETS?: { fetch: typeof fetch } } | undefined)?.ASSETS;
+  const assets = (c.env as { ASSETS?: AssetsBinding } | undefined)?.ASSETS;
   if (assets && c.req.header('accept')?.includes('text/html')) {
-    return assets.fetch(new URL('/contributor', c.req.url));
+    return (async () => {
+      const p = await getContributorProfile(handleParam).catch(() => null);
+      const origin = new URL(c.req.url).origin;
+      const tags: OgTag[] = [];
+      if (p) {
+        const t = p.totals;
+        const desc =
+          t.contributions > 0
+            ? `${t.contributions} contribution${t.contributions === 1 ? '' : 's'} across ${t.conjectures} conjecture${t.conjectures === 1 ? '' : 's'} — $${(t.compute_cents / 100).toFixed(2)} of compute donated to open mathematics.`
+            : 'A volunteer contributing compute to open mathematics on Givework.';
+        // Branded 1200x630 composite (avatar + wordmark + stats), rendered by
+        // the Worker-only route in src/og/image.ts.
+        const card = `${origin}/og/contributor/${p.github_handle}.png`;
+        tags.push(['property', 'og:title', `@${p.github_handle} — Givework`]);
+        tags.push(['property', 'og:description', desc]);
+        tags.push(['property', 'og:url', `${origin}/contributors/${p.github_handle}`]);
+        tags.push(['property', 'og:image', card]);
+        tags.push(['property', 'og:image:width', '1200']);
+        tags.push(['property', 'og:image:height', '630']);
+        tags.push(['name', 'twitter:card', 'summary_large_image']);
+        tags.push(['name', 'twitter:title', `@${p.github_handle} on Givework`]);
+        tags.push(['name', 'twitter:description', desc]);
+        tags.push(['name', 'twitter:image', card]);
+      }
+      return renderWithOg(assets, '/contributor', c.req.url, tags);
+    })();
   }
   return handle(async () => {
     const p = await getContributorProfile(handleParam);

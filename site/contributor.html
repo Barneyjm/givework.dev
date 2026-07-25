@@ -22,6 +22,8 @@
   .crumb { font-family:'Space Mono',monospace; font-size:.8rem; }
   .crumb a { color: inherit; }
   .head { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin:.8rem 0 0; }
+  .head .who { display:flex; align-items:center; gap:1rem; }
+  .head .avatar { width:64px; height:64px; border: var(--line); background:var(--ink); object-fit:cover; }
   .head h1 { margin:0; font-size:clamp(1.7rem, 4.5vw, 2.8rem); letter-spacing:-.02em; }
   .head .gh { font-family:'Space Mono',monospace; }
   .share { font-family:'Space Mono',monospace; font-size:.78rem; text-transform:uppercase;
@@ -119,7 +121,11 @@
     document.title = '@' + d.github_handle + ' — Givework';
     var t = d.totals;
     var h = '<p class="crumb"><a href="/conjectures">← Givework</a></p>';
-    h += '<div class="head"><h1><span class="gh">@' + esc(d.github_handle) + '</span></h1>' +
+    var avatar = 'https://github.com/' + encodeURIComponent(d.github_handle) + '.png?size=128';
+    h += '<div class="head"><div class="who">' +
+      '<img class="avatar" src="' + avatar + '" alt="" loading="lazy" ' +
+      'onerror="this.style.display=\'none\'" />' +
+      '<h1><span class="gh">@' + esc(d.github_handle) + '</span></h1></div>' +
       '<button class="share" id="share">Share ↗</button></div>';
     h += '<p class="sub">A volunteer contributing compute to open mathematics.</p>';
     h += '<div class="metrics">' +
