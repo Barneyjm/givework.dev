@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Contributor — Givework</title>
+<meta name="description" content="A volunteer's contributions to open mathematics on Givework." />
+<!-- Served by the Worker at /contributors/<handle> (content-negotiated: browsers
+     get this page, API clients get JSON). The handle comes from the URL path. -->
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  .detail { padding: clamp(2.5rem, 6vw, 5rem) 0; }
+  .crumb { font-family:'Space Mono',monospace; font-size:.8rem; }
+  .crumb a { color: inherit; }
+  .head { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin:.8rem 0 0; }
+  .head h1 { margin:0; font-size:clamp(1.7rem, 4.5vw, 2.8rem); letter-spacing:-.02em; }
+  .head .gh { font-family:'Space Mono',monospace; }
+  .share { font-family:'Space Mono',monospace; font-size:.78rem; text-transform:uppercase;
+           padding:.4rem .9rem; border: var(--line); background:#fff; cursor:pointer; color:inherit; }
+  .share:hover { background: var(--yellow); }
+  .sub { font-weight:300; opacity:.85; margin:.6rem 0 0; }
+  .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:1rem; margin:2rem 0 0; }
+  .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
+  .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
+  .metric .k { font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+  .feed-head { margin:2.6rem 0 0; }
+  .feed { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
+  .feed li { border-bottom: 1px solid #16131033; padding:.9rem .2rem; font-weight:300;
+             display:flex; gap:.6rem .9rem; align-items:baseline; flex-wrap:wrap; }
+  .feed .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+              padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
+  .feed .oc--progress { background:#fff; }
+  .feed .oc--dead_end { background: var(--red); color:#fff; }
+  .feed .oc--verified { background:#1e7d46; color:#fff; }
+  .feed .oc--accepted { background:#fff; border-color:#1e7d46; color:#1e7d46; }
+  .feed .oc--refuted { background: var(--red); color:#fff; }
+  .feed .oc--candidate_solution { background: var(--yellow); }
+  .feed .cj { font-weight:600; }
+  .feed .cj a { color:inherit; text-decoration:none; border-bottom:2px solid var(--yellow); }
+  .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; opacity:.9; }
+  .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
+  .board-msg { font-weight:300; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/conjectures">All conjectures</a>
+      <a class="navlink" href="/volunteers">For contributors</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="detail">
+    <div class="wrap" id="page"><p class="board-msg">Loading…</p></div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var page = document.getElementById('page');
+  var esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var dollars = function (cents) { return '$' + (cents / 100).toFixed(2); };
+  var when = function (iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  var handle = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+  if (!handle || handle === 'contributor') { location.replace('/conjectures'); return; }
+
+  function badge(r) {
+    var cls = 'oc--' + r.outcome, label = r.outcome.replace('_', ' ');
+    if (r.outcome === 'candidate_solution' && r.verdict === 'passed') {
+      if (r.verified_via === 'human_review') { cls = 'oc--accepted'; label = 'accepted'; }
+      else { cls = 'oc--verified'; label = 'machine-verified'; }
+    } else if (r.outcome === 'candidate_solution' && r.verdict === 'failed') {
+      cls = 'oc--refuted'; label = 'refuted claim';
+    }
+    return '<span class="oc ' + cls + '">' + esc(label) + '</span>';
+  }
+
+  function render(d) {
+    document.title = '@' + d.github_handle + ' — Givework';
+    var t = d.totals;
+    var h = '<p class="crumb"><a href="/conjectures">← Givework</a></p>';
+    h += '<div class="head"><h1><span class="gh">@' + esc(d.github_handle) + '</span></h1>' +
+      '<button class="share" id="share">Share ↗</button></div>';
+    h += '<p class="sub">A volunteer contributing compute to open mathematics.</p>';
+    h += '<div class="metrics">' +
+      '<div class="metric"><span class="v">' + t.contributions + '</span><span class="k">contributions</span></div>' +
+      '<div class="metric"><span class="v">' + t.conjectures + '</span><span class="k">conjectures</span></div>' +
+      '<div class="metric"><span class="v">' + dollars(t.compute_cents) + '</span><span class="k">compute donated</span></div>' +
+      (t.first_at ? '<div class="metric"><span class="v">' + when(t.first_at) + '</span><span class="k">contributing since</span></div>' : '') +
+      '</div>';
+    h += '<div class="section-head feed-head"><span class="eyebrow">The work</span><h3>Contributions.</h3></div>';
+    if (d.contributions && d.contributions.length) {
+      h += '<ul class="feed">';
+      d.contributions.forEach(function (r) {
+        h += '<li>' + badge(r) +
+          '<span class="cj"><a href="/conjectures/' + encodeURIComponent(r.conjecture_slug) + '">' + esc(r.conjecture_name) + '</a></span>' +
+          '<span class="sum">' + esc(r.summary || '(no summary)') + '</span>' +
+          '<span class="when">' + when(r.created_at) + '</span></li>';
+      });
+      h += '</ul>';
+    } else {
+      h += '<p class="board-msg">No public contributions yet.</p>';
+    }
+    page.innerHTML = h;
+    var btn = document.getElementById('share');
+    if (btn) btn.addEventListener('click', function () {
+      var url = location.href;
+      var title = '@' + d.github_handle + ' on Givework';
+      if (navigator.share) { navigator.share({ title: title, url: url }).catch(function () {}); }
+      else { navigator.clipboard.writeText(url).then(function () { btn.textContent = 'Link copied ✓'; }).catch(function () {}); }
+    });
+  }
+
+  fetch('/contributors/' + encodeURIComponent(handle), { headers: { accept: 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(render)
+    .catch(function (e) {
+      page.innerHTML = String(e.message) === '404'
+        ? '<p class="board-msg">No contributor called <span class="mono">@' + esc(handle) + '</span> yet. <a href="/conjectures">Browse conjectures →</a></p>'
+        : '<p class="board-msg">Couldn’t load this profile.</p>';
+    });
+})();
+</script>
+</body>
+</html>

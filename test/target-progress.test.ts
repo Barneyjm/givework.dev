@@ -103,3 +103,38 @@ describe('conjecture progress page', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('contributor attribution + profile', () => {
+  it('attributes contributions to the handle and serves a shareable profile', async () => {
+    const create = await createTargetVia({
+      name: 'Goldbach',
+      slug: 'goldbach',
+      kind: 'conjecture',
+    });
+    const targetId = (await create.json()).id;
+    const task = await createTask(targetId, { max: 500 });
+    const dev = await createDev('ada');
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task);
+    await submitResult(dev, task, null, 120, null, {
+      outcome: 'progress',
+      summary: 'verified evens up to 1e6',
+    });
+
+    // the conjecture feed now carries the contributor handle
+    const prog = await (await req('/conjectures/goldbach')).json();
+    expect(prog.recent_contributions[0].contributor).toBe('ada');
+
+    // and the contributor has a public profile at /contributors/:handle
+    const profile = await (await req('/contributors/ada')).json();
+    expect(profile.github_handle).toBe('ada');
+    expect(profile.totals.contributions).toBe(1);
+    expect(profile.totals.conjectures).toBe(1);
+    expect(profile.contributions[0].conjecture_slug).toBe('goldbach');
+
+    // unknown handle -> 404
+    expect((await req('/contributors/nobody')).status).toBe(404);
+    // malformed handle -> 404
+    expect((await req('/contributors/has spaces')).status).toBe(404);
+  });
+});
