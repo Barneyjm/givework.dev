@@ -32,7 +32,8 @@
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "seed-erdos": "tsx scripts/seed-erdos.ts",
-    "seed-video-tasks": "tsx scripts/seed-video-tasks.ts"
+    "seed-video-tasks": "tsx scripts/seed-video-tasks.ts",
+    "seed-erdos-tasks": "tsx scripts/seed-erdos-tasks.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
