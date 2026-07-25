@@ -16,6 +16,8 @@ import { closePool, pool } from '../src/db.js';
 const EST_CENTS = 150;
 const MAX_CENTS = 400;
 const MODEL = 'claude-opus-4-8';
+// The runner has no checkout of this repo, so the guide is referenced by raw URL.
+const RAW = 'https://raw.githubusercontent.com/Barneyjm/givework.dev/main/video';
 
 // Slugs whose video already exists in R2 (givework.dev/videos/<slug>.mp4). Passed
 // in so this script needs no network: refresh with scripts/list-videos.sh or by
@@ -42,11 +44,14 @@ function prompt(t: Row): string {
     t.statement_plain ? `The problem: ${t.statement_plain}` : '',
     t.significance ? `Why it matters: ${t.significance}` : '',
     '',
-    'Read video/README.md in the Givework repo first — it is the authoring kit and it is binding. It documents the two files you must produce, the narration rules, the house style, and how to render.',
+    'Read the authoring kit first — it is binding. Fetch all four:',
+    `  ${RAW}/README.md   (file shapes, narration rules, house style)`,
+    `  ${RAW}/viz.py      (the shared kit: BeatScene, palette, helpers)`,
+    `  ${RAW}/sc_collatz.py  and  ${RAW}/collatz.json   (a complete reference scene and its spec)`,
     '',
     'Produce exactly two files:',
-    `  1. ${t.slug}.json — the spec: name, subtitle, statement, optional tex, background[], why[], impact[], and a narration{} script with one spoken line per beat (title, statement, background, why, impact).`,
-    `  2. sc_${t.slug}.py — a Manim scene, class ConjectureVideo(BeatScene), importing the shared kit from viz.py. Each beat calls self.narrate("<beat>") first and self.close_beat() last; use self.pace(...) for waits between. Do NOT write a close beat — the shared call-to-action outro is appended downstream.`,
+    `  1. ${t.slug}/explainer/${t.slug}.json — the spec: name, subtitle, statement, optional tex, background[], why[], impact[], and a narration{} script with one spoken line per beat (title, statement, background, why, impact).`,
+    `  2. ${t.slug}/explainer/sc_${t.slug}.py — a Manim scene, class ConjectureVideo(BeatScene), importing the shared kit from viz.py. Each beat calls self.narrate("<beat>") first and self.close_beat() last; use self.pace(...) for waits between. Do NOT write a close beat — the shared call-to-action outro is appended downstream.`,
     '',
     'The single most important requirement: DRAW THE MATHEMATICS. Find the one picture that makes this problem click — the trajectory, the graph, the curve, the distribution, the counterexample — and animate it. A beat that is just a bulleted list of sentences is a failed beat. Study the two reference scenes shipped in video/ (sc_collatz.py, sc_reconstruction.py) and match their idioms and palette.',
     '',
@@ -54,7 +59,7 @@ function prompt(t: Row): string {
     '',
     'Every factual claim will be fact-checked before publishing. State honestly what is known versus conjectured, and never invent bounds, dates, or attributions. If you are unsure of a historical detail, leave it out.',
     '',
-    'Submit both files as your contribution artifact. If you run out of budget partway, submit what you have as progress with a clear note on what remains — the next contributor picks up from your spec.',
+    `Deliver all of it in the code_contribution field of your JSON output, as files under ${t.slug}/explainer/ — that is what opens the pull request. If you run out of budget partway, submit what you have as progress with a clear note on what remains; the next contributor picks up from your spec.`,
   ]
     .filter((line) => line !== '')
     .join('\n');
@@ -95,11 +100,15 @@ async function main() {
       angle: 'find the one picture that makes this problem click, and animate it',
       prompt: prompt(t),
       guide: 'video/README.md',
-      files: [`${t.slug}.json`, `sc_${t.slug}.py`],
+      files: [`${t.slug}/explainer/${t.slug}.json`, `${t.slug}/explainer/sc_${t.slug}.py`],
+      // Authoring a full scene took ~13 minutes in testing; the executor's 3-minute
+      // default kills it. Runners read this to widen their timeout for this task.
+      suggested_timeout_ms: 1_500_000,
       acceptance:
         'Both files submitted; the scene renders with no errors; every beat is a diagram, not a list of text; all factual claims are accurate and verifiable.',
       output_schema: {
-        result: 'the two files: the <slug>.json spec and the sc_<slug>.py Manim scene',
+        code_contribution:
+          '{title, description, files:[{path, content}]} — the spec, the scene, and a short README under <slug>/explainer/',
         summary: 'string — one-line handoff for the contribution feed',
         honest_status:
           'string — did it render? which beats are diagram-complete, and what remains?',

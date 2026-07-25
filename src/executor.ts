@@ -205,7 +205,10 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
   });
 }
 
-type CliRunner = (args: string[], input: string) => Promise<string>;
+type CliRunner = (args: string[], input: string, timeoutMs: number) => Promise<string>;
+
+/** Ceiling on a task-advertised timeout, so a bad spec can't hang a runner. */
+const MAX_TASK_TIMEOUT_MS = 30 * 60_000;
 
 export class ClaudeCliExecutor implements Executor {
   private run: CliRunner;
@@ -213,7 +216,24 @@ export class ClaudeCliExecutor implements Executor {
 
   constructor(opts: { run?: CliRunner; timeoutMs?: number } = {}) {
     this.timeoutMs = opts.timeoutMs ?? 180_000;
-    this.run = opts.run ?? ((args, input) => spawnClaude(args, input, this.timeoutMs));
+    // The per-task override is consulted at call time so a long-running task
+    // (authoring a whole Manim scene runs ~13 minutes) can widen the window
+    // without every task paying for it.
+    this.run = opts.run ?? ((args, input, timeoutMs) => spawnClaude(args, input, timeoutMs));
+  }
+
+  /**
+   * How long this task may take. A task can advertise `spec.suggested_timeout_ms`
+   * — the platform's estimate of the work — which raises (never lowers) the
+   * runner's own limit, and is capped so a bad spec can't hang a volunteer's
+   * machine indefinitely.
+   */
+  private timeoutFor(task: ExecTask): number {
+    const hint = Number(
+      (task.spec as { suggested_timeout_ms?: unknown } | undefined)?.suggested_timeout_ms,
+    );
+    if (!Number.isFinite(hint) || hint <= 0) return this.timeoutMs;
+    return Math.min(Math.max(hint, this.timeoutMs), MAX_TASK_TIMEOUT_MS);
   }
 
   async execute(task: ExecTask): Promise<ExecResult> {
@@ -234,7 +254,7 @@ export class ClaudeCliExecutor implements Executor {
     // coerceResult parses it. STAGE 8: cap usage so a task can't exceed its cap.
     const args = ['-p', '--output-format', 'json', '--model', model];
 
-    const raw = await this.run(args, prompt);
+    const raw = await this.run(args, prompt, this.timeoutFor(task));
 
     let data: any;
     try {
