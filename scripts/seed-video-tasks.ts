@@ -65,10 +65,59 @@ function prompt(t: Row): string {
     .join('\n');
 }
 
+function buildSpec(t: Row) {
+  return {
+    deliverable: 'explainer_video',
+    angle: 'find the one picture that makes this problem click, and animate it',
+    prompt: prompt(t),
+    guide: 'video/README.md',
+    files: [`${t.slug}/explainer/${t.slug}.json`, `${t.slug}/explainer/sc_${t.slug}.py`],
+    // Authoring a full scene took ~13 minutes in testing; the executor's 3-minute
+    // default kills it. Runners read this to widen their timeout for this task.
+    suggested_timeout_ms: 1_500_000,
+    acceptance:
+      'Both files submitted; the scene renders with no errors; every beat is a diagram, not a list of text; all factual claims are accurate and verifiable.',
+    output_schema: {
+      code_contribution:
+        '{title, description, files:[{path, content}]} — the spec, the scene, and a short README under <slug>/explainer/',
+      summary: 'string — one-line handoff for the contribution feed',
+      honest_status: 'string — did it render? which beats are diagram-complete, and what remains?',
+    },
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const kindArg = args.includes('--kind') ? args[args.indexOf('--kind') + 1] : null;
   const limitArg = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : null;
+  // --refresh rewrites the spec of video tasks that are already open. Seeded
+  // tasks carry a prompt; when that prompt is corrected (as it was when the
+  // code_contribution channel and the timeout hint were added) the tasks already
+  // on the board would otherwise keep the broken brief forever.
+  const refresh = args.includes('--refresh');
+
+  if (refresh) {
+    const { rows: live } = await pool.query<Row>(
+      `SELECT t.id, t.slug, t.name, t.statement_plain, t.significance
+         FROM targets t
+         JOIN tasks k ON k.target_id = t.id
+        WHERE k.spec->>'deliverable' = 'explainer_video'
+          AND k.status = 'open'
+        ORDER BY t.name`,
+    );
+    let updated = 0;
+    for (const t of live) {
+      const { rowCount } = await pool.query(
+        `UPDATE tasks SET spec = $1, est_cost_cents = $2, max_cost_cents = $3
+          WHERE target_id = $4 AND spec->>'deliverable' = 'explainer_video'
+            AND status = 'open'`,
+        [buildSpec(t), EST_CENTS, MAX_CENTS, t.id],
+      );
+      updated += rowCount ?? 0;
+    }
+    console.log(`Refreshed ${updated} open explainer-video task spec(s).`);
+    return;
+  }
 
   const { rows } = await pool.query<Row>(
     `SELECT t.id, t.slug, t.name, t.statement_plain, t.significance
@@ -95,25 +144,7 @@ async function main() {
 
   let inserted = 0;
   for (const t of slice) {
-    const spec = {
-      deliverable: 'explainer_video',
-      angle: 'find the one picture that makes this problem click, and animate it',
-      prompt: prompt(t),
-      guide: 'video/README.md',
-      files: [`${t.slug}/explainer/${t.slug}.json`, `${t.slug}/explainer/sc_${t.slug}.py`],
-      // Authoring a full scene took ~13 minutes in testing; the executor's 3-minute
-      // default kills it. Runners read this to widen their timeout for this task.
-      suggested_timeout_ms: 1_500_000,
-      acceptance:
-        'Both files submitted; the scene renders with no errors; every beat is a diagram, not a list of text; all factual claims are accurate and verifiable.',
-      output_schema: {
-        code_contribution:
-          '{title, description, files:[{path, content}]} — the spec, the scene, and a short README under <slug>/explainer/',
-        summary: 'string — one-line handoff for the contribution feed',
-        honest_status:
-          'string — did it render? which beats are diagram-complete, and what remains?',
-      },
-    };
+    const spec = buildSpec(t);
     await pool.query(
       `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, kind, verify_via, sensitivity)
        VALUES ($1, $2, $3, $4, $5, $6, 'exploration', 'human_review', 'public')`,
