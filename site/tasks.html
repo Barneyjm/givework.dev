@@ -31,19 +31,27 @@
   .chip:hover { background: var(--yellow); color: var(--ink); }
   .count { font-family:'Space Mono',monospace; font-size:.8rem; opacity:.65; margin:1.2rem 0 0; }
   .tasks { list-style:none; margin:.6rem 0 0; padding:0; border-top: var(--line); }
-  .tasks li { border-bottom:1px solid #16131033; padding:1rem .2rem; display:flex;
-              gap:.7rem 1rem; align-items:baseline; flex-wrap:wrap; }
+  /* Grid, not flex: a long badge (COUNTEREXAMPLE SEARCH) used to force its own
+     wrapped row and shove the price up beside the title on some rows but not
+     others. Fixed slots keep the badge top-left and the cap top-right on every
+     row, at every width. */
+  .tasks li { border-bottom:1px solid #16131033; padding:1rem .2rem;
+              display:grid; grid-template-columns: 1fr auto; gap:.45rem .9rem;
+              align-items:start; }
   .tasks .tag { font-family:'Space Mono',monospace; font-size:.68rem; text-transform:uppercase;
-                padding:.15rem .45rem; border:2px solid var(--ink); white-space:nowrap; }
+                padding:.15rem .45rem; border:2px solid var(--ink); white-space:nowrap;
+                grid-column:1; grid-row:1; justify-self:start; }
   .tag--video { background: var(--blue); color:#fff; border-color: var(--blue); }
   .tag--math { background:#fff; }
-  .tasks .main { flex:1 1 24ch; min-width:0; }
+  .tasks .main { grid-column:1; grid-row:2; min-width:0; }
   .tasks .t { font-weight:600; overflow-wrap:anywhere; }
   .tasks .angle { font-weight:300; opacity:.75; font-size:.92rem; margin-top:.15rem; overflow-wrap:anywhere; }
   .tasks .on { font-size:.85rem; margin-top:.3rem; }
-  .tasks .on a { color:inherit; text-decoration:none; border-bottom:2px solid var(--yellow); }
-  .tasks .on a:hover { border-color: var(--red); }
-  .tasks .cap { font-family:'Space Mono',monospace; font-size:.78rem; opacity:.6; white-space:nowrap; margin-left:auto; }
+  .tasks .on a { color:inherit; text-decoration:underline; text-decoration-color:var(--yellow);
+                 text-decoration-thickness:2px; text-underline-offset:3px; }
+  .tasks .on a:hover { text-decoration-color: var(--red); }
+  .tasks .cap { font-family:'Space Mono',monospace; font-size:.78rem; opacity:.6;
+                white-space:nowrap; grid-column:2; grid-row:1; justify-self:end; }
   .cta-row { margin:2.6rem 0 0; display:flex; gap:.8rem; flex-wrap:wrap; }
   .board-msg { font-weight:300; }
   .note { font-weight:300; opacity:.8; font-size:.92rem; margin:1.6rem 0 0; max-width:62ch; }
@@ -115,6 +123,17 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   };
+  // Short, human badge labels. The raw enum (counterexample_search) is too long
+  // to sit on one line on a phone.
+  var KIND_LABEL = {
+    counterexample_search: 'counterexample',
+    computational: 'compute',
+    exploration: 'explore',
+    lemma: 'lemma',
+    formalization: 'proof',
+  };
+  var kindLabel = function (k) { return KIND_LABEL[k] || String(k).replace(/_/g, ' '); };
+
   var all = [];
   var filter = 'all';
 
@@ -134,7 +153,7 @@
       var isVid = t.deliverable === 'explainer_video';
       h += '<li>' +
         '<span class="tag ' + (isVid ? 'tag--video' : 'tag--math') + '">' +
-          (isVid ? 'video' : esc(String(t.kind).replace(/_/g, ' '))) + '</span>' +
+          (isVid ? 'video' : esc(kindLabel(t.kind))) + '</span>' +
         '<span class="main"><span class="t">' + esc(t.title) + '</span>' +
         (t.angle ? '<div class="angle">' + esc(t.angle) + '</div>' : '') +
         '<div class="on">on <a href="/conjectures/' + encodeURIComponent(t.conjecture_slug) + '">' +
