@@ -17,6 +17,7 @@ export interface CheckoutResult {
   spec: any;
   title: string;
   model: string;
+  effort?: 'low' | 'medium' | 'high';
   max_cost_cents: number;
   /** The target's compacted working set (present on newer control planes). */
   target_state?: unknown;

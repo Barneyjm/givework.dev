@@ -43,6 +43,8 @@ interface TaskRow {
   est_cost_cents: number;
   max_cost_cents: number;
   model: string;
+  /** Reasoning tier ('low' | 'medium' | 'high'); the runner maps it to a model. */
+  effort?: string;
   sensitivity: string;
   status: string;
   assigned_dev_id: string | null;
@@ -195,7 +197,7 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
               lock_expires_at = now() + interval '10 minutes',
               reserved_period = ${CURRENT_PERIOD}
         WHERE id = $1 AND status = 'open'
-        RETURNING id, target_id, title, spec, model, max_cost_cents, lock_expires_at`,
+        RETURNING id, target_id, title, spec, model, effort::text AS effort, max_cost_cents, lock_expires_at`,
       [taskId, devId],
     );
     if (claim.rowCount === 0) {
@@ -239,6 +241,7 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       spec: claimed.spec,
       title: claimed.title,
       model: claimed.model,
+      effort: claimed.effort,
       max_cost_cents: claimed.max_cost_cents,
       lock_expires_at: claimed.lock_expires_at as string,
       target_state: stateRes.rows[0]?.state ?? {},

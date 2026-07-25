@@ -15,7 +15,8 @@ import { closePool, pool } from '../src/db.js';
 // smaller budget than a math attack task.
 const EST_CENTS = 150;
 const MAX_CENTS = 400;
-const MODEL = 'claude-opus-4-8';
+// Authoring a whole scene is careful work; the runner maps this to its best model.
+const EFFORT = 'high';
 // The runner has no checkout of this repo, so the guide is referenced by raw URL.
 const RAW = 'https://raw.githubusercontent.com/Barneyjm/givework.dev/main/video';
 
@@ -147,8 +148,8 @@ async function main() {
     const spec = buildSpec(t);
     await pool.query(
       `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, kind, verify_via, sensitivity)
-       VALUES ($1, $2, $3, $4, $5, $6, 'exploration', 'human_review', 'public')`,
-      [t.id, `Make the explainer video for ${t.name}`, spec, EST_CENTS, MAX_CENTS, MODEL],
+       VALUES ($1, $2, $3, $4, $5, $6::task_effort, 'exploration', 'human_review', 'public')`,
+      [t.id, `Make the explainer video for ${t.name}`, spec, EST_CENTS, MAX_CENTS, EFFORT],
     );
     inserted++;
     console.log(`  + ${t.slug}`);
