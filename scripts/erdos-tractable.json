@@ -1,0 +1,416 @@
+[
+  {
+    "number": 7,
+    "title": "Odd covering system",
+    "statement_plain": "A covering system is a finite set of congruences (each of the form 'n ≡ a mod m') with distinct moduli such that every integer satisfies at least one. Is there one in which every modulus is odd?",
+    "tags": ["number-theory", "covering-systems", "computational"],
+    "attack_angle": "Search for an odd distinct covering system computationally, e.g. constraint/SAT search over bounded sets of odd moduli.",
+    "prize": "$25",
+    "source_url": "https://www.erdosproblems.com/7"
+  },
+  {
+    "number": 9,
+    "title": "Odd numbers not of the form prime + two powers of 2",
+    "statement_plain": "Let A be the set of odd integers ≥ 1 that cannot be written as p + 2^k + 2^l with p prime and k,l ≥ 0. Does A have positive upper density?",
+    "tags": ["number-theory", "primes", "additive-basis", "computational"],
+    "attack_angle": "Sieve integers up to large N, mark those representable as p+2^k+2^l, and estimate the density of the exceptional set.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/9"
+  },
+  {
+    "number": 10,
+    "title": "Every large integer as prime plus few powers of 2",
+    "statement_plain": "Is there some fixed k such that every large integer can be written as a prime plus at most k powers of 2?",
+    "tags": ["number-theory", "primes", "additive-basis", "computational"],
+    "attack_angle": "For each candidate k, test all integers up to large N and look for integers requiring more than k powers of 2 (counterexample search).",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/10"
+  },
+  {
+    "number": 11,
+    "title": "Large odd integers as squarefree plus power of 2",
+    "statement_plain": "Is every large odd integer n the sum of a squarefree number and a power of 2?",
+    "tags": ["number-theory", "additive-basis", "computational"],
+    "attack_angle": "Counterexample search: for each odd n up to large N, check whether some n - 2^k is squarefree.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/11"
+  },
+  {
+    "number": 17,
+    "title": "Primes representing all small even numbers as prime differences",
+    "statement_plain": "Are there infinitely many primes p such that every even number n ≤ p-3 can be written as a difference of two primes q1 - q2 with both q1,q2 ≤ p?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Enumerate primes p, build the set of achievable prime differences with both primes ≤ p, and check coverage of all even n ≤ p-3.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/17"
+  },
+  {
+    "number": 18,
+    "title": "Practical numbers needing few divisors",
+    "statement_plain": "A number m is 'practical' if every integer 1 ≤ n < m is a sum of distinct divisors of m; let h(m) be the number of divisors that always suffice. Are there infinitely many practical m with h(m) < (log log m)^{O(1)}, and is h(n!) small?",
+    "tags": ["number-theory", "divisors", "factorials", "computational"],
+    "attack_angle": "Compute practical numbers and the exact h(m) via subset-sum over divisors, tabulate h(m) and h(n!) to test the conjectured growth.",
+    "prize": "$250",
+    "source_url": "https://www.erdosproblems.com/18"
+  },
+  {
+    "number": 141,
+    "title": "Consecutive primes in arithmetic progression",
+    "statement_plain": "For each k ≥ 3, are there k consecutive primes that form an arithmetic progression (equally spaced with no primes in between)?",
+    "tags": ["number-theory", "primes", "arithmetic-progressions", "computational"],
+    "attack_angle": "Distributed prime-gap search for runs of k consecutive primes in AP, extending known records for larger k.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/141"
+  },
+  {
+    "number": 148,
+    "title": "Counting ways to write 1 as distinct unit fractions",
+    "statement_plain": "Let F(k) be the number of ways to write 1 = 1/n_1 + ... + 1/n_k with distinct positive integers n_1 < ... < n_k. Find good estimates for F(k).",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Exact enumeration of all Egyptian-fraction representations of 1 with k terms for growing k to extend the known sequence and fit growth models.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/148"
+  },
+  {
+    "number": 155,
+    "title": "Sidon set sizes grow slowly",
+    "statement_plain": "Let F(N) be the size of the largest Sidon set in {1,...,N} (a set with all pairwise sums distinct). Is it true that for every k, F(N+k) ≤ F(N)+1 for all large N?",
+    "tags": ["combinatorics", "sidon-sets", "computational"],
+    "attack_angle": "Compute F(N) exactly for small N (maximum-clique / ILP search) and check the increment F(N+k) - F(N) for counterexamples.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/155"
+  },
+  {
+    "number": 156,
+    "title": "Small maximal Sidon sets",
+    "statement_plain": "Does there exist a maximal Sidon set inside {1,...,N} (one that cannot be extended) of size only O(N^{1/3})?",
+    "tags": ["combinatorics", "sidon-sets", "computational"],
+    "attack_angle": "Greedy/backtracking search for maximal (non-extendable) Sidon sets of unusually small size across many N.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/156"
+  },
+  {
+    "number": 200,
+    "title": "Longest arithmetic progression of primes",
+    "statement_plain": "Does the longest arithmetic progression of primes contained in {1,...,N} have length o(log N)?",
+    "tags": ["number-theory", "primes", "arithmetic-progressions", "computational"],
+    "attack_angle": "Compute the longest AP of primes in {1,...,N} for large N and compare its growth against log N.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/200"
+  },
+  {
+    "number": 203,
+    "title": "Numbers coprime to 6 with no prime of a special form",
+    "statement_plain": "Is there an integer m ≥ 1 with gcd(m,6)=1 such that none of the numbers 2^k * 3^l * m + 1 are prime, for any k,l ≥ 0?",
+    "tags": ["number-theory", "primes", "covering-systems", "computational"],
+    "attack_angle": "Search over m coprime to 6 using covering-congruence reasoning, testing candidate m for primality of 2^k 3^l m + 1 over bounded k,l.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/203"
+  },
+  {
+    "number": 218,
+    "title": "Monotonicity statistics of prime gaps",
+    "statement_plain": "Let d_n = p_{n+1} - p_n be the nth prime gap. Do the n with d_{n+1} ≥ d_n have density 1/2 (and likewise d_{n+1} ≤ d_n), and are there infinitely many n with d_{n+1} = d_n?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Compute prime gaps to large N and empirically track the densities of increasing/decreasing/equal consecutive gaps.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/218"
+  },
+  {
+    "number": 233,
+    "title": "Sum of squares of prime gaps",
+    "statement_plain": "Let d_n = p_{n+1} - p_n. Prove that the sum of d_n^2 for n ≤ N is O(N (log N)^2).",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Compute the running sum of squared prime gaps up to large N and compare against N (log N)^2 to build evidence and locate extremal gaps.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/233"
+  },
+  {
+    "number": 236,
+    "title": "Representations as prime plus a power of two",
+    "statement_plain": "Let f(n) count the ways to write n = p + 2^k with p prime and k ≥ 0. Is it true that f(n) = o(log n)?",
+    "tags": ["number-theory", "primes", "additive-basis", "computational"],
+    "attack_angle": "Compute f(n) up to large N (few powers of 2 per n) and search for n where f(n) grows close to log n.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/236"
+  },
+  {
+    "number": 241,
+    "title": "Largest B_3^+ set (distinct triple sums)",
+    "statement_plain": "Let f(N) be the largest size of a subset A of {1,...,N} in which all triple sums a+b+c are distinct (apart from trivial coincidences). Is f(N) asymptotic to N^{1/3}?",
+    "tags": ["combinatorics", "sidon-sets", "additive-combinatorics", "computational"],
+    "attack_angle": "Compute the largest such set for small N by ILP/backtracking and compare exact sizes with N^{1/3}.",
+    "prize": "$100",
+    "source_url": "https://www.erdosproblems.com/241"
+  },
+  {
+    "number": 287,
+    "title": "Gaps in unit-fraction representations of 1",
+    "statement_plain": "For any distinct integers 1 < n_1 < ... < n_k with 1 = 1/n_1 + ... + 1/n_k, must the largest gap max(n_{i+1} - n_i) be at least 3?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Enumerate Egyptian-fraction representations of 1 and check the maximum consecutive-denominator gap for any counterexample below 3.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/287"
+  },
+  {
+    "number": 291,
+    "title": "Numerator of the harmonic sum vs lcm",
+    "statement_plain": "Write the harmonic sum 1 + 1/2 + ... + 1/n as a_n / L_n where L_n = lcm(1,...,n). Do both gcd(a_n,L_n) = 1 and gcd(a_n,L_n) > 1 occur for infinitely many n?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Compute a_n and gcd(a_n, L_n) for large n and record how often the gcd exceeds 1.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/291"
+  },
+  {
+    "number": 293,
+    "title": "Smallest denominator never used in a k-term unit-fraction sum of 1",
+    "statement_plain": "For each k, let v(k) be the smallest positive integer that never appears as one of the denominators n_i in any representation 1 = 1/n_1 + ... + 1/n_k with distinct n_i. Estimate how v(k) grows.",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Enumerate k-term Egyptian-fraction representations of 1, record which denominators are achievable, and compute v(k) for small k.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/293"
+  },
+  {
+    "number": 295,
+    "title": "Egyptian fractions with large denominators",
+    "statement_plain": "Let k(N) be the fewest terms needed to write 1 = 1/n_1 + ... + 1/n_k using distinct integers all at least N. Does k(N) - (e-1)N tend to infinity?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Compute k(N) exactly for small N via constructive/optimal search and compare against (e-1)N.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/295"
+  },
+  {
+    "number": 301,
+    "title": "Largest set avoiding a unit-fraction identity",
+    "statement_plain": "Let f(N) be the largest subset A of {1,...,N} with no solution to 1/a = 1/b_1 + ... + 1/b_k using distinct elements of A. Estimate f(N); is it (1/2 + o(1))N?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Find the largest such set for small N by ILP / constraint search and compare its size against N/2.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/301"
+  },
+  {
+    "number": 302,
+    "title": "Largest set avoiding 1/a = 1/b + 1/c",
+    "statement_plain": "Let f(N) be the largest subset A of {1,...,N} with no three distinct elements satisfying 1/a = 1/b + 1/c. Estimate f(N); is it (1/2 + o(1))N?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Model as a maximum independent set on the hypergraph of forbidden triples and compute exact f(N) for small N.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/302"
+  },
+  {
+    "number": 304,
+    "title": "Length of Egyptian-fraction expansions",
+    "statement_plain": "For 1 ≤ a < b let N(a,b) be the fewest unit fractions with distinct denominators > 1 summing to a/b, and set N(b) = max over a of N(a,b). Is N(b) = O(log log b)?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Compute N(a,b) for all a < b up to moderate b (dynamic programming / greedy plus refinement) and track the maximum against log log b.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/304"
+  },
+  {
+    "number": 307,
+    "title": "Product of two reciprocal prime sums equal to 1",
+    "statement_plain": "Are there two finite sets of primes P and Q such that (sum of 1/p over P) times (sum of 1/q over Q) equals exactly 1?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Search over finite prime sets, computing reciprocal sums as exact rationals and testing whether two products multiply to 1.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/307"
+  },
+  {
+    "number": 311,
+    "title": "Closest a subset sum of unit fractions gets to 1",
+    "statement_plain": "Let delta(N) be the smallest nonzero value of |1 - sum of 1/n over A| as A ranges over subsets of {1,...,N}. Is delta(N) = exp(-(c+o(1))N) for some constant c in (0,1)?",
+    "tags": ["number-theory", "unit-fractions", "computational"],
+    "attack_angle": "Compute delta(N) exactly for small N by subset-sum over rationals and fit the exponential decay constant.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/311"
+  },
+  {
+    "number": 313,
+    "title": "Sums of prime reciprocals equal to 1 - 1/m",
+    "statement_plain": "Are there infinitely many solutions to 1/p_1 + ... + 1/p_k = 1 - 1/m with m ≥ 2 an integer and p_1 < ... < p_k distinct primes?",
+    "tags": ["number-theory", "primes", "unit-fractions", "computational"],
+    "attack_angle": "Search over sets of distinct primes, computing reciprocal sums exactly and checking whether the complement to 1 is a unit fraction.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/313"
+  },
+  {
+    "number": 322,
+    "title": "Sums of k many kth powers",
+    "statement_plain": "For k ≥ 3, let A be the kth powers and count the representations of n as a sum of k many kth powers. Is there some c > 0 and infinitely many n with more than n^c representations?",
+    "tags": ["number-theory", "powers", "computational"],
+    "attack_angle": "Enumerate representations of n as sums of k kth powers up to large N and look for n with unusually many representations.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/322"
+  },
+  {
+    "number": 324,
+    "title": "Polynomial with all pairwise sums distinct",
+    "statement_plain": "Does there exist an integer polynomial f(x) such that all the sums f(a) + f(b) with a < b nonnegative integers are distinct (making {f(n)} a Sidon set)?",
+    "tags": ["number-theory", "polynomials", "sidon-sets", "computational"],
+    "attack_angle": "Test candidate polynomials by computing f(a)+f(b) over a bounded range and searching for collisions.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/324"
+  },
+  {
+    "number": 340,
+    "title": "Growth of the greedy Sidon sequence",
+    "statement_plain": "Build a set greedily: start with 1 and repeatedly add the smallest integer that keeps the set Sidon (all pairwise sums distinct), giving 1,2,4,8,13,21,31,45,66,81,97,.... How fast does this sequence grow?",
+    "tags": ["combinatorics", "sidon-sets", "computational"],
+    "attack_angle": "Extend the greedy Sidon sequence far and empirically fit its counting-function growth against N^{1/2}.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/340"
+  },
+  {
+    "number": 375,
+    "title": "Distinct prime divisors covering a run of composites",
+    "statement_plain": "If n+1, ..., n+k are all composite, must there always exist distinct primes p_1, ..., p_k with p_i dividing n+i for each i (a system of distinct representatives)?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "For each maximal run of composites, build the bipartite divisibility graph and test for a perfect matching (Hall's condition) as a counterexample check.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/375"
+  },
+  {
+    "number": 454,
+    "title": "Symmetric sums of nearby primes",
+    "statement_plain": "Let f(n) be the minimum over i<n of p_{n+i} + p_{n-i}, where p_k is the kth prime. Is limsup (f(n) - 2 p_n) infinite?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Compute f(n) - 2 p_n over large ranges of n and search for increasingly large values.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/454"
+  },
+  {
+    "number": 458,
+    "title": "An inequality between lcm's at consecutive primes",
+    "statement_plain": "Let [1,...,n] denote lcm(1,...,n). Is it true that for all k, [1,...,p_{k+1}-1] < p_k * [1,...,p_k], where p_k is the kth prime?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Directly verify the lcm inequality for all k up to large bounds using exact big-integer arithmetic.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/458"
+  },
+  {
+    "number": 470,
+    "title": "Odd weird numbers and primitive weird numbers",
+    "statement_plain": "A number n is 'weird' if the sum of its proper divisors exceeds n yet no subset of its divisors sums to n. Are there any odd weird numbers, and are there infinitely many primitive weird numbers (none of whose proper divisors are weird)?",
+    "tags": ["number-theory", "divisors", "computational"],
+    "attack_angle": "Distributed search testing candidates for weirdness via subset-sum over divisors, focused on odd n and on generating primitive weird numbers.",
+    "prize": "$10",
+    "source_url": "https://www.erdosproblems.com/470"
+  },
+  {
+    "number": 773,
+    "title": "Largest Sidon set among the squares",
+    "statement_plain": "What is the size of the largest Sidon set contained in {1, 2^2, 3^2, ..., N^2} (a subset of the squares with all pairwise sums distinct)? Is it N^{1-o(1)}?",
+    "tags": ["number-theory", "sidon-sets", "squares", "computational"],
+    "attack_angle": "Compute maximum Sidon subsets of the first N squares for growing N and compare sizes against N^{1-o(1)}.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/773"
+  },
+  {
+    "number": 779,
+    "title": "Primorial plus a prime being prime",
+    "statement_plain": "Let P be the product of the first n primes. Does there always exist a prime p between p_n and P such that P + p is also prime?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "For each n, compute the primorial P and test P + p for primality over primes p in (p_n, P) until one is found (or a counterexample emerges).",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/779"
+  },
+  {
+    "number": 850,
+    "title": "Three consecutive shared prime-factor sets",
+    "statement_plain": "Can there exist two distinct integers x and y such that x and y have the same set of prime factors, x+1 and y+1 have the same set of prime factors, and x+2 and y+2 also have the same set of prime factors?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Compute the radical (set of prime factors) of consecutive integers and search for two positions x,y whose three consecutive radicals all match.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/850"
+  },
+  {
+    "number": 852,
+    "title": "Runs of distinct prime gaps",
+    "statement_plain": "Let d_n = p_{n+1} - p_n. Let h(x) be the longest run of consecutive gaps d_n, d_{n+1}, ..., all distinct, starting at some n < x. Estimate h(x); is it larger than (log x)^c and also o(log x)?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Scan prime gaps up to large x and compute the longest run of pairwise-distinct consecutive gaps.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/852"
+  },
+  {
+    "number": 853,
+    "title": "Smallest even number that is not yet a prime gap",
+    "statement_plain": "Let d_n = p_{n+1} - p_n. Let r(x) be the smallest even integer t that does not occur as any gap d_n for n ≤ x. Does r(x) tend to infinity (or even r(x)/log x)?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Compute the set of prime gaps up to x and find the smallest missing even value r(x) for growing x.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/853"
+  },
+  {
+    "number": 855,
+    "title": "Subadditivity of the prime-counting function",
+    "statement_plain": "If pi(x) counts primes up to x, is it true that pi(x+y) ≤ pi(x) + pi(y) for all large x and y?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Counterexample search: compute pi over ranges and test pi(x+y) ≤ pi(x) + pi(y), targeting prime-rich short intervals.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/855"
+  },
+  {
+    "number": 886,
+    "title": "Few divisors in a short interval near the square root",
+    "statement_plain": "For fixed epsilon > 0, is it true that for all large n the number of divisors of n lying in the interval (sqrt(n), sqrt(n) + n^{1/2 - epsilon}) is bounded (O_epsilon(1))?",
+    "tags": ["number-theory", "divisors", "computational"],
+    "attack_angle": "Factor integers up to large N and count divisors falling just above sqrt(n) to look for n with many such divisors.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/886"
+  },
+  {
+    "number": 945,
+    "title": "Consecutive integers with distinct divisor counts",
+    "statement_plain": "Let F(x) be the longest run of consecutive integers n+1, ..., n+k up to x whose divisor counts tau(n+i) are all distinct. Estimate F(x); is F(x) ≤ (log x)^{O(1)}?",
+    "tags": ["number-theory", "divisors", "computational"],
+    "attack_angle": "Compute the divisor function over long ranges and find the longest run of consecutive integers with pairwise-distinct tau values.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/945"
+  },
+  {
+    "number": 1054,
+    "title": "Integers as a sum of the smallest divisors of some m",
+    "statement_plain": "Let f(n) be the smallest m such that n equals the sum of the k smallest divisors of m for some k ≥ 1. Is f(n) = o(n) (at least for almost all n)?",
+    "tags": ["number-theory", "divisors", "computational"],
+    "attack_angle": "For each n search increasing m, summing smallest divisors of m to hit n, and tabulate f(n) against n.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/1054"
+  },
+  {
+    "number": 1059,
+    "title": "Primes p with p - k! always composite",
+    "statement_plain": "Are there infinitely many primes p such that p - k! is composite for every k with 1 ≤ k! < p?",
+    "tags": ["number-theory", "primes", "factorials", "computational"],
+    "attack_angle": "Sieve primes and test each against subtraction of all factorials below it, collecting those where every p - k! is composite.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/1059"
+  },
+  {
+    "number": 1113,
+    "title": "Sierpinski numbers without a finite covering set",
+    "statement_plain": "A Sierpinski number is an odd m such that none of 2^k m + 1 are prime. A finite covering set is a finite set of primes such that every 2^k m + 1 is divisible by one of them. Are there Sierpinski numbers with no finite covering set of primes?",
+    "tags": ["number-theory", "primes", "covering-systems", "computational"],
+    "attack_angle": "Study candidate Sierpinski numbers computationally, checking whether their sequences 2^k m + 1 admit a finite covering set of prime divisors.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/1113"
+  },
+  {
+    "number": 1142,
+    "title": "Integers with n - 2^k always prime",
+    "statement_plain": "Are there infinitely many n (or any n > 105) such that n - 2^k is prime for every power of two 2^k with 1 < 2^k < n?",
+    "tags": ["number-theory", "primes", "computational"],
+    "attack_angle": "Counterexample/existence search: for each n test primality of all n - 2^k with 2^k < n, looking for any n > 105 that works.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/1142"
+  },
+  {
+    "number": 1206,
+    "title": "Sidon sets among the cubes",
+    "statement_plain": "Does {1, 2^3, ..., N^3} contain a Sidon set of size proportional to N? Is there an infinite set A of positive density such that the cubes {a^3 : a in A} form a Sidon set?",
+    "tags": ["number-theory", "sidon-sets", "powers", "computational"],
+    "attack_angle": "Search for large Sidon subsets of the first N cubes and estimate their maximal size as a fraction of N.",
+    "prize": null,
+    "source_url": "https://www.erdosproblems.com/1206"
+  }
+]
