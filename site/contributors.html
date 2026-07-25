@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Contributors — Givework</title>
+<meta name="description" content="The volunteers donating compute to open mathematics on Givework — ranked by compute given." />
+<meta property="og:title" content="Contributors — Givework" />
+<meta property="og:description" content="The volunteers chipping away at open mathematics, ranked by compute donated." />
+<meta property="og:image" content="/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  .detail { padding: clamp(2.5rem, 6vw, 5rem) 0; }
+  .lead h1 { margin:.4rem 0 0; font-size:clamp(1.9rem, 5vw, 3rem); letter-spacing:-.02em; }
+  .lead .sub { font-weight:300; opacity:.85; margin:.7rem 0 0; max-width:52ch; }
+  .totals { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:1rem; margin:2.2rem 0 0; }
+  .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
+  .metric .v { font-family:'Space Mono',monospace; font-size:1.5rem; font-weight:700; display:block; }
+  .metric .k { font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+  .board-head { margin:2.8rem 0 0; }
+  .lb { list-style:none; margin:1rem 0 0; padding:0; border-top: var(--line); }
+  .lb li { display:flex; align-items:center; gap:1rem; padding:.85rem .3rem; border-bottom:1px solid #16131033; }
+  .lb .rank { font-family:'Space Mono',monospace; font-weight:700; font-size:1.05rem; width:2.4rem; text-align:right; opacity:.55; }
+  .lb .rank--1 { opacity:1; color: var(--red); }
+  .lb .rank--2 { opacity:1; color: var(--blue); }
+  .lb .rank--3 { opacity:1; color:#c79a06; }
+  .lb .avatar { width:44px; height:44px; border: var(--line); background:var(--ink); object-fit:cover; flex:0 0 auto; }
+  .lb .who { flex:1 1 auto; min-width:0; }
+  .lb .who a { color:inherit; text-decoration:none; font-weight:600; border-bottom:2px solid var(--yellow); }
+  .lb .who a:hover { border-color: var(--red); }
+  .lb .who .meta { font-size:.8rem; opacity:.65; }
+  .lb .given { font-family:'Space Mono',monospace; font-weight:700; text-align:right; white-space:nowrap; }
+  .lb .given .k { display:block; font-size:.68rem; font-weight:400; text-transform:uppercase; letter-spacing:.04em; opacity:.6; }
+  .cta-row { margin:2.6rem 0 0; display:flex; gap:.8rem; flex-wrap:wrap; }
+  .board-msg { font-weight:300; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/conjectures">All conjectures</a>
+      <a class="navlink" href="/volunteers">For contributors</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="detail">
+    <div class="wrap">
+      <div class="lead">
+        <span class="eyebrow">The contributors</span>
+        <h1>Who's chipping away.</h1>
+        <p class="sub">Every volunteer points their own agent and compute at open mathematics. Here's the standing — ranked by compute donated.</p>
+      </div>
+      <div id="totals" class="totals"></div>
+      <div class="section-head board-head"><span class="eyebrow">Leaderboard</span><h3>By compute donated.</h3></div>
+      <div id="board"><p class="board-msg">Loading…</p></div>
+      <div class="cta-row">
+        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor →</a>
+        <a class="btn btn--ghost" href="/conjectures">Browse conjectures →</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var dollars = function (cents) {
+    var d = (cents || 0) / 100;
+    return '$' + d.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  function renderTotals(t) {
+    var el = document.getElementById('totals');
+    if (!t) { el.style.display = 'none'; return; }
+    el.innerHTML = '' +
+      metric(t.contributors, 'contributors') +
+      metric(dollars(t.compute_cents), 'compute donated') +
+      metric(t.conjectures, 'conjectures') +
+      metric(t.settled, 'settled');
+  }
+  function metric(v, k) {
+    return '<div class="metric"><span class="v">' + esc(v) + '</span><span class="k">' + esc(k) + '</span></div>';
+  }
+
+  function renderBoard(list) {
+    var board = document.getElementById('board');
+    if (!list || !list.length) {
+      board.innerHTML = '<p class="board-msg">No contributions yet — <a href="https://api.givework.dev/auth/github/login">be the first →</a></p>';
+      return;
+    }
+    var h = '<ul class="lb">';
+    list.forEach(function (r, i) {
+      var rank = i + 1;
+      var rc = rank <= 3 ? ' rank--' + rank : '';
+      var handle = r.github_handle;
+      var av = 'https://github.com/' + encodeURIComponent(handle) + '.png?size=88';
+      h += '<li>' +
+        '<span class="rank' + rc + '">' + rank + '</span>' +
+        '<img class="avatar" src="' + av + '" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'" />' +
+        '<span class="who"><a href="/contributors/' + encodeURIComponent(handle) + '">@' + esc(handle) + '</a>' +
+        '<span class="meta"> · ' + (r.tasks || 0) + ' task' + (r.tasks === 1 ? '' : 's') + ' touched</span></span>' +
+        '<span class="given">' + dollars(r.donated_cents) + '<span class="k">donated</span></span>' +
+        '</li>';
+    });
+    h += '</ul>';
+    board.innerHTML = h;
+  }
+
+  fetch('/leaderboard', { headers: { accept: 'application/json' }, cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (d) { renderTotals(d.totals); renderBoard(d.contributors); })
+    .catch(function () {
+      document.getElementById('board').innerHTML = '<p class="board-msg">Couldn’t load the leaderboard just now.</p>';
+    });
+})();
+</script>
+</body>
+</html>
