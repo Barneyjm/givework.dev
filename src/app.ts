@@ -11,6 +11,7 @@ import {
   checkoutTask,
   expire,
   getBudget,
+  getContributorProfile,
   getLeaderboard,
   getPublicTransparency,
   getTargetProgress,
@@ -186,6 +187,23 @@ app.get('/conjectures/:slug', (c) => {
 // Public leaderboard — curated conjectures with progress + top contributors by
 // donated compute. Drives the marketing site's "what's being worked on" surface.
 app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
+
+// Public contributor profile — a volunteer's shareable "here's my work" page,
+// keyed by GitHub handle (already public via the leaderboard). Content-negotiated
+// like /conjectures/:slug: browsers get the static page, API clients get JSON.
+app.get('/contributors/:handle', (c) => {
+  const handleParam = c.req.param('handle');
+  if (!/^[\w-]{1,39}$/.test(handleParam)) return c.notFound();
+  const assets = (c.env as { ASSETS?: { fetch: typeof fetch } } | undefined)?.ASSETS;
+  if (assets && c.req.header('accept')?.includes('text/html')) {
+    return assets.fetch(new URL('/contributor', c.req.url));
+  }
+  return handle(async () => {
+    const p = await getContributorProfile(handleParam);
+    if (!p) throw new OpError(404, 'contributor_not_found', 'Unknown contributor');
+    return p;
+  })(c);
+});
 
 // Public problem submission — anyone can propose an open problem in plain
 // language. No allowlist/DMARC vetting (that gated PII; open math has none), and

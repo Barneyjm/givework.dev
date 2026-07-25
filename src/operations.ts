@@ -1074,6 +1074,8 @@ export interface TargetProgress {
     verdict: string | null;
     /** How the verdict was reached (auto_rerun, human_review, …), if verified. */
     verified_via: string | null;
+    /** The contributor's GitHub handle (public, as on the leaderboard), or null. */
+    contributor: string | null;
     created_at: string;
   }[];
 }
@@ -1139,10 +1141,13 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     summary: string;
     verdict: string | null;
     verified_via: string | null;
+    contributor: string | null;
     created_at: string | Date;
   }>(
-    `SELECT c.outcome::text AS outcome, c.summary, v.verdict, v.method AS verified_via, c.created_at
+    `SELECT c.outcome::text AS outcome, c.summary, v.verdict, v.method AS verified_via,
+            d.github_handle AS contributor, c.created_at
        FROM contributions c
+       LEFT JOIN devs d ON d.id = c.dev_id
        LEFT JOIN LATERAL (
          SELECT verdict, method::text AS method FROM verifications v
           WHERE v.contribution_id = c.id
@@ -1181,6 +1186,7 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
       summary: r.summary,
       verdict: r.verdict,
       verified_via: r.verified_via,
+      contributor: r.contributor,
       created_at: new Date(r.created_at).toISOString(),
     })),
   };
@@ -1285,5 +1291,111 @@ export async function getLeaderboard(): Promise<Leaderboard> {
     totals: totals.rows[0],
     conjectures: conjectures.rows,
     contributors: contributors.rows,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// contributor profile — a shareable page of one volunteer's public work
+// ---------------------------------------------------------------------------
+
+export interface ContributorProfile {
+  github_handle: string;
+  totals: {
+    conjectures: number;
+    contributions: number;
+    compute_cents: number;
+    first_at: string | null;
+    last_at: string | null;
+  };
+  contributions: {
+    conjecture_slug: string;
+    conjecture_name: string;
+    outcome: string;
+    summary: string;
+    verdict: string | null;
+    verified_via: string | null;
+    cost_cents: number;
+    created_at: string;
+  }[];
+}
+
+/**
+ * One volunteer's public contribution history — the shareable "here's my work"
+ * page, keyed by GitHub handle (already public via the leaderboard). Only
+ * contributions to public, slugged conjectures are shown; org_request work is
+ * never surfaced. Returns null for an unknown handle. Backs GET
+ * /contributors/:handle.
+ */
+export async function getContributorProfile(handle: string): Promise<ContributorProfile | null> {
+  const dev = (
+    await query<{ id: string }>(`SELECT id FROM devs WHERE github_handle = $1`, [handle])
+  ).rows[0];
+  if (!dev) return null;
+
+  const totalsRow = (
+    await query<{
+      conjectures: number;
+      contributions: number;
+      compute_cents: number;
+      first_at: string | Date | null;
+      last_at: string | Date | null;
+    }>(
+      `SELECT count(DISTINCT c.target_id)::int AS conjectures,
+              count(*)::int AS contributions,
+              COALESCE(SUM(c.cost_cents), 0)::bigint AS compute_cents,
+              min(c.created_at) AS first_at, max(c.created_at) AS last_at
+         FROM contributions c
+         JOIN targets tg ON tg.id = c.target_id
+        WHERE c.dev_id = $1 AND tg.slug IS NOT NULL AND tg.kind::text = ANY($2::text[])`,
+      [dev.id, PUBLIC_TARGET_KINDS],
+    )
+  ).rows[0];
+
+  const rows = (
+    await query<{
+      conjecture_slug: string;
+      conjecture_name: string;
+      outcome: string;
+      summary: string;
+      verdict: string | null;
+      verified_via: string | null;
+      cost_cents: number;
+      created_at: string | Date;
+    }>(
+      `SELECT tg.slug AS conjecture_slug, tg.name AS conjecture_name,
+              c.outcome::text AS outcome, c.summary, c.cost_cents, c.created_at,
+              v.verdict, v.method AS verified_via
+         FROM contributions c
+         JOIN targets tg ON tg.id = c.target_id
+         LEFT JOIN LATERAL (
+           SELECT verdict, method::text AS method FROM verifications v
+            WHERE v.contribution_id = c.id ORDER BY v.id DESC LIMIT 1
+         ) v ON true
+        WHERE c.dev_id = $1 AND tg.slug IS NOT NULL AND tg.kind::text = ANY($2::text[])
+        ORDER BY c.id DESC
+        LIMIT 50`,
+      [dev.id, PUBLIC_TARGET_KINDS],
+    )
+  ).rows;
+
+  return {
+    github_handle: handle,
+    totals: {
+      conjectures: totalsRow?.conjectures ?? 0,
+      contributions: totalsRow?.contributions ?? 0,
+      compute_cents: totalsRow?.compute_cents ?? 0,
+      first_at: totalsRow?.first_at ? new Date(totalsRow.first_at).toISOString() : null,
+      last_at: totalsRow?.last_at ? new Date(totalsRow.last_at).toISOString() : null,
+    },
+    contributions: rows.map((r) => ({
+      conjecture_slug: r.conjecture_slug,
+      conjecture_name: r.conjecture_name,
+      outcome: r.outcome,
+      summary: r.summary,
+      verdict: r.verdict,
+      verified_via: r.verified_via,
+      cost_cents: r.cost_cents,
+      created_at: new Date(r.created_at).toISOString(),
+    })),
   };
 }
