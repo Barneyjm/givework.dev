@@ -1,17 +1,17 @@
 import { createInterface } from 'node:readline';
-import { ClaudeCliExecutor, type Executor, StubExecutor } from '../executor.js';
+import { getExecutor } from '../executor.js';
 import { getDecomposer } from '../intake/decompose.js';
 import { HttpBackend, runLoop } from '../run-loop.js';
 import { apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 
-// The CLI supports the two executors a volunteer actually uses: the deterministic
-// stub (default) and the production `claude -p` path (EXECUTOR=claude). It does
-// NOT wire the reference Anthropic-SDK executor — importing getExecutor() would
-// drag @anthropic-ai/sdk into the bundle via its lazy import.
-function cliExecutor(): Executor {
-  return process.env.EXECUTOR === 'claude' ? new ClaudeCliExecutor() : new StubExecutor();
-}
+// getExecutor() dispatches: a code work-unit task (spec.code) goes to the
+// sandboxed WorkUnitExecutor; everything else to the LLM path — the deterministic
+// stub by default, `claude -p` when EXECUTOR=claude. It is SDK-free (no
+// @anthropic-ai/sdk), so bundling it keeps the CLI small. Using it here is what
+// lets a volunteer's runner actually handle work units (podman sandbox, or a
+// graceful skip when podman isn't installed) instead of running claude -p on them.
+const cliExecutor = getExecutor;
 
 // Implementations of the CLI verbs. Each takes the post-command argv slice. Pure
 // HTTP + the shared run-loop; no server-only imports so the bundle stays small.
@@ -154,7 +154,40 @@ export async function tasks(args: string[]): Promise<void> {
   }
 }
 
+// Build commit stamped in by scripts/build-cli.mjs; 'dev' from source (tsx) or a
+// tarball install without git, which disables the staleness check.
+const BUILD_SHA = process.env.GIVEWORK_BUILD_SHA ?? 'dev';
+
+/**
+ * Warn loudly if this runner is behind the latest `main`. `npx github:…` caches
+ * installs, so a volunteer can unknowingly run a stale build for weeks (which is
+ * exactly how a runner ends up mishandling a task). Best-effort and
+ * non-blocking: any network/rate-limit error is swallowed. Skipped with
+ * --no-update-check or when the build SHA is unknown.
+ */
+async function warnIfStale(args: string[]): Promise<void> {
+  if (BUILD_SHA === 'dev' || has(args, '--no-update-check')) return;
+  try {
+    const res = await fetch('https://api.github.com/repos/Barneyjm/givework.dev/commits/main', {
+      headers: { Accept: 'application/vnd.github.sha', 'User-Agent': 'givework-runner' },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return;
+    const latest = (await res.text()).trim();
+    if (!latest || latest.startsWith(BUILD_SHA)) return; // current
+    console.warn(
+      '\n  ┌─ A newer Givework runner is available ───────────────────────\n' +
+        `  │  you're on ${BUILD_SHA}, latest is ${latest.slice(0, 7)}\n` +
+        '  │  update:  rm -rf ~/.npm/_npx   then re-run the same command\n' +
+        '  └───────────────────────────────────────────────────────────────\n',
+    );
+  } catch {
+    // offline or GitHub rate-limited — never block donated work on a version check
+  }
+}
+
 export async function run(args: string[]): Promise<void> {
+  await warnIfStale(args);
   const token = requireToken();
   const base = apiUrl();
   const backend = new HttpBackend(base, token);
