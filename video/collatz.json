@@ -1,0 +1,32 @@
+{
+  "slug": "collatz",
+  "name": "The Collatz Conjecture",
+  "subtitle": "The 3n+1 rule that always falls to one",
+  "statement": "Pick any whole number; halve it when even, triple it and add one when odd, repeat forever — and you always crash down to one.",
+  "tex": "f(n)=\\begin{cases} n/2 & n\\ \\text{even}\\\\ 3n+1 & n\\ \\text{odd}\\end{cases},\\qquad \\forall n\\in\\mathbb{Z}^+\\ \\exists k:\\ f^{k}(n)=1",
+  "background": [
+    "Posed by German mathematician Lothar Collatz in 1937.",
+    "Also called 3n+1, the hailstone problem, or the Syracuse problem.",
+    "Numbers leap up and down wildly, yet every one tested falls to one.",
+    "Erdos said: 'Mathematics is not yet ready for such problems.'"
+  ],
+  "why": [
+    "A rule a child understands has resisted every mathematician for ninety years.",
+    "It probes how simple arithmetic can hide chaotic, unpredictable behavior.",
+    "Ties into deep questions in dynamical systems and what math can even decide."
+  ],
+  "impact": [
+    "Collatz-style loops are the classic hard case for proving software halts.",
+    "Conway showed close cousins of the rule are formally undecidable — unsolvable by any algorithm.",
+    "A favorite benchmark for AI and computer-checked (formal) proof efforts.",
+    "Its chaotic, hard-to-predict sequences inform thinking about pseudorandomness."
+  ],
+  "narration": {
+    "title": "Here's a puzzle so simple a ten-year-old can play it, and so hard it has humbled the greatest mathematicians alive.",
+    "statement": "Pick any whole number you like. If it's even, cut it in half. If it's odd, triple it and add one. Then do it again, and again, and again. The claim is that no matter which number you start with, you always tumble all the way down to one.",
+    "background": "The rule was written down by the German mathematician Lothar Collatz back in nineteen thirty-seven. It goes by many names — the three-n-plus-one problem, the hailstone sequence, the Syracuse problem — because the numbers bounce up and down like hailstones in a storm before finally crashing to one. The legendary Paul Erdos looked at it, said 'Mathematics is not yet ready for such problems,' and offered a cash prize to anyone who could solve it.",
+    "why": "What makes it maddening is the gap between how easy it is to say and how impossible it has been to prove. Computers have now checked every starting number up to about two to the seventy-first power — that's more than a billion billion — and every single one falls to one. But checking cases is not a proof. Just one number that shoots off to infinity, or gets trapped in a different loop, would break it, and nobody can rule that out. The closest anyone has come is the mathematician Terence Tao, who showed in twenty nineteen that almost all numbers eventually plunge to a tiny value — but almost all is not all.",
+    "impact": "You might ask what a number game is good for. Honestly, it has no direct application, and that is part of the point. Its real value is as a testing ground: sequences like this are the classic nightmare case for software that tries to prove computer programs will eventually stop running. The mathematician John Conway even proved that close relatives of the Collatz rule are formally undecidable, meaning no algorithm could ever settle them, and today it is a favorite benchmark for artificial intelligence and computer-verified proof systems.",
+    "close": "Verifiable math, chipped away in the open."
+  }
+}
