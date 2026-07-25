@@ -85,7 +85,9 @@
   .path ul { list-style: none; margin: 1.4rem 0 0; padding: 0; }
   .path li { font-family:'Space Mono',monospace; font-size:.82rem; padding: .35rem 0; padding-left: 1.6rem; position: relative; }
   .path li::before { content:""; position:absolute; left:0; top:.55rem; width:.7rem; height:.7rem; background: var(--ink); }
-  .path .act { margin-top: 1.8rem; }
+  /* The buttons are inline-flex with hard borders; without an explicit gap they
+     sit flush against each other and read as one cramped block when they wrap. */
+  .path .act { margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: .8rem; }
   .path--dev  { background: var(--blue); color: #fff; }
   .path--dev .btn--blue { background:#fff; color: var(--blue); border-color:#fff;}
   .path--dev .btn--blue:hover { background: var(--yellow); color: var(--ink); border-color: var(--ink);}
@@ -175,6 +177,7 @@
     .receipt td { padding: .5rem .8rem; }
 
     .closing .actions .btn { flex: 1 1 100%; justify-content: center; }
+    .path .act .btn { flex: 1 1 100%; justify-content: center; }
   }
 </style>
 </head>
