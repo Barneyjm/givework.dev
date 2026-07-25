@@ -83,6 +83,28 @@ describe('ClaudeCliExecutor', () => {
     expect((r.raw_usage as any).total_cost_usd).toBe(0.0123);
   });
 
+  it('honours a task-advertised timeout, but only to raise it and only up to the cap', async () => {
+    const seen: number[] = [];
+    const run = async (_a: string[], _i: string, timeoutMs: number) => {
+      seen.push(timeoutMs);
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    const exec = new ClaudeCliExecutor({ run, timeoutMs: 180_000 });
+
+    // no hint -> the runner's own default
+    await exec.execute(task);
+    // a long job (authoring a Manim scene) raises it
+    await exec.execute({ ...task, spec: { ...task.spec, suggested_timeout_ms: 1_500_000 } });
+    // a task cannot LOWER the runner's limit
+    await exec.execute({ ...task, spec: { ...task.spec, suggested_timeout_ms: 1_000 } });
+    // nor exceed the 30-minute ceiling, however absurd the hint
+    await exec.execute({ ...task, spec: { ...task.spec, suggested_timeout_ms: 999_999_999 } });
+    // garbage is ignored
+    await exec.execute({ ...task, spec: { ...task.spec, suggested_timeout_ms: 'soon' } });
+
+    expect(seen).toEqual([180_000, 1_500_000, 180_000, 1_800_000, 180_000]);
+  });
+
   it('passes -p/--output-format json/--model, prompt+shape on stdin, and never --json-schema', async () => {
     let seenArgs: string[] = [];
     let seenInput = '';
