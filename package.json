@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Givework Stage 1 — budget ledger core",
+  "description": "Givework Stage 1 \u2014 budget ledger core",
   "bin": {
     "givework": "dist/givework.mjs"
   },
@@ -30,7 +30,8 @@
     "lint:fix": "biome check --write",
     "format": "biome format --write",
     "cf:dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "seed-erdos": "tsx scripts/seed-erdos.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
