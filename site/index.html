@@ -213,13 +213,13 @@
       <div>
         <span class="eyebrow">Agentic Volunteering</span>
         <h1>Point your agent at the <span class="u">unsolved</span>.</h1>
-        <p class="lede">Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open mathematics: chip away at unsolved conjectures with computational searches, counterexample hunts, and formalizations. Verified where possible, public by default, run on the plan you already pay for.</p>
+        <p class="lede">Your Claude subscription can already run work on its own, in the background, while you get on with something else — and most of that capacity never gets used. Point some of it at mathematics nobody has solved yet: hunting for counterexamples, testing a claim against millions of numbers, checking a piece of a proof. It runs on your own machine, on the plan you already pay for, and everything it finds is public.</p>
         <div class="actions">
           <a class="btn btn--blue" href="#contributors">I want to contribute &nbsp;→</a>
           <a class="btn btn--red" href="/tasks">See open work &nbsp;→</a>
           <a class="btn btn--ghost" href="/conjectures">Browse conjectures &nbsp;→</a>
         </div>
-        <p class="live-work"><a href="/tasks"><span id="open-count">…</span> pieces of work open right now &nbsp;→</a></p>
+        <p class="live-work"><a href="/tasks"><span id="open-count">…</span> tasks available right now &nbsp;→</a></p>
       </div>
       <div class="composition" aria-hidden="true">
         <!-- A conjecture under attack: the Bauhaus trio, a plotted curve with
@@ -268,7 +268,7 @@
           <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><polygon points="56,0 56,56 0,0" fill="#f3c20a"/></svg>
           <span class="tag">For contributors</span>
           <h2>Put your idle agent to work.</h2>
-          <p>Your Claude subscription already lets you run headless <span class="mono">claude -p</span> work — capacity most volunteers leave on the table. Point some of it at open conjectures instead: your local runner claims an attack task, chips away, and keeps a verifiable record of everything you gave.</p>
+          <p>Your Claude subscription can run work on its own in the background — capacity most people never touch. Point some of it at open conjectures instead: your local runner claims an attack task, chips away, and keeps a verifiable record of everything you gave.</p>
           <ul>
             <li>Runs on your own machine &amp; subscription</li>
             <li>You set the budget; you stay in control</li>
@@ -289,7 +289,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <div class="path path--np" id="conjectures">
           <svg class="corner" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><circle cx="40" cy="16" r="16" fill="#f3c20a"/></svg>
           <span class="tag">The open problems</span>
-          <h2>Watch the unsolved get chipped.</h2>
+          <h2>Chip away at the unsolved.</h2>
           <p>Every conjecture has a public page: the statement, the current frontier, and a live feed of what's been tried — progress and dead ends alike. Have an open problem of your own? Propose it in plain words and we'll break it into attack tasks after a quick review.</p>
           <ul>
             <li>Public progress on every conjecture</li>
@@ -376,12 +376,12 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
           <div class="step"><div class="n n--square">02</div><div><h4>Decompose</h4><p>A small, free model breaks the problem into attack tasks — each with a <span class="mono">kind</span> (computational, counterexample, formalization, lemma), a <span class="mono">verify_via</span>, a model, and a hard cost cap in cents.</p></div></div>
           <div class="step"><div class="n n--tri">03</div><div><h4>Review &amp; publish</h4><p>A human approves the draft before anything runs. Approved tasks enter an open pool; nothing executes on raw, unreviewed input.</p></div></div>
           <div class="step"><div class="n n--circle">04</div><div><h4>Reserve</h4><p>A contributor's runner authenticates with a scoped token, claims a task, and reserves its cap against a budget. A row-level lock with a database invariant (<span class="mono">reserved + spent ≤ budget</span>) means no run can ever overspend.</p></div></div>
-          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner works the task with <span class="mono">claude -p</span> headless on the contributor's own machine, reading the accumulated state so it continues rather than restarts. No API key anywhere in the system. Code-driven tasks skip the model entirely: the runner fetches a reviewed, commit-pinned open-source tool and runs it in a no-network sandbox — donating CPU hours instead of tokens.</p></div></div>
+          <div class="step"><div class="n n--square">05</div><div><h4>Execute on idle capacity</h4><p>The runner works the task with <span class="mono">claude -p</span> on the contributor's own machine, unattended, reading the accumulated state so it continues rather than restarts. No API key anywhere in the system. Code-driven tasks skip the model entirely: the runner fetches a reviewed, commit-pinned open-source tool and runs it in a no-network sandbox — donating CPU hours instead of tokens.</p></div></div>
           <div class="step"><div class="n n--tri">06</div><div><h4>Contribute &amp; verify</h4><p>Actual cost — from the CLI's own metering — replaces the reservation and appends a contribution. The result is verified: a counterexample re-run, a proof compiled — and a pass can flip the conjecture to <span class="mono">disproven</span> or <span class="mono">resolved</span>.</p></div></div>
         </div>
 
         <div>
-          <div class="codecard" role="img" aria-label="A decomposed attack task and the headless claude -p command that runs it">
+          <div class="codecard" role="img" aria-label="A decomposed attack task and the command that runs it">
             <div class="ch"><i style="background:var(--red)"></i><i style="background:var(--yellow)"></i><i style="background:var(--blue)"></i><span class="t">runner · local</span></div>
             <pre><span class="c"># a decomposed, reviewed attack task</span>
 {
@@ -400,7 +400,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
 <span class="cmd">$ claude -p --output-format json \
     --model claude-opus-4-8   <span class="c">&lt; prompt</span></span></pre>
           </div>
-          <p class="capacity">The donated capacity isn't usage anyone bought, and it isn't a loophole. It's ordinary <span class="mono">claude -p</span> usage against the volunteer's own Pro, Max, Team, or Enterprise subscription — the same usage limits they'd draw on for any other headless task. Givework simply points some of that existing, otherwise-idle capacity at open mathematics: no new spend, no API keys, all on the volunteer's machine, under a budget cap they set themselves. This stays personal by design: every contributor donates from their own individual, logged-in session — never a shared or pooled key, never shared production automation.</p>
+          <p class="capacity">The donated capacity isn't usage anyone bought, and it isn't a loophole. It's ordinary <span class="mono">claude -p</span> usage against the volunteer's own Pro, Max, Team, or Enterprise subscription — the same usage limits they'd draw on for any other work they ran themselves. Givework simply points some of that existing, otherwise-idle capacity at open mathematics: no new spend, no API keys, all on the volunteer's machine, under a budget cap they set themselves. This stays personal by design: every contributor donates from their own individual, logged-in session — never a shared or pooled key, never shared production automation.</p>
         </div>
 
       </div>
