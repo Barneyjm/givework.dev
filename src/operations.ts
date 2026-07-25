@@ -1225,6 +1225,55 @@ export interface Leaderboard {
   contributors: LeaderboardContributor[];
 }
 
+export interface AvailableTask {
+  id: string;
+  title: string;
+  kind: string;
+  verify_via: string;
+  deliverable: string; // 'explainer_video' | 'math_attack'
+  angle: string | null;
+  max_cost_cents: number;
+  conjecture_slug: string;
+  conjecture_name: string;
+  created_at: string;
+}
+
+/**
+ * The public work board: open tasks anyone can browse before signing up — the
+ * "here's what you could pick up" surface. Deliberately narrow: only tasks that
+ * are `open`, `public` sensitivity, AND attached to a public slugged target, so
+ * org_request work and anything non-public can never appear here however it was
+ * created. Task titles/angles are public-safe by construction (open mathematics);
+ * the full prompt stays behind checkout. Drives GET /tasks/available.
+ */
+export async function listAvailableTasks(
+  opts: { slug?: string; deliverable?: string; limit?: number } = {},
+): Promise<AvailableTask[]> {
+  let limit = opts.limit ?? 60;
+  if (!Number.isInteger(limit) || limit <= 0) limit = 60;
+  if (limit > 200) limit = 200;
+
+  const { rows } = await query<AvailableTask>(
+    `SELECT k.id, k.title, k.kind::text AS kind, k.verify_via::text AS verify_via,
+            COALESCE(k.spec->>'deliverable', 'math_attack') AS deliverable,
+            k.spec->>'angle' AS angle,
+            k.max_cost_cents, k.created_at,
+            t.slug AS conjecture_slug, t.name AS conjecture_name
+       FROM tasks k
+       JOIN targets t ON t.id = k.target_id
+      WHERE k.status = 'open'
+        AND k.sensitivity = 'public'
+        AND t.slug IS NOT NULL
+        AND t.kind::text = ANY($1::text[])
+        AND ($2::text IS NULL OR t.slug = $2)
+        AND ($3::text IS NULL OR COALESCE(k.spec->>'deliverable', 'math_attack') = $3)
+      ORDER BY k.created_at DESC
+      LIMIT $4`,
+    [PUBLIC_TARGET_KINDS, opts.slug ?? null, opts.deliverable ?? null, limit],
+  );
+  return rows.map((r) => ({ ...r, created_at: new Date(r.created_at).toISOString() }));
+}
+
 /**
  * The public "who's chipping at what" rollup: curated conjectures (a target is
  * curated once it has a slug) with their progress, and the top contributors by

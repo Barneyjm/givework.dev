@@ -61,6 +61,20 @@
   .feed li { border-bottom: 1px solid #16131033; padding:.8rem .2rem; font-weight:300;
              display:flex; gap:.5rem .9rem; align-items:baseline; flex-wrap:wrap; }
   .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; }
+  .tasklist { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
+  .tasklist li { border-bottom:1px solid #16131033; padding:.75rem .2rem; display:flex;
+                 gap:.6rem .9rem; align-items:baseline; flex-wrap:wrap; }
+  .tasklist .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
+                  padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
+  .tasklist .tk--video { background: var(--blue); color:#fff; border-color: var(--blue); }
+  .tasklist .tk--math { background:#fff; }
+  .tasklist .tk-main { flex:1 1 22ch; min-width:0; }
+  .tasklist .tk-t { font-weight:600; display:block; overflow-wrap:anywhere; }
+  .tasklist .tk-a { font-weight:300; opacity:.75; font-size:.9rem; overflow-wrap:anywhere; }
+  .tasklist .tk-cap { font-family:'Space Mono',monospace; font-size:.78rem; opacity:.6;
+                      white-space:nowrap; margin-left:auto; }
+  .tk-note { font-weight:300; font-size:.9rem; opacity:.85; margin:.9rem 0 0; }
+  .tk-note a { color:inherit; }
   .feed .by { font-family:'Space Mono',monospace; font-size:.82em; color:inherit;
               text-decoration:none; border-bottom:2px solid var(--yellow); white-space:nowrap; }
   .feed .by .av { width:1em; height:1em; border-radius:50%; vertical-align:-0.15em;
@@ -93,6 +107,7 @@
     <nav>
       <a class="navlink" href="/">Home</a>
       <a class="navlink" href="/conjectures">All conjectures</a>
+      <a class="navlink" href="/tasks">Open work</a>
       <a class="navlink" href="/volunteers">For contributors</a>
       <a class="cta mono" href="mailto:hello@givework.dev?subject=Open%20problem%20proposal">Propose a problem</a>
     </nav>
@@ -181,6 +196,7 @@
       h += '<div class="frontier"><span class="k">Current frontier</span>' +
         esc(JSON.stringify(d.state, null, 1)) + '</div>';
     }
+    h += '<div id="cj-tasks"></div>';
     h += '<div class="section-head feed-head"><span class="eyebrow">Every attempt, logged</span><h3>Recent contributions.</h3></div>';
     if (d.recent_contributions && d.recent_contributions.length) {
       h += '<ul class="feed">';
@@ -218,6 +234,7 @@
     }
     page.innerHTML = h;
     maybeAddVideo(slug);
+    maybeAddTasks(slug);
   }
 
   // Show the explainer only if /videos/<slug>.mp4 exists (HEAD probe avoids a
@@ -231,6 +248,33 @@
         slot.innerHTML =
           '<div class="video"><span class="k">Watch: what this conjecture is</span>' +
           '<video controls preload="metadata" playsinline src="' + src + '"></video></div>';
+      })
+      .catch(function () {});
+  }
+
+  // The open pool for this conjecture: what a volunteer's agent could claim right
+  // now. Rendered only when something is actually open.
+  function maybeAddTasks(slug) {
+    fetch('/tasks/available?limit=12&slug=' + encodeURIComponent(slug), {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (list) {
+        var slot = document.getElementById('cj-tasks');
+        if (!slot || !list || !list.length) return;
+        var h = '<div class="section-head feed-head"><span class="eyebrow">Open pool</span>' +
+          '<h3>Work you could pick up.</h3></div><ul class="tasklist">';
+        list.forEach(function (t) {
+          var isVid = t.deliverable === 'explainer_video';
+          h += '<li><span class="oc ' + (isVid ? 'tk--video' : 'tk--math') + '">' +
+            (isVid ? 'video' : esc(String(t.kind).replace(/_/g, ' '))) + '</span>' +
+            '<span class="tk-main"><span class="tk-t">' + esc(t.title) + '</span>' +
+            (t.angle ? '<span class="tk-a">' + esc(t.angle) + '</span>' : '') + '</span>' +
+            '<span class="tk-cap">up to $' + (t.max_cost_cents / 100).toFixed(2) + '</span></li>';
+        });
+        h += '</ul><p class="tk-note">Claim one with <span class="mono">npx github:Barneyjm/givework.dev run --watch</span> · <a href="/tasks">see all open work →</a></p>';
+        slot.innerHTML = h;
       })
       .catch(function () {});
   }

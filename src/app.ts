@@ -17,6 +17,7 @@ import {
   getTargetProgress,
   heartbeatTask,
   isDevVerified,
+  listAvailableTasks,
   listOpenTasks,
   OpError,
   releaseTask,
@@ -295,6 +296,23 @@ app.get('/embed/:slug', async (c) => {
 // Public leaderboard — curated conjectures with progress + top contributors by
 // donated compute. Drives the marketing site's "what's being worked on" surface.
 app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
+
+// Public work board — the open tasks anyone can browse before signing up. Scoped
+// in listAvailableTasks to public-sensitivity tasks on public slugged targets, so
+// this can never leak org_request or sensitive work. Distinct from the dev-gated
+// /tasks/open, which is the claimable feed a runner reads.
+app.get('/tasks/available', (c) => {
+  const slug = c.req.query('slug');
+  const deliverable = c.req.query('deliverable');
+  const limit = c.req.query('limit');
+  return handle(() =>
+    listAvailableTasks({
+      slug: slug ?? undefined,
+      deliverable: deliverable ?? undefined,
+      limit: limit !== undefined ? Number(limit) : undefined,
+    }),
+  )(c);
+});
 
 // Public contributor profile — a volunteer's shareable "here's my work" page,
 // keyed by GitHub handle (already public via the leaderboard). Content-negotiated
