@@ -278,13 +278,57 @@ oauthRoutes.get('/github/callback', async (c) => {
   }
 });
 
-/** Minimal success page: shows the dev token and copy-paste runner setup. */
+// The canonical marketing site (this page is served from the api.* origin, so
+// links back must be absolute to land the user on the main site, not the API).
+const SITE = 'https://givework.dev';
+
+// Shared Bauhaus chrome so the post-sign-in pages feel connected to the site and
+// nobody is stranded on a bare page.
+const CHROME_CSS = `
+:root{--paper:#f4f1e6;--ink:#161310;--red:#e1342b;--blue:#21449c;--yellow:#f3c20a}
+*{box-sizing:border-box}
+body{font:16px/1.6 system-ui,-apple-system,sans-serif;color:var(--ink);background:var(--paper);margin:0}
+.bar{display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap;padding:1.1rem 1.5rem;border-bottom:3px solid var(--ink)}
+.brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:var(--ink);margin-right:auto}
+.brand .name{font-weight:800;letter-spacing:-.01em;font-size:1.25rem}
+.nav a{color:var(--ink);text-decoration:none;font-size:.92rem;margin-left:1.1rem;border-bottom:2px solid var(--yellow);padding-bottom:1px}
+.nav a:hover{border-color:var(--red)}
+main{max-width:720px;margin:2.5rem auto;padding:0 1.25rem}
+h1{font-size:2rem;letter-spacing:-.02em;margin:.2rem 0 1rem}
+h2{font-size:1.15rem;margin:2rem 0 .5rem}
+code{background:#e9e5d6;border-radius:5px;padding:.05rem .35rem;font-size:.92em}
+pre{background:var(--ink);color:var(--paper);border-radius:8px;padding:1rem 1.15rem;overflow-x:auto;font-size:.9rem;line-height:1.7}
+.tok{word-break:break-all}
+.note{font-size:.9rem;opacity:.8}
+.foot{border-top:1px solid #16131033;margin-top:2.5rem;padding:1.5rem 1.25rem;text-align:center;font-size:.9rem}
+.foot a{color:var(--ink)}
+.cta{display:inline-block;margin-top:.5rem;background:var(--ink);color:var(--paper);text-decoration:none;padding:.6rem 1.1rem;border-radius:8px;font-weight:600}
+.cta:hover{background:var(--red)}`;
+
+const GLYPH = `<svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>`;
+
+function header(): string {
+  return `<header><div class="bar">
+<a class="brand" href="${SITE}">${GLYPH}<span class="name">Givework</span></a>
+<nav class="nav"><a href="${SITE}/conjectures">All conjectures</a><a href="${SITE}/volunteers">For contributors</a><a href="${SITE}/">Home</a></nav>
+</div></header>`;
+}
+
+function footer(): string {
+  return `<div class="foot"><a class="cta" href="${SITE}/conjectures">Browse the open problems →</a>
+<p class="note" style="margin-top:1rem">Powered by volunteers · <a href="${SITE}">givework.dev</a></p></div>`;
+}
+
+/** Success page: shows the dev token and copy-paste runner setup, wrapped in the
+ * site chrome with clear navigation back into Givework. */
 function tokenPage(handle: string, token: string, apiOrigin: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Givework — agent connected</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:680px;margin:3rem auto;padding:0 1rem}
-code,pre{background:#f4f4f5;border-radius:6px}pre{padding:1rem;overflow-x:auto}
-.tok{word-break:break-all}</style></head><body>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E">
+<style>${CHROME_CSS}</style></head><body>
+${header()}
+<main>
 <h1>Welcome, @${escapeHtml(handle)} 👋</h1>
 <p>Your agent is registered. You can claim <strong>public</strong> tasks right away.
 Internal/sensitive work unlocks once an admin verifies your account.</p>
@@ -292,22 +336,33 @@ Internal/sensitive work unlocks once an admin verifies your account.</p>
 <p>Three commands — no repo to clone. <code>login</code> reopens your browser to finish
 sign-in (you're already signed in, so it's one click), then saves your credential locally.</p>
 <pre>npx github:Barneyjm/givework.dev login
-npx github:Barneyjm/givework.dev budget set 2000   <span class="tok"># cents/month you'll donate</span>
+npx github:Barneyjm/givework.dev budget set 2000
 EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
+<p class="note"><code>budget set 2000</code> caps what you'll donate at 2000 cents — about $20 — per month. Change the number to taste.</p>
 <p><strong>Prerequisite:</strong> the <code>claude</code> CLI installed and logged in — that
 logged-in session is the donated capacity (<code>run</code> executes tasks with <code>claude -p</code>).</p>
 <h2>Prefer environment variables?</h2>
 <p>Skip <code>login</code> and use this token directly. It's your credential — keep it secret; it expires in 90 days.</p>
 <pre>export GIVEWORK_API_URL=${escapeHtml(apiOrigin)}
 export GIVEWORK_TOKEN=<span class="tok">${escapeHtml(token)}</span></pre>
+</main>
+${footer()}
 </body></html>`;
 }
 
 function errorPage(message: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Givework — sign-in error</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:680px;margin:3rem auto;padding:0 1rem}</style>
-</head><body><h1>Sign-in failed</h1><p>${escapeHtml(message)}</p>
-<p><a href="/auth/github/login">Try again</a></p></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Givework — sign-in error</title>
+<style>${CHROME_CSS}</style></head><body>
+${header()}
+<main>
+<h1>Sign-in failed</h1>
+<p>${escapeHtml(message)}</p>
+<p><a class="cta" href="/auth/github/login">Try again</a></p>
+</main>
+${footer()}
+</body></html>`;
 }
 
 function escapeHtml(s: string): string {

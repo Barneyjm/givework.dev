@@ -1327,8 +1327,13 @@ export interface ContributorProfile {
  * /contributors/:handle.
  */
 export async function getContributorProfile(handle: string): Promise<ContributorProfile | null> {
+  // GitHub handles are case-insensitive and people link them in any case, so
+  // match case-insensitively and return the canonical stored casing.
   const dev = (
-    await query<{ id: string }>(`SELECT id FROM devs WHERE github_handle = $1`, [handle])
+    await query<{ id: string; github_handle: string }>(
+      `SELECT id, github_handle FROM devs WHERE lower(github_handle) = lower($1)`,
+      [handle],
+    )
   ).rows[0];
   if (!dev) return null;
 
@@ -1379,7 +1384,7 @@ export async function getContributorProfile(handle: string): Promise<Contributor
   ).rows;
 
   return {
-    github_handle: handle,
+    github_handle: dev.github_handle,
     totals: {
       conjectures: totalsRow?.conjectures ?? 0,
       contributions: totalsRow?.contributions ?? 0,

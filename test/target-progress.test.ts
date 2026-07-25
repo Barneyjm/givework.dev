@@ -138,6 +138,12 @@ describe('contributor attribution + profile', () => {
     expect(profile.totals.conjectures).toBe(1);
     expect(profile.contributions[0].conjecture_slug).toBe('goldbach');
 
+    // GitHub handles are case-insensitive: a differently-cased link resolves to
+    // the same profile and echoes back the canonical stored casing.
+    const ci = await req('/contributors/ADA');
+    expect(ci.status).toBe(200);
+    expect(((await ci.json()) as { github_handle: string }).github_handle).toBe('ada');
+
     // unknown handle -> 404
     expect((await req('/contributors/nobody')).status).toBe(404);
     // malformed handle -> 404
