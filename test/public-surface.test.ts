@@ -116,3 +116,84 @@ describe('GET /leaderboard (public)', () => {
     expect(lb.totals.conjectures).toBe(0);
   });
 });
+
+describe('GET /tasks/available (public work board)', () => {
+  const createTargetVia = (fields: Record<string, unknown>) =>
+    req('/admin/targets', {
+      method: 'POST',
+      headers: bearer(adminTok),
+      body: JSON.stringify(fields),
+    });
+
+  it('lists open public tasks on public slugged targets, unauthenticated', async () => {
+    const conj = (await (
+      await createTargetVia({ name: 'Collatz', slug: 'collatz', kind: 'conjecture' })
+    ).json()) as { id: string };
+    await createTask(conj.id, { max: 500, title: 'Sweep a range', kind: 'computational' });
+
+    const res = await req('/tasks/available');
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as any[];
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      title: 'Sweep a range',
+      kind: 'computational',
+      deliverable: 'math_attack', // no spec.deliverable -> math attack
+      conjecture_slug: 'collatz',
+      conjecture_name: 'Collatz',
+    });
+  });
+
+  it('never exposes non-public tasks or work on non-public targets', async () => {
+    const conj = (await (
+      await createTargetVia({ name: 'Collatz', slug: 'collatz', kind: 'conjecture' })
+    ).json()) as { id: string };
+    // an internal-sensitivity task on a public conjecture
+    await createTask(conj.id, { max: 500, title: 'Secret work', sensitivity: 'internal' });
+    // and a task on an org_request target (never public, even with a slug)
+    const org = (await (
+      await createTargetVia({
+        name: 'Org',
+        slug: 'org-work',
+        kind: 'org_request',
+        contact_email: 'ops@org.example',
+      })
+    ).json()) as { id: string };
+    await createTask(org.id, { max: 500, title: 'Org task' });
+
+    const list = (await (await req('/tasks/available')).json()) as any[];
+    expect(list).toEqual([]);
+  });
+
+  it('filters by slug and by deliverable', async () => {
+    const a = (await (
+      await createTargetVia({ name: 'A', slug: 'aaa', kind: 'conjecture' })
+    ).json()) as { id: string };
+    const b = (await (
+      await createTargetVia({ name: 'B', slug: 'bbb', kind: 'conjecture' })
+    ).json()) as { id: string };
+    await createTask(a.id, { max: 500, title: 'A task' });
+    await createTask(b.id, { max: 500, title: 'B task' });
+
+    const onlyA = (await (await req('/tasks/available?slug=aaa')).json()) as any[];
+    expect(onlyA.map((t) => t.title)).toEqual(['A task']);
+
+    const vids = (await (
+      await req('/tasks/available?deliverable=explainer_video')
+    ).json()) as any[];
+    expect(vids).toEqual([]);
+  });
+
+  it('excludes tasks that are no longer open', async () => {
+    const conj = (await (
+      await createTargetVia({ name: 'Collatz', slug: 'collatz', kind: 'conjecture' })
+    ).json()) as { id: string };
+    const task = await createTask(conj.id, { max: 500, title: 'Claimed already' });
+    const dev = await createDev('ada');
+    await setBudget(dev, 2000);
+    await checkoutTask(dev, task); // -> locked
+
+    const list = (await (await req('/tasks/available')).json()) as any[];
+    expect(list).toEqual([]);
+  });
+});
