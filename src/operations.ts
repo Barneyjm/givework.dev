@@ -1,4 +1,6 @@
 import { type Client, query, withTransaction } from './db.js';
+import { recordEvent } from './funnel.js';
+import { blockAt, ONBOARDING_CANDIDATES } from './goldbach.js';
 
 /**
  * Domain error carrying the HTTP status the server layer should surface. Lets
@@ -99,6 +101,261 @@ async function reservedPeriodOf(client: Client, taskId: string): Promise<string 
 }
 
 // ---------------------------------------------------------------------------
+// onboarding — a newcomer's first, real piece of work
+// ---------------------------------------------------------------------------
+
+/**
+ * The conjecture new contributors cut their teeth on. Goldbach is the right
+ * target for a first task on every axis that matters:
+ *   - a range sweep needs zero prior context, which is exactly what a newcomer has;
+ *   - it has a deterministic built-in checker, so the result auto-verifies and no
+ *     human ever has to look at it (200 signups in a week cost zero review minutes);
+ *   - distinct ranges mean two newcomers never collide or duplicate each other;
+ *   - the overwhelmingly likely outcome — nothing found — is a real contribution,
+ *     not a failure, so a first run cannot "go wrong" in a discouraging way.
+ */
+export const ONBOARDING_SLUG = 'goldbach';
+
+/**
+ * The onboarding task's hard cap. Small on purpose: what a newcomer is buying
+ * with it is not the arithmetic (the control plane redoes that for free during
+ * verification) — it is the certainty that their own `claude -p` credential works
+ * end to end. A few cents to remove that doubt is the whole point of routing this
+ * through the model path instead of a free sandboxed work unit.
+ */
+export const ONBOARDING_MAX_CENTS = 5;
+const ONBOARDING_EST_CENTS = 3;
+
+/** Where the sweep cursor starts if the target has never been swept. */
+const ONBOARDING_CURSOR_START = 4;
+
+export interface OnboardingTask {
+  task_id: string;
+  title: string;
+  /** The task's current status — 'open' to run, or further along on a resumed call. */
+  status: string;
+  target_slug: string;
+  target_name: string;
+  range_start: number;
+  range_end: number;
+  /** Even numbers this sweep rules out. */
+  candidates: number;
+  max_cost_cents: number;
+  /** True when this returned the dev's existing task instead of minting a new one. */
+  existing: boolean;
+}
+
+interface OnboardingRow {
+  task_id: string;
+  title: string;
+  status: string;
+  max_cost_cents: number;
+  spec: { range_start?: number; range_end?: number } | null;
+  target_slug: string | null;
+  target_name: string;
+}
+
+function projectOnboarding(row: OnboardingRow, existing: boolean): OnboardingTask {
+  const start = row.spec?.range_start ?? 0;
+  const end = row.spec?.range_end ?? 0;
+  return {
+    task_id: row.task_id,
+    title: row.title,
+    status: row.status,
+    target_slug: row.target_slug ?? ONBOARDING_SLUG,
+    target_name: row.target_name,
+    range_start: start,
+    range_end: end,
+    candidates: Math.max(0, Math.floor((end - start) / 2)),
+    max_cost_cents: row.max_cost_cents,
+    existing,
+  };
+}
+
+const ONBOARDING_SELECT = `
+  SELECT t.id AS task_id, t.title, t.status::text AS status, t.max_cost_cents, t.spec,
+         tg.slug AS target_slug, tg.name AS target_name
+    FROM tasks t JOIN targets tg ON tg.id = t.target_id
+   WHERE t.onboarding_dev_id = $1`;
+
+/** Human-readable thousands separators, locale-independent. */
+function groupDigits(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** The task spec handed to the volunteer's agent. Platform-authored; no user input. */
+function onboardingSpec(start: number, end: number, candidates: number) {
+  return {
+    deliverable: 'math_attack',
+    angle: 'range sweep',
+    range_start: start,
+    range_end: end,
+    prompt:
+      `Goldbach's conjecture states that every even integer greater than 2 is the sum of ` +
+      `two primes. It is open: nobody has proved it, and nobody has found a counterexample.\n\n` +
+      `Your assigned range is [${start}, ${end}) — the ${groupDigits(candidates)} even numbers in it. ` +
+      `Nobody else on Givework has this range; it was allocated to you alone.\n\n` +
+      `For every even n in that range, decide whether n can be written as p + q with p and q ` +
+      `prime. If you can execute code, do the sweep properly with a sieve and report the ` +
+      `statistics below; if you cannot execute code, reason it out and report what you can ` +
+      `stand behind.\n\n` +
+      `Report ONLY these findings. The expected, correct outcome is an empty ` +
+      `counterexamples list — every even number in the range decomposes. That is not a ` +
+      `failure and it is not "no result": it is ${groupDigits(candidates)} candidates ruled ` +
+      `out, and it is recorded permanently as your contribution. Do not invent a ` +
+      `counterexample, and do not apologise for not finding one.\n\n` +
+      `Only claim a counterexample if you have an even n for which you exhaustively checked ` +
+      `every prime p <= n/2 and found n - p composite in every case. The control plane ` +
+      `re-runs this entire range itself and compares against what you report, so a guess ` +
+      `will be caught and the work discarded.`,
+    output_schema: {
+      range_start: 'integer — echo back the assigned range start',
+      range_end: 'integer — echo back the assigned range end',
+      counterexamples: 'array of integers — even n with no two-prime sum; almost certainly []',
+      max_min_prime:
+        'integer, OPTIONAL — the largest "smallest prime summand" needed anywhere in the ' +
+        'range. Include this ONLY if you actually computed it by running code; omit it ' +
+        'entirely otherwise. A wrong value fails verification.',
+      summary: 'string — one or two sentences on what you swept and what you found',
+    },
+    acceptance:
+      `range_start and range_end must equal the assigned range. counterexamples must list ` +
+      `only genuine counterexamples (verified by re-running the sweep in the control plane). ` +
+      `An empty list on the full range is a pass.`,
+    suggested_timeout_ms: 300_000,
+  };
+}
+
+/**
+ * Mint (or return) this dev's onboarding task: one real attack task on a live
+ * open problem, with a range nobody else has been given.
+ *
+ * Three properties this has to hold, and how:
+ *
+ *  - *Per-dev, not pooled.* The task carries `onboarding_dev_id`. A pooled task
+ *    would be claimed once and then be missing for every other newcomer, so these
+ *    are hidden from the shared pool (listOpenTasks / listAvailableTasks) and
+ *    checkoutTask refuses them to anyone else.
+ *
+ *  - *Distinct ranges.* The range comes from a cursor on the target row, taken
+ *    under `SELECT … FOR UPDATE`. Concurrent mints serialize on that row lock, so
+ *    each one reads a cursor that already includes every block handed out before
+ *    it. Blocks therefore tile the number line with no overlap and no gaps.
+ *    Lock order is dev_budgets → targets, matching submitResult, so this cannot
+ *    deadlock against the rest of the system.
+ *
+ *  - *Idempotent.* Asking twice returns the same task. Enforced twice over: a
+ *    re-read after taking the budget lock (which, under READ COMMITTED, sees any
+ *    concurrent mint that just committed) and a UNIQUE index on onboarding_dev_id
+ *    as the database-level backstop.
+ *
+ * The budget guard is NOT special-cased. A dev with no budget, or with less than
+ * the task reserves, is refused here with a message that says what to do — and
+ * checkoutTask would refuse it again anyway, which is the authoritative gate.
+ */
+export async function mintOnboardingTask(devId: string): Promise<OnboardingTask> {
+  const minted = await withTransaction(async (client) => {
+    // Fast path: already have one? Answered before the budget lock so a resumed
+    // run works even in a later period, where the dev has no budget row yet.
+    const pre = await client.query<OnboardingRow>(ONBOARDING_SELECT, [devId]);
+    if (pre.rows[0]) return { row: pre.rows[0], existing: true };
+
+    // Lock the dev's budget row — the same serialization point every other
+    // state change uses, and the pre-check that lets us refuse with a good
+    // message instead of minting a task they cannot afford to run.
+    const budget = await lockDevBudget(client, devId);
+    if (!budget) {
+      throw new OpError(
+        RESERVE_INSUFFICIENT_BUDGET,
+        'no_budget',
+        'No budget set for this month. Choose how much of your own Claude credit to donate first, e.g.  givework budget set 500',
+      );
+    }
+    const available = budget.budget_cents - budget.reserved_cents - budget.spent_cents;
+    if (available < ONBOARDING_MAX_CENTS) {
+      throw new OpError(
+        RESERVE_INSUFFICIENT_BUDGET,
+        'insufficient_budget',
+        `This task reserves ${ONBOARDING_MAX_CENTS} cents and you have ${available} available. Raise your cap, e.g.  givework budget set 500`,
+      );
+    }
+
+    // Re-check under the lock: a concurrent mint for this dev blocked on the
+    // budget row above, so this read now sees its committed task.
+    const again = await client.query<OnboardingRow>(ONBOARDING_SELECT, [devId]);
+    if (again.rows[0]) return { row: again.rows[0], existing: true };
+
+    // Allocate a range by advancing the target's cursor under a row lock.
+    const tgt = await client.query<{ id: string; name: string; slug: string; cursor: number }>(
+      `SELECT id, name, slug, COALESCE(sweep_cursor, $2::bigint) AS cursor
+         FROM targets
+        WHERE slug = $1
+        FOR UPDATE`,
+      [ONBOARDING_SLUG, ONBOARDING_CURSOR_START],
+    );
+    const target = tgt.rows[0];
+    if (!target) {
+      throw new OpError(
+        CONFLICT,
+        'onboarding_unavailable',
+        `The onboarding conjecture ("${ONBOARDING_SLUG}") is not seeded on this control plane`,
+      );
+    }
+    const range = blockAt(Number(target.cursor), ONBOARDING_CANDIDATES);
+    await client.query(`UPDATE targets SET sweep_cursor = $2 WHERE id = $1`, [
+      target.id,
+      range.end,
+    ]);
+
+    const title = `Goldbach sweep ${groupDigits(range.start)}–${groupDigits(range.end)}`;
+    const inserted = await client.query<{ task_id: string }>(
+      `INSERT INTO tasks
+         (target_id, title, spec, est_cost_cents, max_cost_cents, effort, kind, verify_via,
+          sensitivity, onboarding_dev_id)
+       VALUES ($1, $2, $3, $4, $5, 'low'::task_effort, 'computational'::task_kind,
+               'auto_rerun'::verification_method, 'public', $6)
+       RETURNING id AS task_id`,
+      [
+        target.id,
+        title,
+        JSON.stringify(onboardingSpec(range.start, range.end, range.candidates)),
+        ONBOARDING_EST_CENTS,
+        ONBOARDING_MAX_CENTS,
+        devId,
+      ],
+    );
+    return {
+      row: {
+        task_id: inserted.rows[0].task_id,
+        title,
+        status: 'open',
+        max_cost_cents: ONBOARDING_MAX_CENTS,
+        spec: { range_start: range.start, range_end: range.end },
+        target_slug: target.slug,
+        target_name: target.name,
+      } satisfies OnboardingRow,
+      existing: false,
+    };
+  }).catch(async (err: any) => {
+    // Belt and braces: the UNIQUE index on onboarding_dev_id is the last word on
+    // "one task per dev". If it ever fires, hand back the task that won.
+    if (err?.code !== '23505') throw err;
+    const { rows } = await query<OnboardingRow>(ONBOARDING_SELECT, [devId]);
+    if (!rows[0]) throw err;
+    return { row: rows[0], existing: true };
+  });
+
+  const result = projectOnboarding(minted.row, minted.existing);
+  if (!minted.existing) {
+    await recordEvent(devId, 'onboarding_minted', {
+      task_id: result.task_id,
+      range: [result.range_start, result.range_end],
+    });
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // checkout
 // ---------------------------------------------------------------------------
 
@@ -138,7 +395,7 @@ const PRIOR_CONTRIBUTIONS_LIMIT = 5;
  * the task, then mutate budget, then write the ledger row.
  */
 export async function checkoutTask(devId: string, taskId: string): Promise<CheckoutResult> {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     // 1. Lock the dev's current-period budget row.
     const budget = await lockDevBudget(client, devId);
     if (!budget) {
@@ -150,14 +407,26 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       );
     }
 
-    // Need the task's cost (budget gate) and sensitivity (trust gate) up front.
-    const taskRes = await client.query<TaskRow>(
-      `SELECT id, max_cost_cents, status, sensitivity FROM tasks WHERE id = $1`,
+    // Need the task's cost (budget gate), sensitivity (trust gate) and owner
+    // (onboarding gate) up front.
+    const taskRes = await client.query<TaskRow & { onboarding_dev_id: string | null }>(
+      `SELECT id, max_cost_cents, status, sensitivity, onboarding_dev_id
+         FROM tasks WHERE id = $1`,
       [taskId],
     );
     const task = taskRes.rows[0];
     if (!task) {
       throw new OpError(404, 'task_not_found', 'Unknown task');
+    }
+    // Onboarding tasks belong to one dev. They're already hidden from the shared
+    // pool, but this is the authoritative gate: a newcomer's first task must
+    // still be waiting for them however someone else learned its id.
+    if (task.onboarding_dev_id && task.onboarding_dev_id !== devId) {
+      throw new OpError(
+        403,
+        'not_your_task',
+        "This is another contributor's onboarding task and is reserved for them",
+      );
     }
     // Report an already-claimed task as such, rather than letting the budget gate
     // below mask it as a misleading 402. The claim UPDATE still guards on
@@ -255,6 +524,14 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       prior_contributions: prior.rows,
     };
   });
+  // Funnel: recorded after the transaction commits, so it can neither hold the
+  // budget lock open nor fail a checkout that already succeeded. Every checkout
+  // is logged; "first checkout" is derived by counting per dev.
+  await recordEvent(devId, 'checkout', {
+    task_id: result.task_id,
+    max_cost_cents: result.max_cost_cents,
+  });
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +638,7 @@ export async function submitResult(
   const artifact =
     opts.artifact !== undefined ? opts.artifact : terminal ? undefined : (result ?? undefined);
 
-  return withTransaction(async (client) => {
+  const settled = await withTransaction<SubmitResult>(async (client) => {
     // The reservation was made in the task's reserved_period (which may be a
     // prior month if the lock straddled a boundary). Read it first — a plain
     // read is safe: the guarded UPDATE below rejects (409) before any budget
@@ -484,6 +761,16 @@ export async function submitResult(
       overage_clamped: overageClamped,
     };
   });
+  // Funnel: after the commit, and swallowing its own failures — the contribution
+  // and its booked spend are real whether or not analytics records them. Every
+  // submit is logged, so a repeat contributor is distinguishable from a
+  // one-and-done without any extra bookkeeping.
+  await recordEvent(devId, 'submit', {
+    task_id: settled.task_id,
+    outcome: settled.outcome,
+    spent_cents: settled.spent_applied,
+  });
+  return settled;
 }
 
 /** A task's contributions, newest first — the accumulated log of what's been tried. */
@@ -822,6 +1109,9 @@ export async function setOwnBudget(devId: string, budgetCents: number): Promise<
       'New budget is below what you have already reserved or spent this period',
     );
   }
+  // Funnel: the second step of the signup funnel. Recorded on every set; "first
+  // budget set" is the earliest such event for the dev.
+  await recordEvent(devId, 'budget_set', { budget_cents: budgetCents });
   return (await getBudget(devId))!;
 }
 
@@ -837,6 +1127,14 @@ export interface OpenTaskFilter {
    * preserving the unfiltered behaviour for internal callers.
    */
   devVerified?: boolean;
+  /**
+   * The dev doing the listing. Onboarding tasks belong to exactly one dev, so
+   * the pool hides everyone else's — otherwise the first task a newcomer is
+   * waiting for could be claimed out from under them. Passing the dev id lets
+   * their OWN onboarding task still show up (so an abandoned one can be picked
+   * back up by a plain `run`); omitting it hides every onboarding task.
+   */
+  devId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,6 +1298,13 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   if (effectiveSensitivity !== undefined) {
     params.push(effectiveSensitivity);
     conditions.push(`sensitivity = $${params.length}`);
+  }
+  // Another dev's onboarding task is never claimable, so never listed either.
+  if (filter.devId !== undefined) {
+    params.push(filter.devId);
+    conditions.push(`(onboarding_dev_id IS NULL OR onboarding_dev_id = $${params.length}::uuid)`);
+  } else {
+    conditions.push(`onboarding_dev_id IS NULL`);
   }
 
   // Validate + clamp limit: an unchecked NaN/negative would be a SQL error (500).
@@ -1311,6 +1616,9 @@ export async function listAvailableTasks(
        JOIN targets t ON t.id = k.target_id
       WHERE k.status = 'open'
         AND k.sensitivity = 'public'
+        -- Onboarding tasks are minted per dev, so they are not "available" to
+        -- browse: showing them would advertise work nobody else can claim.
+        AND k.onboarding_dev_id IS NULL
         AND t.slug IS NOT NULL
         AND t.kind::text = ANY($1::text[])
         AND ($2::text IS NULL OR t.slug = $2)

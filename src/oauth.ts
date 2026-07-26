@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { signDevToken } from './auth.js';
 import { withTransaction } from './db.js';
+import { recordEvent } from './funnel.js';
 import { OpError } from './operations.js';
 
 // Self-serve developer sign-in via GitHub OAuth (web flow). Two public routes:
@@ -160,9 +161,16 @@ export async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> 
  *      admin-seeded dev, linking the OAuth identity onto it.
  *   3. insert — first time we've seen this account. ON CONFLICT (github_id) makes
  *      a concurrent first-login race resolve to an update instead of a 23505.
+ *
+ * Returns the dev id plus whether this call actually created the row — the top of
+ * the signup funnel, which we can only observe here (`xmax = 0` distinguishes a
+ * real insert from an ON CONFLICT update).
  */
-export async function upsertDev(user: GitHubUser, autoVerify = false): Promise<string> {
-  return withTransaction(async (client) => {
+export async function upsertDev(
+  user: GitHubUser,
+  autoVerify = false,
+): Promise<{ id: string; created: boolean }> {
+  const result = await withTransaction(async (client) => {
     // `verified = verified OR $autoVerify` only ever promotes — a re-login of a
     // now-eligible account verifies it, and an already-verified dev is never
     // downgraded.
@@ -171,27 +179,29 @@ export async function upsertDev(user: GitHubUser, autoVerify = false): Promise<s
         WHERE github_id = $3 RETURNING id`,
       [user.login, user.email, user.id, autoVerify],
     );
-    if (byId.rows[0]) return byId.rows[0].id;
+    if (byId.rows[0]) return { id: byId.rows[0].id, created: false };
 
     const byHandle = await client.query<{ id: string }>(
       `UPDATE devs SET github_id = $1, email = COALESCE(email, $2), verified = verified OR $4
         WHERE github_handle = $3 AND github_id IS NULL RETURNING id`,
       [user.id, user.email, user.login, autoVerify],
     );
-    if (byHandle.rows[0]) return byHandle.rows[0].id;
+    if (byHandle.rows[0]) return { id: byHandle.rows[0].id, created: false };
 
-    const inserted = await client.query<{ id: string }>(
+    const inserted = await client.query<{ id: string; created: boolean }>(
       `INSERT INTO devs (github_id, github_handle, email, verified)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (github_id) DO UPDATE
          SET github_handle = EXCLUDED.github_handle,
              email = COALESCE(devs.email, EXCLUDED.email),
              verified = devs.verified OR EXCLUDED.verified
-       RETURNING id`,
+       RETURNING id, (xmax = 0) AS created`,
       [user.id, user.login, user.email, autoVerify],
     );
-    return inserted.rows[0].id;
+    return { id: inserted.rows[0].id, created: inserted.rows[0].created };
   });
+  if (result.created) await recordEvent(result.id, 'dev_created', { via: 'github_oauth' });
+  return result;
 }
 
 export const oauthRoutes = new Hono<Env>();
@@ -250,7 +260,7 @@ oauthRoutes.get('/github/callback', async (c) => {
     const accessToken = await exchangeCode(code, cfg);
     const user = await fetchGitHubUser(accessToken);
     // GitHub identity IS the verification (gated by a light bar) — no manual step.
-    const devId = await upsertDev(user, shouldAutoVerify(user));
+    const { id: devId } = await upsertDev(user, shouldAutoVerify(user));
     const token = await signDevToken(devId);
 
     // CLI mode: hand the token to the local `givework login` server over loopback.

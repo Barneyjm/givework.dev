@@ -20,6 +20,34 @@
 > most of it sits idle. Point it at open mathematics: chip at unsolved conjectures
 > on the subscription you already pay for. Public, verifiable, fully accounted for.
 
+## Volunteer in one command
+
+```bash
+npx github:Barneyjm/givework.dev onboard
+```
+
+Signs you in, asks what you're willing to donate this month, hands you a **real
+task on a live open problem**, runs it on your own `claude -p`, submits it, and
+shows you what you contributed. About a minute. Safe to re-run — it resumes where
+it left off rather than starting over.
+
+You get a **Goldbach range sweep**: forty thousand even numbers, a range allocated
+to you and nobody else, checked for a counterexample. Almost certainly you will
+find nothing — and that is the point, not a failure. Ruling out territory is a
+real contribution, machine-verified and recorded permanently under your name.
+
+*Prerequisite:* the [Claude Code CLI](https://claude.com/claude-code) installed and
+logged in. That logged-in session **is** the donated capacity — Givework never sees
+an API key. Running the task costs a few cents of your own credit, and that is
+deliberate: it is what proves your setup actually works end to end before you leave
+a runner going.
+
+Then keep going:
+
+```bash
+EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch
+```
+
 ## What is Givework?
 
 Givework points volunteers' idle AI agents at **open mathematical conjectures**.
@@ -370,6 +398,49 @@ Local models are slow under schema-constrained decoding, so the HTTP request
 timeout defaults to 240s (`DECOMPOSER_TIMEOUT_MS`). Task *execution* is separate
 — it runs on the volunteer's donated Claude credit.
 
+## Onboarding & the funnel
+
+A new contributor's first task is **real work on a live open problem**, not a
+self-test. Most people who set this up never come back, so the one task they
+actually run should produce something. A range sweep is the right shape: it needs
+zero prior context (exactly what a newcomer has), it auto-verifies with nobody in
+the loop, distinct ranges mean newcomers never collide, and a bad run fails safe.
+
+- **Per-dev, never pooled.** `tasks.onboarding_dev_id` owns the task. A pooled
+  onboarding task would be claimed once and then be missing for everyone else, so
+  these are hidden from `/tasks/open` and `/tasks/available`, and `checkoutTask`
+  refuses them to anyone but their owner.
+- **Distinct ranges.** `targets.sweep_cursor` is advanced one block per mint under
+  `SELECT … FOR UPDATE`. Concurrent mints serialize on that row lock, so blocks
+  tile the number line with no overlap and no gaps. Lock order is
+  `dev_budgets` → `targets`, matching `submitResult`, so it cannot deadlock.
+- **Idempotent.** Asking twice returns the same task — re-checked under the budget
+  lock, and backstopped by a `UNIQUE` index on `onboarding_dev_id`. This is what
+  makes `givework onboard` resumable rather than a source of duplicate work.
+- **Auto-verified.** `kind=computational`, `verify_via=auto_rerun` against the
+  target's built-in checker, which **re-runs the entire assigned range** in the
+  control plane (`src/goldbach.ts`, a segmented sieve — ~6 ms per block) and
+  compares. A fabricated claim, or a claim about a different range than the one
+  assigned, fails verification and the task returns to its owner. No human review
+  queue: 200 signups in a week cost zero review minutes.
+- **A clean sweep is a pass.** Finding nothing is the expected, correct outcome,
+  so the checker reports `confirmed` and the contribution is accepted — without
+  claiming the conjecture is settled. Treating "found nothing" as a rejection
+  would throw real work away and hand newcomers a red X for doing the job.
+- **Ordinary accounting.** Onboarding tasks count toward donated totals and the
+  leaderboard like any other task, because the work and the money are both real.
+  The budget guard is *not* special-cased: too small a cap is refused cleanly at
+  mint time with a message saying what to do, and `checkoutTask` would refuse it
+  again anyway.
+
+`funnel_events` is a small append-only log — dev created, budget set, onboarding
+minted, checkout, submit — kept deliberately separate from `ledger` (money must
+never depend on analytics). Writes are swallowed on failure: a missing analytics
+row is a reporting gap, a failed checkout is a lost donation. Every checkout and
+submit is recorded, so first-vs-repeat is derived rather than stored.
+`GET /admin/funnel` (or `givework admin funnel`) reports it as counts and
+conversion rates — including how many contributors were one-and-done.
+
 ## HTTP surface
 
 `Authorization: Bearer <token>` required on every route below.
@@ -391,8 +462,11 @@ D  POST /checkout            { task_id }
 D  POST /submit              { task_id, result, actual_cost_cents, raw_usage }
 D  POST /release             { task_id }
 D  GET  /budget                                         -- caller's own, current period
-D  GET  /tasks/open?max_cost_cents=&sensitivity=&limit=
+D  GET  /tasks/open?max_cost_cents=&sensitivity=&limit=  -- hides other devs' onboarding tasks
+D  POST /devs/budget          { budget_cents }          -- caller's own cap
+D  POST /devs/onboarding                                -- mint (or fetch) my onboarding task; idempotent
 A  POST /admin/expire
+A  GET  /admin/funnel                                   -- signup funnel: counts + conversion rates
 A  POST /admin/devs          { github_handle, email? }  -- returns the dev row + a dev token
 A  POST /admin/nonprofits    { name, ein?, contact_email, verified? }
 A  GET  /admin/nonprofits                               -- all orgs + identifier/task counts
@@ -426,6 +500,9 @@ src/intake/decompose.ts   Decomposer interface + deterministic StubDecomposer
 src/intake/operations.ts  receive / decompose / publish + sender allowlist — HTTP-free
 src/intake/email.ts       Cloudflare Email Worker — inbound mail → allowlist → intake
 src/intake/routes.ts      admin intake routes (manual submit + review/publish)
+src/goldbach.ts           segmented-sieve range sweep — the onboarding task AND its verifier
+src/funnel.ts             append-only signup-funnel log + the admin report
+src/cli/commands.ts       CLI verbs, including `onboard` (the whole first run)
 test/operations.test.ts   happy path, budget gate, expiry, release, clamp, 404
 test/concurrency.test.ts  double-checkout race + same-dev concurrent spend (the FOR UPDATE tests)
 test/invariant.test.ts    100-op randomized fuzz: ledger vs budgets never disagree
@@ -459,6 +536,31 @@ PR. Branch off `main`, keep mechanical reformats in their own commit, and see
 
 This is a **public** repo: never commit infrastructure IDs or secrets (Cloudflare
 account IDs, Neon project IDs, tokens) — CI injects them as secrets.
+
+### Publishing the CLI
+
+The `npx github:Barneyjm/givework.dev …` path needs no registry at all and is
+verified to work end to end: npm clones the repo, installs (dev dependencies
+included), runs `prepare` → `build:cli` to produce `dist/givework.mjs`, and links
+it as the `givework` bin. The bundle is self-contained — nothing outside it is
+needed at runtime.
+
+Publishing to npm so a stranger can type the shorter `npx givework onboard` is
+**not** done here, because it needs decisions only the owner can make:
+
+- **Name.** `givework` is unregistered on npm today (`npm view givework` → 404),
+  so the unscoped name is available — but claiming it is the owner's call. The
+  alternative is a scope (`@barneyjm/givework`), which needs
+  `publishConfig.access: "public"` added to `package.json`.
+- **Credentials.** An npm account with 2FA, plus an automation token stored as a
+  repo secret (`NPM_TOKEN`) if publishing should run from CI.
+- **Versioning.** `version` is still `0.1.0` and has never been released; decide
+  whether the CLI versions with the repo or independently, and whether releases
+  are tag-triggered.
+
+Everything else is ready: `private` is removed, `files` ships only the built
+bundle plus `README`/`LICENSE`, and `repository`/`homepage`/`license`/`engines`
+are set. Once a decision is made, `npm publish` is the only remaining step.
 
 ## License
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError, apiRequest } from '../src/cli/api.js';
-import { arg, boolArg } from '../src/cli/commands.js';
+import { arg, boolArg, contributionLines, siteUrlFor } from '../src/cli/commands.js';
 
 // CLI unit tests — pure pieces only (arg parsing, API error mapping, config
 // round-trip). The browser/loopback login is exercised manually, not in CI.
@@ -21,6 +21,50 @@ describe('boolArg()', () => {
     expect(boolArg(['set', 'id', '--verified', 'true'], '--verified')).toBe(true);
     expect(boolArg(['set', 'id', '--listed', 'false'], '--listed')).toBe(false);
     expect(boolArg(['set', 'id', '--name', 'x'], '--verified')).toBeUndefined();
+  });
+});
+
+describe('siteUrlFor()', () => {
+  it('maps the API origin to the site origin', () => {
+    expect(siteUrlFor('https://api.givework.dev')).toBe('https://givework.dev');
+    expect(siteUrlFor('http://localhost:3000')).toBe('http://localhost:3000');
+    expect(siteUrlFor('https://api.givework.dev/')).toBe('https://givework.dev');
+  });
+});
+
+describe('contributionLines()', () => {
+  const swept = {
+    range_start: 4,
+    range_end: 80_004,
+    candidates: 40_000,
+    target_name: "Goldbach's conjecture",
+    target_slug: 'goldbach',
+  };
+
+  it('frames an empty sweep as territory ruled out, never as "no result"', () => {
+    const text = contributionLines(swept, { counterexamples: [], spentCents: 2 }).join('\n');
+    expect(text).toContain('ruled out 40,000 candidates');
+    expect(text).toContain("Goldbach's conjecture");
+    // The words that would tell a newcomer their run was worthless.
+    expect(text).not.toMatch(/no result|nothing found|failed|unsuccessful/i);
+  });
+
+  it('leads with the counterexample when there actually is one', () => {
+    const text = contributionLines(swept, { counterexamples: [12345678], spentCents: 3 }).join(
+      '\n',
+    );
+    expect(text).toContain('12345678');
+    expect(text).toMatch(/disproves/);
+  });
+
+  it('always reports the donated compute and the verdict', () => {
+    const text = contributionLines(swept, {
+      counterexamples: [],
+      spentCents: 2,
+      verdict: 'passed',
+    }).join('\n');
+    expect(text).toContain('2¢');
+    expect(text).toContain('passed');
   });
 });
 
