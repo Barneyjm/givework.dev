@@ -129,13 +129,13 @@ describe('GET /devs/me/stats', () => {
     expect(s.by_month[0].month).toMatch(/^\d{4}-\d{2}$/);
   });
 
-  it('an overage-clamped submit counts the capped spend, not the reported cost', async () => {
-    const t = await createTask(np, { max: 500 });
-    await checkoutTask(alice, t);
-    await submitResult(alice, t, { ok: true }, 900, null); // clamps to 500
+  it('an overrunning submit counts the real spend in the dev stats', async () => {
+    const task = await createTask(np, { max: 500 });
+    await contribute(alice, task, 700); // 200 over the reservation
 
     const s = await getJson('/devs/me/stats', aliceTok);
-    expect(s.total_donated_cents).toBe(500);
+    // the volunteer really gave 700; their stats say so
+    expect(s.total_donated_cents).toBe(700);
   });
 
   it('keeps ledger-only aggregates when a row has no matching task (LEFT JOIN)', async () => {

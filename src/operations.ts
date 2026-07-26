@@ -21,6 +21,13 @@ const RESERVE_INSUFFICIENT_BUDGET = 402;
 const CONFLICT = 409;
 
 /** Caps on the free-form contribution fields (public + hydrated into prompts). */
+/**
+ * How far past its reservation a single submit may still be booked. A task that
+ * ran a little long is a genuine donation; one reporting orders of magnitude more
+ * than it reserved is a malfunction, and booking it would empty a volunteer's
+ * budget on one bad number.
+ */
+const ABSURD_COST_MULTIPLE = 10;
 const MAX_SUMMARY_CHARS = 2000;
 const MAX_STATE_BYTES = 64 * 1024;
 
@@ -298,10 +305,17 @@ export interface SubmitResult {
  * the actual spend applied — the budget mechanics are identical to the original
  * one-shot submit; only the resulting task status and the appended log differ.
  *
- * Overage handling (unchanged): actual_cost_cents should be <= max_cost_cents.
- * If it exceeds the reservation, naively applying it could push reserved + spent
- * over budget and fail the CHECK. We clamp the spend to max_cost_cents and flag
- * the overage in raw_usage — a capped tracked total beats a violated invariant.
+ * Overage: actual_cost_cents may come in above the reservation. That money is
+ * already gone from the volunteer's own subscription by the time we hear about
+ * it, so we book what they actually spent rather than what we wished they had —
+ * clamping never refunded a cent, it only understated the donation. The spend is
+ * still flagged as an overage so a systematically bad estimate is visible.
+ *
+ * Spending beyond budget is prevented where it can still be prevented: checkout
+ * refuses to hand out a task unless reserved + spent + max_cost <= budget. An
+ * overage therefore only ever pushes `available` negative by the overshoot, and
+ * the next checkout is refused until the volunteer raises the cap or the month
+ * rolls over.
  */
 export async function submitResult(
   devId: string,
@@ -392,13 +406,20 @@ export async function submitResult(
     const reserved = upd.rows[0].max_cost_cents;
     const targetId = upd.rows[0].target_id;
 
-    // Clamp the spend so reserved + spent can never exceed budget.
-    let spendApplied = actualCostCents;
-    let overageClamped = false;
-    if (actualCostCents > reserved) {
-      spendApplied = reserved;
-      overageClamped = true;
+    // A modest overshoot is a real donation and gets booked. A wildly impossible
+    // number is not a donation, it's a bug or a hostile client — refuse it rather
+    // than let one submit swallow a volunteer's month.
+    if (actualCostCents > reserved * ABSURD_COST_MULTIPLE) {
+      throw new OpError(
+        BAD_INPUT,
+        'bad_input',
+        `actual_cost_cents ${actualCostCents} is implausible for a task reserved at ${reserved}`,
+      );
     }
+    // Book what was actually spent. Over the reservation is still flagged as an
+    // overage so a consistently wrong estimate surfaces instead of hiding.
+    const spendApplied = actualCostCents;
+    const overageClamped = actualCostCents > reserved;
 
     // 3. Release the reservation, apply the spend — in the reservation's period.
     await client.query(
@@ -415,7 +436,7 @@ export async function submitResult(
           ...(rawUsage && typeof rawUsage === 'object' ? rawUsage : { rawUsage }),
           overage: true,
           reported_cost_cents: actualCostCents,
-          clamped_to_cents: reserved,
+          reserved_cents: reserved,
         }
       : rawUsage;
 
@@ -780,23 +801,26 @@ export async function setOwnBudget(devId: string, budgetCents: number): Promise<
   if (!Number.isInteger(budgetCents) || budgetCents < 0) {
     throw new OpError(BAD_INPUT, 'bad_input', 'budget_cents must be a non-negative integer');
   }
-  try {
-    await query(
-      `INSERT INTO dev_budgets (dev_id, period, budget_cents)
-       VALUES ($1, ${CURRENT_PERIOD}, $2)
-       ON CONFLICT (dev_id, period) DO UPDATE SET budget_cents = EXCLUDED.budget_cents`,
-      [devId, budgetCents],
+  // Refusing to set a cap below what is already committed used to fall out of the
+  // dev_budgets CHECK, which we caught as a constraint violation. That CHECK is
+  // gone (an overage may legitimately push spent past budget — see migration
+  // 010), so the rule is enforced here instead: the UPDATE only applies when the
+  // new cap still covers everything reserved or already spent, and an update that
+  // matches nothing means it was refused.
+  const { rows } = await query<{ budget_cents: number }>(
+    `INSERT INTO dev_budgets (dev_id, period, budget_cents)
+     VALUES ($1, ${CURRENT_PERIOD}, $2)
+     ON CONFLICT (dev_id, period) DO UPDATE SET budget_cents = EXCLUDED.budget_cents
+       WHERE dev_budgets.reserved_cents + dev_budgets.spent_cents <= EXCLUDED.budget_cents
+     RETURNING budget_cents`,
+    [devId, budgetCents],
+  );
+  if (rows.length === 0) {
+    throw new OpError(
+      CONFLICT,
+      'budget_below_committed',
+      'New budget is below what you have already reserved or spent this period',
     );
-  } catch (err: any) {
-    if (err?.code === '23514') {
-      // CHECK (reserved_cents + spent_cents <= budget_cents)
-      throw new OpError(
-        CONFLICT,
-        'budget_below_committed',
-        'New budget is below what you have already reserved or spent this period',
-      );
-    }
-    throw err;
   }
   return (await getBudget(devId))!;
 }

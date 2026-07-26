@@ -11,8 +11,8 @@ tasks**; volunteer developers' runners work each via their own `claude -p` and
 submit **contributions**. Hard tasks are resumable — chipped across many
 contributors via an append-only log + compacted state. Results are **verified**
 (re-run a counterexample, compile a proof, replicate a range), which can flip a
-target to `disproven`/`resolved`. A row-level lock plus a database `CHECK` invariant
-guarantees no volunteer overspends. See the README and `PIVOT.md` for the full flow.
+target to `disproven`/`resolved`. A row-level lock at checkout guarantees no volunteer
+is ever authorized to start work beyond their budget. See the README and `PIVOT.md` for the full flow.
 
 > The codebase was built as a nonprofit-help platform and pivoted to open math (see
 > `PIVOT.md`). The beneficiary entity is a generic `targets` table (`kind`:
@@ -63,8 +63,11 @@ Before declaring work done, run `lint`, `typecheck`, and `test` — CI enforces 
   functions. Keep new core logic there, not in route handlers.
 - Identity comes from the JWT, never the request body — a dev token can only act as its
   own dev. See `src/auth.ts` (`requireDev` / `requireAdmin`).
-- Every state change locks the `dev_budgets` row `FOR UPDATE`; the invariant
-  `reserved_cents + spent_cents <= budget_cents` is also a DB `CHECK`. Don't bypass it.
+- Every state change locks the `dev_budgets` row `FOR UPDATE`. The gate that matters is
+  in `checkoutTask`: it refuses a task unless `reserved + spent + max_cost <= budget`.
+  Don't bypass it — it's the only point where overspend is still preventable. A *finished*
+  task books what it actually cost, even if that overshoots the cap (see migration 010),
+  so `spent` may exceed `budget`; the DB `CHECK`s only assert non-negativity.
 - Match the surrounding style; Biome formats automatically (2-space, 100-col, single
   quotes, trailing commas). A pre-commit hook and a PostToolUse hook both run Biome.
 - Commit messages end with the Co-Authored-By trailer; branch off `main`, never commit

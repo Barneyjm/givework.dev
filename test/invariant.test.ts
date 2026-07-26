@@ -18,10 +18,14 @@ async function assertInvariants(devIds: string[]) {
     `SELECT dev_id, budget_cents, reserved_cents, spent_cents FROM dev_budgets`,
   );
   for (const b of budgets) {
-    // Invariant 1: reserved + spent <= budget, and neither goes negative.
+    // Invariant 1: neither column ever goes negative.
     expect(b.reserved_cents).toBeGreaterThanOrEqual(0);
     expect(b.spent_cents).toBeGreaterThanOrEqual(0);
-    expect(b.reserved_cents + b.spent_cents).toBeLessThanOrEqual(b.budget_cents);
+    // Reservations — the part that is still preventable — never exceed budget on
+    // their own. `spent` may sit above it once a finished task overshot its cap:
+    // that money is already gone, and recording less would understate what was
+    // donated. Checkout is what refuses new work in that state.
+    expect(b.reserved_cents).toBeLessThanOrEqual(b.budget_cents);
   }
 
   // Invariant 2: per dev, the sum of ledger deltas equals reserved + spent.
@@ -70,7 +74,7 @@ describe('invariant fuzz (criterion 10)', () => {
             await checkoutTask(dev, task);
             break;
           case 'submit':
-            // Random actual cost, sometimes over the cap to exercise clamping.
+            // Random actual cost, sometimes over the cap to exercise overage booking.
             await submitResult(dev, task, { n }, Math.floor(Math.random() * 900), { n });
             break;
           case 'release':
