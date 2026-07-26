@@ -1,4 +1,7 @@
 node_modules/
+# also match a SYMLINK named node_modules (a worktree convenience);
+# the trailing-slash pattern above only matches a real directory.
+/node_modules
 .env
 *.log
 dist/

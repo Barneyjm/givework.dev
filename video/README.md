@@ -124,3 +124,113 @@ than hard-coding it (`sc_collatz.py` generates the real hailstone sequence;
 so the picture can't drift from the arithmetic. State honestly what is known versus
 conjectured: "checked to 2⁷¹, still unproven" is the interesting truth, and claiming
 more than that is the one thing we won't ship.
+
+## Vertical cuts for short-form
+
+`make_vertical.sh <slug>` reformats a finished 16:9 video into a 1080x1920 cut
+for YouTube Shorts, Reels and TikTok:
+
+```bash
+cd video
+SPEC_DIR=/path/to/specs ./make_vertical.sh collatz collatz-share.mp4
+```
+
+The landscape video is **composited into a branded frame**, not re-rendered — the
+scenes are composed for 16:9, so every position and wrap width would break in a
+vertical viewport. `make_vertical_frame.mjs` draws the backdrop (wordmark, the
+conjecture's name, its subtitle, the page URL, and the footer) and prints the
+geometry the shell script overlays against, so the layout maths lives in one
+place.
+
+The video sits **above centre on purpose**: short-form platforms overlay a
+caption, a handle and an action rail across the bottom fifth, so that band is
+left to them rather than fought over.
+
+Reels caps at 90 seconds and most of these run 85-115s; the script warns rather
+than trimming, since where to cut is an editorial call.
+
+## Thumbnails and captions
+
+Social platforms take **frame 1** as the thumbnail, and ours used to be a plain
+grabbed title card with no branding on it. `set_first_frame.sh` puts the branded
+poster there instead:
+
+```bash
+./set_first_frame.sh collatz-share.mp4 collatz-poster.jpg out.mp4 1.0
+#                                                    trim the old 1s lead-in ^
+```
+
+For the vertical cut, `make_vertical_frame.mjs <slug> out.png --poster` renders a
+9:16 thumbnail — the same frame with a play button in the well and deliberately
+no second title, since the frame already carries it.
+
+`make_captions.mjs <slug>` writes an `.srt` from the spec's narration and the beat
+timings the render emitted:
+
+```bash
+SPEC_DIR=… NARR_DIR=… node make_captions.mjs collatz collatz.srt
+# collatz.srt  35 cues, 00:01:45,210 long
+```
+
+Most short-form video is watched **muted**, so an uncaptioned explainer reaches far
+fewer people than it should — and the words are already written down. Cues split at
+sentence boundaries, are apportioned by length within each beat, and wrap to at
+most two short lines so they read on a phone.
+## Automated render check
+
+Before a submitted video reaches a maintainer, `render_check.mjs` measures it:
+
+```bash
+node render_check.mjs <slug>-final.mp4 --starts narration_<slug>/starts.json
+# PASS  collatz-share.mp4  1920,1080  111.43s
+#   audio: -15.8 LUFS, peak -2.5 dBFS, centroid 2486 Hz, silence 2%
+```
+
+Frames are sampled at the **middle of each narration beat** (from `starts.json`),
+so it judges settled compositions rather than mid-transition blurs. A blank sample
+is re-probed either side before being reported, because a single empty frame is
+usually a cross-fade — an actually empty beat stays empty.
+
+**Rejects** (these fail the check):
+
+| check | catches |
+|---|---|
+| ink coverage below 0.4% | a beat that draws nothing |
+| ink coverage above 62% | a wall of text, or overlapping mobjects |
+| ink in the outer 2.5% margin | content clipped or pushed off-frame |
+| loudness outside −26..−9 LUFS | inaudible, or way too hot |
+| true peak above −0.5 dBFS | clipping on re-encode |
+| spectral centroid above 6.2 kHz | a harsh, hissy mix |
+| spectral flatness below 0.02 while loud | a pure tone — squeal or feedback |
+
+**Advises** (reported, not rejected): off-palette drift, mostly-silent runs, a very
+dark mix, and a scene whose beats all look identical.
+
+Palette drift is deliberately advisory. Measured against the 23 shipped videos,
+several good scenes drift 11–15% through `fill_opacity` blends and hand-picked
+shades; rejecting those would throw away shippable work, so it goes to a
+maintainer's eye instead.
+
+### Running it on a schedule
+
+`verify_queue.sh` is the unattended version: it picks up every submitted task
+whose `verify_via` is `render_check`, fetches the contributor's merged spec and
+scene, renders, measures, and posts pass/fail with the full report attached as the
+verification's detail.
+
+```bash
+GIVEWORK_ADMIN_TOKEN=… ./verify_queue.sh          # or --dry-run
+# */30 * * * * cd <repo>/video && GIVEWORK_ADMIN_TOKEN=… ./verify_queue.sh
+```
+
+It runs here rather than in the platform because the control plane is a
+Cloudflare Worker with no ffmpeg — the same arrangement `proof_checker` and
+`replication` already use, where a maintainer's machine stands in for a sandbox.
+A pass still leaves taste to a human; what it removes is having to watch every
+submission to find the ones that are simply broken.
+
+Thresholds were calibrated against real material rather than guessed — a 3 kHz
+pure tone measures 0.007 spectral flatness against 0.086 for a genuine
+narration-plus-music mix. The suite is verified both ways: **all 23 shipped videos
+pass**, and five deliberately broken ones (empty, off-palette, clipping, squealing,
+edge-clipped) are all caught.

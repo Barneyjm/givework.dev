@@ -1,0 +1,11 @@
+-- A fourth objective verification method: the measured render of a contributed
+-- explainer video.
+--
+-- Like proof_checker and replication, this cannot run inside the control plane —
+-- the Worker has no ffmpeg and cannot decode video — so it follows the same model
+-- those already use: the check runs off-Worker (video/render_check.mjs, on a
+-- maintainer's machine or in CI) and posts an authoritative verdict, with its
+-- measurements recorded as the verification's detail. What makes it objective
+-- rather than a taste call is that every gate is a number: ink coverage, margin
+-- bleed, LUFS, true peak, spectral flatness.
+ALTER TYPE verification_method ADD VALUE IF NOT EXISTS 'render_check';
