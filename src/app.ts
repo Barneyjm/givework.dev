@@ -286,11 +286,15 @@ app.get('/embed/:slug', async (c) => {
   // Same branded still the conjecture page uses, so an embed that hasn't been
   // played yet shows the card rather than a black box.
   const poster = `/videos/${escAttr(slug)}-poster.jpg`;
+  // Same captions the conjecture page offers, so an embed isn't the degraded copy.
+  const vtt = `/videos/${escAttr(slug)}.vtt`;
   const html =
     `<!doctype html><html><head><meta charset="utf-8"/>` +
     `<meta name="viewport" content="width=device-width,initial-scale=1"/>` +
     `<style>html,body{margin:0;height:100%;background:#161310}video{width:100%;height:100%;object-fit:contain}</style>` +
-    `</head><body><video controls playsinline autoplay poster="${poster}" src="${src}"></video></body></html>`;
+    `</head><body><video controls playsinline autoplay poster="${poster}" src="${src}">` +
+    `<track kind="captions" srclang="en" label="English" default src="${vtt}"/>` +
+    `</video></body></html>`;
   return new Response(html, {
     headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' },
   });
