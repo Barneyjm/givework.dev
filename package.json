@@ -33,7 +33,9 @@
     "deploy": "wrangler deploy",
     "seed-erdos": "tsx scripts/seed-erdos.ts",
     "seed-video-tasks": "tsx scripts/seed-video-tasks.ts",
-    "seed-erdos-tasks": "tsx scripts/seed-erdos-tasks.ts"
+    "seed-erdos-tasks": "tsx scripts/seed-erdos-tasks.ts",
+    "update-erdos-gyarfas": "tsx scripts/update-erdos-gyarfas.ts",
+    "seed-erdos-gyarfas-tasks": "tsx scripts/seed-erdos-gyarfas-tasks.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
