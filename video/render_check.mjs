@@ -61,7 +61,13 @@ const LIMITS = {
   // rejects >3 flashes/second; this is a safety property, not a taste one.
   maxFlashesPerSec: 3,
   flashLumaDelta: 20, // 0-255 mean-luma jump that counts as a flash
-  maxFreezeSeconds: 12, // a long motionless stretch is a stall or a still
+  // A held diagram is the FORMAT, not a fault: every beat draws in a few seconds
+  // then holds while ~20s of narration explains it, so these videos are static
+  // most of the time by design. What is actually broken is a held frame with
+  // nothing being said over it — that is a beat that ran dry or a render that
+  // died. So freezes are only reported when they overlap silence.
+  maxFreezeSeconds: 8,
+  maxSilentFreezeSeconds: 4,
   // Broadcast keeps text inside a title-safe box (~10%); the 2.5% edge test only
   // catches content actually falling off. This is the softer legibility rule.
   titleSafe: 0.1,
@@ -379,23 +385,52 @@ function main() {
   const fz = ffText([
     '-i', video, '-vf', `freezedetect=n=-58dB:d=${LIMITS.maxFreezeSeconds}`, '-f', 'null', '-',
   ]);
-  const longestFreeze = [...fz.matchAll(/freeze_duration:\s*(\d+(?:\.\d+)?)/g)]
-    .map((m) => Number(m[1]))
-    .reduce((a, b) => Math.max(a, b), 0);
+  const freezes = [];
+  {
+    const starts = [...fz.matchAll(/freeze_start:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+    const durs = [...fz.matchAll(/freeze_duration:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+    for (let i = 0; i < Math.min(starts.length, durs.length); i++) {
+      freezes.push({ start: starts[i], end: starts[i] + durs[i], dur: durs[i] });
+    }
+  }
+  const longestFreeze = freezes.reduce((a, f) => Math.max(a, f.dur), 0);
+
+  // Silence intervals, to intersect against the freezes.
+  const silTxt = ffText(['-i', video, '-af', 'silencedetect=noise=-50dB:d=1.0', '-f', 'null', '-']);
+  const silStarts = [...silTxt.matchAll(/silence_start:\s*(-?\d+(?:\.\d+)?)/g)].map((m) =>
+    Number(m[1]),
+  );
+  const silEnds = [...silTxt.matchAll(/silence_end:\s*(-?\d+(?:\.\d+)?)/g)].map((m) =>
+    Number(m[1]),
+  );
+  const silences = silStarts.map((st, i) => ({ start: st, end: silEnds[i] ?? duration }));
+  // The real defect: a frame that holds while nothing is being said.
+  let worstSilentFreeze = 0;
+  for (const f of freezes) {
+    for (const sl of silences) {
+      const overlap = Math.min(f.end, sl.end) - Math.max(f.start, sl.start);
+      if (overlap > worstSilentFreeze) worstSilentFreeze = overlap;
+    }
+  }
   const flashesPerSec = duration ? flashes / duration : 0;
   const motion = {
     samples: luma.length,
     flashes,
     flashes_per_sec: Number(flashesPerSec.toFixed(2)),
     longest_freeze_s: Number(longestFreeze.toFixed(1)),
+    // Reported for context: these videos hold a diagram while narrating, so a
+    // long freeze on its own is the format working, not a fault.
+    silent_freeze_s: Number(worstSilentFreeze.toFixed(1)),
   };
   if (flashesPerSec > LIMITS.maxFlashesPerSec) {
     failures.push(
       `${motion.flashes_per_sec} large luminance changes per second — a photosensitivity hazard (limit ${LIMITS.maxFlashesPerSec}/s)`,
     );
   }
-  if (longestFreeze > LIMITS.maxFreezeSeconds) {
-    warnings.push(`${motion.longest_freeze_s}s with no visible change — a stalled beat or a still`);
+  if (worstSilentFreeze > LIMITS.maxSilentFreezeSeconds) {
+    warnings.push(
+      `${worstSilentFreeze.toFixed(1)}s where the picture is frozen AND nothing is said — a beat that ran dry`,
+    );
   }
 
   // --- tail: did the render stop while the voice was still going? ---
@@ -427,7 +462,10 @@ function main() {
     if (a.true_peak_dbfs != null && a.true_peak_dbfs > LIMITS.truePeakMax) {
       failures.push(`true peak ${a.true_peak_dbfs} dBFS risks clipping (limit ${LIMITS.truePeakMax})`);
     }
-    if (a.clipped_ratio > LIMITS.maxClippedRatio) {
+    // Digital silence makes the peak-count parse meaningless (and it reported
+    // "100% clipped" on a silent file, which is simply untrue). A silent track is
+    // already failed by the loudness gate; don't also assert something false.
+    if (a.clipped_ratio > LIMITS.maxClippedRatio && (a.integrated_lufs ?? -99) > -50) {
       failures.push(`${(a.clipped_ratio * 100).toFixed(3)}% of samples are clipped`);
     }
     if (a.mono_drop_lu != null && a.mono_drop_lu > LIMITS.maxMonoDropLu) {
@@ -494,7 +532,8 @@ function main() {
           `silence ${(audio.silence_share * 100).toFixed(0)}%`,
       );
       console.log(
-        `  motion: ${motion.flashes_per_sec}/s flashes, longest freeze ${motion.longest_freeze_s}s`,
+        `  motion: ${motion.flashes_per_sec}/s flashes, longest hold ${motion.longest_freeze_s}s ` +
+          `(${motion.silent_freeze_s}s of it silent)`,
       );
     }
   }
