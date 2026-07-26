@@ -31,7 +31,10 @@
   .badge--settled { background: var(--ink); color: var(--paper); }
   .stmt { font-size:1.15rem; font-weight:300; max-width:64ch; margin:1.2rem 0 .4rem; }
   .mono { font-family:'Space Mono',monospace; }
-  .src { font-size:.82rem; opacity:.7; margin:.6rem 0 0; overflow-wrap:anywhere; }
+  /* Reference metadata, parked at the foot of the page rather than interrupting
+     the explainer -> significance -> progress flow. */
+  .src { font-size:.82rem; opacity:.7; margin:2.6rem 0 0; padding-top:1.2rem;
+         border-top:1px solid #16131033; overflow-wrap:anywhere; }
   .src a { color:inherit; text-decoration:underline; }
   .src a:hover { color: var(--red); opacity:1; }
   .formal { font-size:.9rem; margin:.6rem 0 0; overflow-x:auto; }
@@ -39,14 +42,17 @@
   .tag { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
          padding:.15rem .5rem; border:2px solid var(--ink); background:#fff; }
   .why { border-left: 6px solid var(--yellow); background:#fff; padding:.9rem 1.1rem;
-         margin:1.4rem 0 0; max-width:64ch; }
+         margin:1.1rem 0 0; max-width:64ch; }
   .why .k { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
             letter-spacing:.05em; display:block; margin-bottom:.3rem; }
   .why p { margin:0; font-weight:300; }
-  .video { margin:1.6rem 0 0; max-width:64ch; }
+  .video { margin:2rem 0 0; max-width:64ch; }
   .video .k { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
               letter-spacing:.05em; display:block; margin-bottom:.5rem; opacity:.7; }
-  .video video { width:100%; display:block; border: var(--line); background: var(--ink); }
+  /* aspect-ratio holds the slot at its final height, so filling it after the HEAD
+     probe doesn't shove the rest of the page down (layout shift). */
+  .video video { width:100%; aspect-ratio:16/9; display:block; border: var(--line);
+                 background: var(--ink); }
   .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin:2rem 0 0; }
   .metric { border: var(--line); background:#fff; padding:.9rem 1rem; }
   .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
@@ -177,20 +183,14 @@
         return '<li class="tag">' + esc(t.replace(/-/g, ' ')) + '</li>';
       }).join('') + '</ul>';
     }
+    // The explainer comes straight after the claim: it is the fastest way to
+    // understand the problem, so it leads rather than trailing the prose. A HEAD
+    // probe after render fills this only when the video actually exists, so
+    // conjectures without one show nothing at all.
+    h += '<div id="cj-video"></div>';
+    // …and the significance reads as the caption to it.
     if (d.significance) {
       h += '<div class="why"><span class="k">Why it matters</span><p>' + esc(d.significance) + '</p></div>';
-    }
-    // Explainer video, if one exists in R2 for this slug. Placeholder now; a HEAD
-    // probe after render fills it only when the video is actually there, so
-    // conjectures without a video show nothing.
-    h += '<div id="cj-video"></div>';
-    if (d.source_ref) {
-      // External references open in a new tab so the long URL can't hijack the
-      // page (and can't overflow the layout as raw text).
-      h += /^https?:\/\//.test(d.source_ref)
-        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
-          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
-        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
     }
     h += '<div class="metrics">' +
       '<div class="metric"><span class="v">' + m.tasks_open + '/' + m.tasks_total + '</span><span class="k">tasks open</span></div>' +
@@ -249,6 +249,15 @@
     } else {
       h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
     }
+    if (d.source_ref) {
+      // External references open in a new tab so the long URL can't hijack the
+      // page (and can't overflow the layout as raw text).
+      h += /^https?:\/\//.test(d.source_ref)
+        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
+        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    }
+
     page.innerHTML = h;
     maybeAddVideo(slug);
     maybeAddTasks(slug);
