@@ -148,7 +148,7 @@ async function main() {
     const spec = buildSpec(t);
     await pool.query(
       `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, kind, verify_via, sensitivity)
-       VALUES ($1, $2, $3, $4, $5, $6::task_effort, 'exploration', 'human_review', 'public')`,
+       VALUES ($1, $2, $3, $4, $5, $6::task_effort, 'exploration', 'render_check', 'public')`,
       [t.id, `Make the explainer video for ${t.name}`, spec, EST_CENTS, MAX_CENTS, EFFORT],
     );
     inserted++;
