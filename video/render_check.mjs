@@ -31,7 +31,13 @@ const PALETTE = [
 
 const LIMITS = {
   // Ink = anything not close to the paper background.
-  minInk: 0.004, // a beat that draws essentially nothing
+  minInk: 0.004, // a beat that draws essentially nothing, in absolute terms
+  // …but "empty" is really relative. A fixed floor can't tell a deliberately
+  // sparse style from a beat that failed to draw: a five-minute video shipped
+  // with a closing beat at ~0.5% ink while its healthy beats sat at 15-25%, and
+  // 0.5% clears any floor low enough to permit a minimal style. So also compare
+  // each beat against the median of THIS video's beats.
+  minInkRatioOfMedian: 0.25,
   maxInk: 0.62, // a wall of text, or overlapping blobs
   maxOffPalette: 0.3, // share of ink far from any palette blend (advisory)
   maxEdgeInk: 0.05, // ink in the outer margin => content clipped or off-frame
@@ -196,7 +202,7 @@ function sampleTimes(duration, startsPath) {
     if (Array.isArray(starts) && starts.length) {
       return starts.map((s, i) => {
         const next = i + 1 < starts.length ? starts[i + 1].start : duration;
-        return { name: s.name, t: s.start + (next - s.start) * 0.62 };
+        return { name: s.name, t: s.start + (next - s.start) * 0.62, start: s.start, end: next };
       });
     }
   }
@@ -204,6 +210,8 @@ function sampleTimes(duration, startsPath) {
   return Array.from({ length: n }, (_, i) => ({
     name: `t${i + 1}`,
     t: (duration * (i + 0.5)) / n,
+    start: (duration * i) / n,
+    end: (duration * (i + 1)) / n,
   }));
 }
 
@@ -317,20 +325,28 @@ function main() {
 
   // --- frames ---
   const frames = [];
-  for (const { name, t } of sampleTimes(duration, startsPath)) {
+  for (const { name, t, start: beatStart, end: beatEnd } of sampleTimes(duration, startsPath)) {
     let f = inspectFrame(video, t);
-    // A single blank sample is more often a cross-fade than an empty beat, so
-    // probe either side before calling it: a transition recovers, a genuinely
-    // empty beat stays empty.
+    // A blank sample is ambiguous: it might be a cross-fade, or the beat might
+    // genuinely be empty. The first version of this rescued the whole beat as
+    // soon as ANY nearby probe had ink — which let a five-minute video ship with
+    // a nearly-blank closing beat (0.2% ink where healthy beats sit at 15-25%),
+    // because one probe in the fade found something. So sample ACROSS the beat
+    // and judge on the median: a transition is a dip, an empty beat is a floor.
     if (f && f.ink < LIMITS.minInk) {
-      for (const dt of [0.6, -0.6, 1.2]) {
-        const alt = t + dt;
-        if (alt <= 0.05 || alt >= duration - 0.05) continue;
-        const g = inspectFrame(video, alt);
-        if (g && g.ink >= LIMITS.minInk) {
-          f = g;
-          break;
-        }
+      const span = Math.max(1.5, (beatEnd ?? t + 3) - (beatStart ?? t - 1));
+      const probes = [];
+      for (const frac of [0.15, 0.35, 0.55, 0.75, 0.95]) {
+        const at = (beatStart ?? t) + span * frac;
+        if (at <= 0.05 || at >= duration - 0.05) continue;
+        const g = inspectFrame(video, at);
+        if (g) probes.push(g);
+      }
+      if (probes.length) {
+        const sorted = [...probes].sort((a, b) => a.ink - b.ink);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        // Keep the median sample: it represents what the beat mostly looks like.
+        f = median;
       }
     }
     if (!f) {
@@ -368,6 +384,21 @@ function main() {
       );
     }
   }
+  // Relative emptiness: a beat far below this video's own norm didn't draw.
+  if (frames.length >= 4) {
+    const inks = frames.map((f) => f.ink).sort((a, b) => a - b);
+    const median = inks[Math.floor(inks.length / 2)];
+    const floor = median * LIMITS.minInkRatioOfMedian;
+    for (const f of frames) {
+      if (f.ink < floor && f.ink < 0.05) {
+        failures.push(
+          `beat "${f.name}" at ${f.t}s draws ${(f.ink * 100).toFixed(1)}% ink against this ` +
+            `video's median of ${(median * 100).toFixed(0)}% — it is nearly blank next to its own siblings`,
+        );
+      }
+    }
+  }
+
   // A scene that never changes is a still, not an explainer.
   const distinct = new Set(frames.map((f) => f.ink.toFixed(3)));
   if (frames.length > 2 && distinct.size === 1) {
