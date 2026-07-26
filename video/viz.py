@@ -12,6 +12,7 @@ worry about their visuals. No per-video close beat: the modular CTA outro
 
 import json
 import os
+import sys
 
 from manim import *
 
@@ -71,7 +72,37 @@ def mathtex(tex, color=INK, scale=0.9, max_w=11.0):
 class BeatScene(Scene):
     """Base for diagram-first conjecture videos. Subclasses implement build()."""
 
+    def _assert_brand_palette(self):
+        """Refuse to render if the scene's RED/BLUE/YELLOW/GREEN aren't ours.
+
+        `from manim import *` defines its own RED, BLUE, YELLOW and GREEN. If a
+        scene does that import AFTER `from viz import ...`, the wildcard silently
+        rebinds those four names to Manim's stock palette -- salmon #FC6255 and
+        sky #58C4DD instead of our #e1342b and #21449c. Nothing errors; the video
+        just renders off-brand, and only the logo (drawn inside this module, so
+        immune) stays correct. That shipped 22 videos before anyone noticed.
+
+        Import manim FIRST and viz second, so ours win the name race.
+        """
+        mod = sys.modules.get(type(self).__module__)
+        if mod is None:
+            return
+        wrong = {
+            name: getattr(mod, name)
+            for name, ours in (("RED", RED), ("BLUE", BLUE), ("YELLOW", YELLOW), ("GREEN", GREEN))
+            if hasattr(mod, name) and str(getattr(mod, name)).lower() != ours.lower()
+        }
+        if wrong:
+            got = ", ".join(f"{k}={v}" for k, v in sorted(wrong.items()))
+            raise RuntimeError(
+                f"{type(self).__module__} is not using the Givework palette ({got}).\n"
+                "`from manim import *` has shadowed it. Put the manim import FIRST:\n"
+                "    from manim import *\n"
+                "    from viz import BeatScene, PAPER, INK, RED, BLUE, YELLOW, GREEN, ..."
+            )
+
     def construct(self):
+        self._assert_brand_palette()
         spec_path = os.environ.get("SPEC_PATH", "/manim/spec.json")
         narr_dir = os.environ.get("NARR_DIR", "/manim/narration")
         self.spec = json.load(open(spec_path))

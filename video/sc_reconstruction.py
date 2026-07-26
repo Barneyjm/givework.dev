@@ -13,11 +13,11 @@ so every card drawn on screen is guaranteed to really be G minus one vertex.
 
 import numpy as np
 
+from manim import *
 from viz import (
     BeatScene, PAPER, INK, RED, BLUE, YELLOW, GREEN,
     TITLE_KW, BODY_KW, MONO_KW, eyebrow, caption, fit_width, mathtex,
 )
-from manim import *
 
 
 # --- the house graph: 5 vertices, 6 edges -----------------------------------

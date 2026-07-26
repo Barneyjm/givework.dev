@@ -4,11 +4,11 @@ crashing to 1. Then many hailstones converging to 1, the 2^71 verification wall
 with the feared escape-to-infinity, and the undecidability/impact iconography.
 """
 
+from manim import *
 from viz import (
     BeatScene, PAPER, INK, RED, BLUE, YELLOW, GREEN,
     TITLE_KW, BODY_KW, MONO_KW, eyebrow, caption, fit_width, mathtex,
 )
-from manim import *
 
 
 def collatz(n):

@@ -49,9 +49,15 @@ Narration rules that matter:
 
 Subclass `BeatScene` from [`viz.py`](./viz.py) and implement `build()`:
 
+Import **manim first, `viz` second** — the order matters. `from manim import *`
+defines its own `RED`, `BLUE`, `YELLOW` and `GREEN`, so importing it last silently
+rebinds those names to Manim's stock palette (salmon `#FC6255`, sky `#58C4DD`) and
+your video renders off-brand with no error. `BeatScene` now refuses to render if it
+catches this, but get the order right and you'll never see it.
+
 ```python
-from viz import BeatScene, INK, RED, BLUE, YELLOW, GREEN, eyebrow, caption, mathtex
 from manim import *
+from viz import BeatScene, INK, RED, BLUE, YELLOW, GREEN, eyebrow, caption, mathtex
 
 class ConjectureVideo(BeatScene):
     def build(self):
