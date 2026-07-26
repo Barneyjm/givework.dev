@@ -124,3 +124,44 @@ than hard-coding it (`sc_collatz.py` generates the real hailstone sequence;
 so the picture can't drift from the arithmetic. State honestly what is known versus
 conjectured: "checked to 2⁷¹, still unproven" is the interesting truth, and claiming
 more than that is the one thing we won't ship.
+
+## Automated render check
+
+Before a submitted video reaches a maintainer, `render_check.mjs` measures it:
+
+```bash
+node render_check.mjs <slug>-final.mp4 --starts narration_<slug>/starts.json
+# PASS  collatz-share.mp4  1920,1080  111.43s
+#   audio: -15.8 LUFS, peak -2.5 dBFS, centroid 2486 Hz, silence 2%
+```
+
+Frames are sampled at the **middle of each narration beat** (from `starts.json`),
+so it judges settled compositions rather than mid-transition blurs. A blank sample
+is re-probed either side before being reported, because a single empty frame is
+usually a cross-fade — an actually empty beat stays empty.
+
+**Rejects** (these fail the check):
+
+| check | catches |
+|---|---|
+| ink coverage below 0.4% | a beat that draws nothing |
+| ink coverage above 62% | a wall of text, or overlapping mobjects |
+| ink in the outer 2.5% margin | content clipped or pushed off-frame |
+| loudness outside −26..−9 LUFS | inaudible, or way too hot |
+| true peak above −0.5 dBFS | clipping on re-encode |
+| spectral centroid above 6.2 kHz | a harsh, hissy mix |
+| spectral flatness below 0.02 while loud | a pure tone — squeal or feedback |
+
+**Advises** (reported, not rejected): off-palette drift, mostly-silent runs, a very
+dark mix, and a scene whose beats all look identical.
+
+Palette drift is deliberately advisory. Measured against the 23 shipped videos,
+several good scenes drift 11–15% through `fill_opacity` blends and hand-picked
+shades; rejecting those would throw away shippable work, so it goes to a
+maintainer's eye instead.
+
+Thresholds were calibrated against real material rather than guessed — a 3 kHz
+pure tone measures 0.007 spectral flatness against 0.086 for a genuine
+narration-plus-music mix. The suite is verified both ways: **all 23 shipped videos
+pass**, and five deliberately broken ones (empty, off-palette, clipping, squealing,
+edge-clipped) are all caught.
