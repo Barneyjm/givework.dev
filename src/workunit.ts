@@ -195,7 +195,11 @@ export class WorkUnitExecutor implements Executor {
     let name = DEFAULT_RUNTIME;
     try {
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-      if (typeof manifest.runtime === 'string' && manifest.runtime in RUNTIMES) {
+      // hasOwn, not `in`: `in` walks the prototype chain, so "constructor",
+      // "toString" and "__proto__" would all pass this whitelist and then
+      // resolve to something that is not a RuntimeConfig — throwing instead of
+      // falling back, which defeats the fallback below.
+      if (typeof manifest.runtime === 'string' && Object.hasOwn(RUNTIMES, manifest.runtime)) {
         name = manifest.runtime;
       }
     } catch {
