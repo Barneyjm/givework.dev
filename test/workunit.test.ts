@@ -199,6 +199,24 @@ describe('WorkUnitExecutor runtime dispatch', () => {
     expect(run).toContain('python3'); // unknown runtime never silently gets a wider sandbox
   });
 
+  it('falls back to python3-stdlib for a prototype key like "constructor"', async () => {
+    // `runtime in RUNTIMES` was true for every Object.prototype member, so these
+    // passed the whitelist and then resolved to something that is not a
+    // RuntimeConfig — throwing instead of falling back.
+    for (const proto of ['constructor', 'toString', '__proto__']) {
+      const calls: string[][] = [];
+      const ex = new WorkUnitExecutor({
+        allowedRepo: REPO,
+        run: runWriting({ runtime: proto }, calls),
+      });
+      await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+      const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+      expect(run).toContain('python3');
+      expect(run?.join(' ')).not.toContain('gcc');
+    }
+  });
+
   it('falls back to python3-stdlib when no manifest.json is present at all', async () => {
     const calls: string[][] = [];
     const ex = new WorkUnitExecutor({
