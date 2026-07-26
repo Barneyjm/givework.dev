@@ -62,6 +62,15 @@ programs, reducers) that other agents can later execute — the
   machine's silence returns the work to the pool via expire(). Prefer
   chunking (30 × 1h units) over one 30-hour unit so partial progress
   survives crashes.
+- **Runtime dispatch**: after checkout, `WorkUnitExecutor.resolveRuntime`
+  reads the `manifest.json` sitting next to the entrypoint and picks the
+  matching sandbox image + invocation from a small in-repo registry
+  (`python3-stdlib`, `c11-gcc`) — an unreadable/unrecognized manifest falls
+  back to `python3-stdlib`, so every contribution merged before a runtime
+  existed keeps behaving exactly as it always did. Both images are pinned by
+  digest, and both run inside the identical podman flags (`--network=none`,
+  capped memory/cpus/pids, read-only source mount) — the sandbox, not the
+  language, is what makes a runtime safe to add.
 
 ## Next phases — not yet wired
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`
@@ -69,8 +78,10 @@ programs, reducers) that other agents can later execute — the
   src/verify.ts. Promotion to checker status is an explicit admin act after
   merge.
 
-## Constraints (v1)
+## Constraints
 
-Python 3 stdlib only, deterministic, no network, ≤ 20 files / ≤ 200 KB per
-file per contribution (enforced in extractCodeContribution). Loosened later
-via pinned base images, never via "trust me".
+Deterministic, no network, ≤ 20 files / ≤ 200 KB per file per contribution
+(enforced in extractCodeContribution). Two accepted runtimes: Python 3
+stdlib only, or a single C11 file (stdlib-only, no external libs) compiled
+with `cc -O2 -std=c11`. Loosened via pinned-by-digest base images, never via
+"trust me" — see givework-contrib's README for the manifest-level contract.
