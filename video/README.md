@@ -148,3 +148,31 @@ left to them rather than fought over.
 
 Reels caps at 90 seconds and most of these run 85-115s; the script warns rather
 than trimming, since where to cut is an editorial call.
+
+## Thumbnails and captions
+
+Social platforms take **frame 1** as the thumbnail, and ours used to be a plain
+grabbed title card with no branding on it. `set_first_frame.sh` puts the branded
+poster there instead:
+
+```bash
+./set_first_frame.sh collatz-share.mp4 collatz-poster.jpg out.mp4 1.0
+#                                                    trim the old 1s lead-in ^
+```
+
+For the vertical cut, `make_vertical_frame.mjs <slug> out.png --poster` renders a
+9:16 thumbnail — the same frame with a play button in the well and deliberately
+no second title, since the frame already carries it.
+
+`make_captions.mjs <slug>` writes an `.srt` from the spec's narration and the beat
+timings the render emitted:
+
+```bash
+SPEC_DIR=… NARR_DIR=… node make_captions.mjs collatz collatz.srt
+# collatz.srt  35 cues, 00:01:45,210 long
+```
+
+Most short-form video is watched **muted**, so an uncaptioned explainer reaches far
+fewer people than it should — and the words are already written down. Cues split at
+sentence boundaries, are apportioned by length within each beat, and wrap to at
+most two short lines so they read on a phone.

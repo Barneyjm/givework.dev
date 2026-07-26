@@ -75,7 +75,7 @@ function trio(x, y, scale) {
   );
 }
 
-export function buildFrameSvg({ title, subtitle, slugForUrl = '' }) {
+export function buildFrameSvg({ title, subtitle, slugForUrl = '', poster = false }) {
   const marginX = 72;
   const maxW = W - marginX * 2;
   const { size: tSize, lines } = fitTitle(title, maxW);
@@ -98,6 +98,19 @@ export function buildFrameSvg({ title, subtitle, slugForUrl = '' }) {
 
   // ink well behind the video, so any rounding gap reads as intentional matting
   svg += `<rect x="0" y="${VIDEO_TOP - 4}" width="${W}" height="${VIDEO_H + 8}" fill="${INK}"/>`;
+  if (poster) {
+    // A still that has to survive as a thumbnail: paper well plus a play button,
+    // and deliberately NO second title — the frame above already carries it, and a
+    // still is the thing people judge.
+    const cy = VIDEO_TOP + VIDEO_H / 2;
+    const cx = W / 2;
+    const r = Math.round(VIDEO_H * 0.28);
+    svg += `<rect x="0" y="${VIDEO_TOP}" width="${W}" height="${VIDEO_H}" fill="${PAPER}"/>`;
+    svg += `<circle cx="${cx + 14}" cy="${cy + 14}" r="${r}" fill="${YELLOW}"/>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${INK}"/>`;
+    const t = Math.round(r * 0.52);
+    svg += `<polygon points="${cx - t * 0.7},${cy - t} ${cx - t * 0.7},${cy + t} ${cx + t},${cy}" fill="${PAPER}"/>`;
+  }
 
   // subtitle + call to action below
   let y = VIDEO_TOP + VIDEO_H + 92;
@@ -136,6 +149,8 @@ async function main() {
     (f) => new Uint8Array(fs.readFileSync(path.join(FONT_DIR, f))),
   );
   const svg = buildFrameSvg({
+    // --poster emits the thumbnail still rather than the video backdrop.
+    poster: process.argv.includes('--poster'),
     slugForUrl: slug,
     title: spec.name ?? slug,
     subtitle: (spec.subtitle ?? '').replace(/^./, (c) => c.toUpperCase()),
