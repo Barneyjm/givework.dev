@@ -92,10 +92,85 @@ function goldbach(witness: any): CheckerResult {
   return { disproves: true, detail: { reason: 'no two-prime decomposition exists' } };
 }
 
+// Erdős–Gyárfás conjecture — OPEN. Every graph with minimum degree >= 3
+// contains a cycle whose length is a power of two. A witness {n, edges}
+// disproves it iff min degree >= 3 AND no cycle of length 4, 8, 16, ... <= n
+// exists. Only lengths up to n are possible at all (a cycle of length k needs
+// k distinct vertices), so the search is over a short, explicit list.
+const ERDOS_GYARFAS_MAX_N = 60; // generous over n=30, the current search frontier
+
+function hasCycleOfLength(adj: number[][], length: number, start: number): boolean {
+  // Canonically rooted: only explores vertices >= start, so each cycle is
+  // found once, from its own minimum-labeled vertex. The closing edge back
+  // to `start` is checked explicitly on the final step (never through the
+  // general neighbour branch, which must always exclude `start` to avoid
+  // closing early at the wrong length).
+  if (length < 3) return false;
+  const visited = new Array(adj.length).fill(false);
+  visited[start] = true;
+
+  function dfs(current: number, depth: number): boolean {
+    if (depth === length - 1) return adj[current].includes(start);
+    for (const nxt of adj[current]) {
+      if (nxt === start || nxt < start || visited[nxt]) continue;
+      visited[nxt] = true;
+      if (dfs(nxt, depth + 1)) return true;
+      visited[nxt] = false;
+    }
+    return false;
+  }
+  return dfs(start, 0);
+}
+
+function erdosGyarfas(witness: any): CheckerResult {
+  const n = witness?.n;
+  const edges = witness?.edges;
+  if (!Number.isInteger(n) || n <= 0 || !Array.isArray(edges)) {
+    return { disproves: false, detail: { reason: 'witness must be {n: int, edges: [[u,v],...]}' } };
+  }
+  if (n > ERDOS_GYARFAS_MAX_N) {
+    return { disproves: false, inconclusive: true, detail: { reason: 'beyond checkable range' } };
+  }
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  const seen = new Set<string>();
+  for (const e of edges) {
+    if (!Array.isArray(e) || e.length !== 2) {
+      return { disproves: false, detail: { reason: 'each edge must be [u, v]' } };
+    }
+    const [u, v] = e;
+    if (!Number.isInteger(u) || !Number.isInteger(v) || u < 0 || u >= n || v < 0 || v >= n) {
+      return { disproves: false, detail: { reason: 'edge endpoint out of range [0, n)' } };
+    }
+    if (u === v) return { disproves: false, detail: { reason: 'self-loop is not a simple graph' } };
+    const key = u < v ? `${u},${v}` : `${v},${u}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      adj[u].push(v);
+      adj[v].push(u);
+    }
+  }
+  const minDegree = adj.reduce((m, a) => Math.min(m, a.length), Infinity);
+  const found: number[] = [];
+  for (let length = 4; length <= n; length *= 2) {
+    for (let s = 0; s < n; s++) {
+      if (adj[s].length < 2) continue;
+      if (hasCycleOfLength(adj, length, s)) {
+        found.push(length);
+        break;
+      }
+    }
+  }
+  return {
+    disproves: minDegree >= 3 && found.length === 0,
+    detail: { minDegree, powerOfTwoLengthsFound: found },
+  };
+}
+
 /** Registry of named checkers a target can reference via targets.checker. */
 export const CHECKERS: Record<string, WitnessChecker> = {
   euler_sum_of_powers: eulerSumOfPowers,
   goldbach,
+  erdos_gyarfas: erdosGyarfas,
 };
 
 // ---------------------------------------------------------------------------

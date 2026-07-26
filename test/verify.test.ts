@@ -112,6 +112,60 @@ describe('auto_rerun verification', () => {
     expect((await targetRow(target)).status).toBe('open');
   });
 
+  it('does not disprove for a witness with a power-of-two cycle (Heawood graph)', async () => {
+    // Heawood graph (n=14): min degree 3, no 4-cycle, but has an 8-cycle — so
+    // it does NOT disprove the conjecture. No real counterexample is known
+    // (it is open), matching the goldbach checker's test scope above.
+    const target = await createConjecture({
+      slug: 'erdos-gyarfas-heawood',
+      checker: 'erdos_gyarfas',
+    });
+    const task = await createTask(target, {
+      max: 500,
+      kind: 'counterexample_search',
+      verify_via: 'auto_rerun',
+    });
+    const heawoodEdges = [
+      [0, 1],
+      [0, 13],
+      [0, 5],
+      [1, 2],
+      [1, 10],
+      [2, 3],
+      [2, 7],
+      [3, 4],
+      [3, 12],
+      [4, 5],
+      [4, 9],
+      [5, 6],
+      [6, 7],
+      [6, 11],
+      [7, 8],
+      [8, 9],
+      [8, 13],
+      [9, 10],
+      [10, 11],
+      [11, 12],
+      [12, 13],
+    ];
+    await submitCandidate(task, { n: 14, edges: heawoodEdges });
+
+    const v = await runAutoVerification(task);
+    expect(v.verdict).toBe('failed');
+    expect(await taskStatus(task)).toBe('open'); // back to the pool
+    expect((await targetRow(target)).status).toBe('open'); // conjecture untouched
+  });
+
+  it('rejects a malformed witness rather than crashing', async () => {
+    const target = await createConjecture({ slug: 'erdos-gyarfas-bad', checker: 'erdos_gyarfas' });
+    const task = await createTask(target, { max: 500, verify_via: 'auto_rerun' });
+    await submitCandidate(task, { n: 4, edges: [[0, 0]] }); // self-loop
+
+    const v = await runAutoVerification(task);
+    expect(v.verdict).toBe('failed');
+    expect((await targetRow(target)).status).toBe('open');
+  });
+
   it('leaves human_review to the caller (not handled)', async () => {
     const target = await createConjecture({ slug: 'hr' });
     const task = await createTask(target, { max: 500, verify_via: 'human_review' });
