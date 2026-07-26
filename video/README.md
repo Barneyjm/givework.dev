@@ -160,6 +160,24 @@ several good scenes drift 11–15% through `fill_opacity` blends and hand-picked
 shades; rejecting those would throw away shippable work, so it goes to a
 maintainer's eye instead.
 
+### Running it on a schedule
+
+`verify_queue.sh` is the unattended version: it picks up every submitted task
+whose `verify_via` is `render_check`, fetches the contributor's merged spec and
+scene, renders, measures, and posts pass/fail with the full report attached as the
+verification's detail.
+
+```bash
+GIVEWORK_ADMIN_TOKEN=… ./verify_queue.sh          # or --dry-run
+# */30 * * * * cd <repo>/video && GIVEWORK_ADMIN_TOKEN=… ./verify_queue.sh
+```
+
+It runs here rather than in the platform because the control plane is a
+Cloudflare Worker with no ffmpeg — the same arrangement `proof_checker` and
+`replication` already use, where a maintainer's machine stands in for a sandbox.
+A pass still leaves taste to a human; what it removes is having to watch every
+submission to find the ones that are simply broken.
+
 Thresholds were calibrated against real material rather than guessed — a 3 kHz
 pure tone measures 0.007 spectral flatness against 0.086 for a genuine
 narration-plus-music mix. The suite is verified both ways: **all 23 shipped videos

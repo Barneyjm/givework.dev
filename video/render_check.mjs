@@ -48,6 +48,21 @@ const LIMITS = {
   // 0.086 — a 12x gap. Sit well below the healthy value so a sparse moment in a
   // legitimate mix can't trip it.
   minFlatness: 0.02,
+  // Mono fold-down: phones and laptop speakers sum L+R. Narration pasted
+  // out-of-phase across channels cancels there while sounding fine in headphones.
+  // NOTE the baseline: EBU R128 sums channel energies, so a perfectly correlated
+  // stereo pair ALREADY measures ~3 LU quieter once folded to mono. Only a drop
+  // materially beyond that indicates real cancellation.
+  maxMonoDropLu: 7, // stereo->mono loss beyond this is phase cancellation
+  maxLra: 20, // LU; wider than this jumps between whisper and shout
+  maxDcOffset: 0.02, // wasted headroom, and clicks at edits
+  maxChannelImbalance: 6, // dB between L and R
+  // Photosensitivity: rapid large luminance swings. Broadcast QC (Harding)
+  // rejects >3 flashes/second; this is a safety property, not a taste one.
+  maxFlashesPerSec: 3,
+  flashLumaDelta: 20, // 0-255 mean-luma jump that counts as a flash
+  maxFreezeSeconds: 12, // a long motionless stretch is a stall or a still
+
 };
 
 const ff = (args) =>
@@ -211,9 +226,28 @@ function analyseAudio(video, duration) {
     0,
   );
 
+  // Mono fold-down. Sum to one channel and re-measure: if the narration was
+  // out of phase between L and R it largely cancels, and the loudness collapses.
+  const monoTxt = ffText([
+    '-i', video, '-filter_complex', 'pan=mono|c0=0.5*c0+0.5*c1,ebur128', '-f', 'null', '-',
+  ]);
+  const monoM = [...monoTxt.matchAll(/I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/g)];
+  const monoLufs = monoM.length ? Number(monoM[monoM.length - 1][1]) : null;
+  const monoDrop =
+    integrated != null && monoLufs != null ? Number((integrated - monoLufs).toFixed(2)) : null;
+
+  const dc = num('DC offset');
+  // per-channel RMS, to catch narration sitting in one ear
+  const rmsAll = [...st.matchAll(/RMS level dB:\s*(-?\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+  const imbalance = rmsAll.length >= 3 ? Math.abs(rmsAll[0] - rmsAll[1]) : 0;
+
   return {
     present: true,
     integrated_lufs: integrated,
+    mono_lufs: monoLufs,
+    mono_drop_lu: monoDrop,
+    dc_offset: dc == null ? null : Math.abs(dc),
+    channel_imbalance_db: Number(imbalance.toFixed(2)),
     true_peak_dbfs: truePeak,
     lra_lu: lra,
     clipped_ratio: flatCount && totalSamples ? flatCount / totalSamples : 0,
@@ -221,6 +255,21 @@ function analyseAudio(video, duration) {
     spectral_centroid_hz: mean(centroidMatches),
     spectral_flatness: mean(flatnessMatches),
   };
+}
+
+/**
+ * Mean luma per frame (2 fps is plenty for both purposes), used for two checks a
+ * broadcast QC pass would insist on: rapid flashing, which is a photosensitivity
+ * hazard, and long motionless stretches, which mean the render stalled.
+ */
+function lumaTimeline(video) {
+  const txt = ffText([
+    '-i', video, '-vf', 'fps=2,scale=32:18,signalstats,metadata=print:file=-',
+    '-f', 'null', '-',
+  ]);
+  return [...txt.matchAll(/lavfi\.signalstats\.YAVG=(\d+(?:\.\d+)?)/g)].map((m) =>
+    Number(m[1]),
+  );
 }
 
 function main() {
@@ -297,6 +346,36 @@ function main() {
     warnings.push('every sampled beat looks identical — the scene may not be animating');
   }
 
+  // --- motion: flashing and freezes ---
+  const luma = lumaTimeline(video);
+  let flashes = 0;
+  for (let i = 1; i < luma.length; i++) {
+    if (Math.abs(luma[i] - luma[i - 1]) >= LIMITS.flashLumaDelta) flashes++;
+  }
+  // Mean luma is far too coarse for stillness — a caption fading in at one corner
+  // barely moves it. freezedetect compares whole frames, which is the real question.
+  const fz = ffText([
+    '-i', video, '-vf', `freezedetect=n=-58dB:d=${LIMITS.maxFreezeSeconds}`, '-f', 'null', '-',
+  ]);
+  const longestFreeze = [...fz.matchAll(/freeze_duration:\s*(\d+(?:\.\d+)?)/g)]
+    .map((m) => Number(m[1]))
+    .reduce((a, b) => Math.max(a, b), 0);
+  const flashesPerSec = duration ? flashes / duration : 0;
+  const motion = {
+    samples: luma.length,
+    flashes,
+    flashes_per_sec: Number(flashesPerSec.toFixed(2)),
+    longest_freeze_s: Number(longestFreeze.toFixed(1)),
+  };
+  if (flashesPerSec > LIMITS.maxFlashesPerSec) {
+    failures.push(
+      `${motion.flashes_per_sec} large luminance changes per second — a photosensitivity hazard (limit ${LIMITS.maxFlashesPerSec}/s)`,
+    );
+  }
+  if (longestFreeze > LIMITS.maxFreezeSeconds) {
+    warnings.push(`${motion.longest_freeze_s}s with no visible change — a stalled beat or a still`);
+  }
+
   // --- audio ---
   const audio = analyseAudio(video, duration);
   if (!audio.present) {
@@ -313,6 +392,21 @@ function main() {
     }
     if (a.clipped_ratio > LIMITS.maxClippedRatio) {
       failures.push(`${(a.clipped_ratio * 100).toFixed(3)}% of samples are clipped`);
+    }
+    if (a.mono_drop_lu != null && a.mono_drop_lu > LIMITS.maxMonoDropLu) {
+      failures.push(
+        `folding to mono loses ${a.mono_drop_lu} LU (${a.integrated_lufs} -> ${a.mono_lufs}) — ` +
+          `the mix cancels on phone speakers (about 3 LU is normal)`,
+      );
+    }
+    if (a.dc_offset != null && a.dc_offset > LIMITS.maxDcOffset) {
+      failures.push(`DC offset ${a.dc_offset} wastes headroom and clicks at edits`);
+    }
+    if (a.channel_imbalance_db > LIMITS.maxChannelImbalance) {
+      warnings.push(`channels differ by ${a.channel_imbalance_db} dB — the mix leans to one ear`);
+    }
+    if (a.lra_lu != null && a.lra_lu > LIMITS.maxLra) {
+      warnings.push(`loudness range ${a.lra_lu} LU — it jumps between whisper and shout`);
     }
     if (a.silence_share > LIMITS.maxSilenceShare) {
       warnings.push(`${(a.silence_share * 100).toFixed(0)}% of the run is silent`);
@@ -345,6 +439,7 @@ function main() {
     failures,
     warnings,
     frames,
+    motion,
     audio,
   };
 
@@ -358,7 +453,11 @@ function main() {
       console.log(
         `  audio: ${audio.integrated_lufs} LUFS, peak ${audio.true_peak_dbfs} dBFS, ` +
           `centroid ${Math.round(audio.spectral_centroid_hz ?? 0)} Hz, ` +
+          `mono -${audio.mono_drop_lu ?? 0} LU, ` +
           `silence ${(audio.silence_share * 100).toFixed(0)}%`,
+      );
+      console.log(
+        `  motion: ${motion.flashes_per_sec}/s flashes, longest freeze ${motion.longest_freeze_s}s`,
       );
     }
   }
