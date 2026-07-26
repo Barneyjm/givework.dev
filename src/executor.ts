@@ -19,10 +19,15 @@ import { extractWorkUnit, WorkUnitExecutor } from './workunit.js';
 // the ledger and the contribution record. A real executor throws; the runner
 // releases the task so another volunteer can pick it up.
 
+export type Effort = 'low' | 'medium' | 'high';
+
 export interface ExecTask {
   task_id: string;
   title: string;
+  /** Legacy: the concrete model a task named. Superseded by `effort`. */
   model: string;
+  /** How much reasoning this task needs. The runner maps it to a real model. */
+  effort?: Effort;
   max_cost_cents: number;
   spec: {
     prompt?: string;
@@ -68,6 +73,34 @@ const PRICING: Record<string, { in: number; out: number }> = {
   'claude-haiku-4-5': { in: 1, out: 5 },
 };
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
+
+/**
+ * Tier -> model, resolved on the volunteer's machine.
+ *
+ * This mapping deliberately lives here and not in the task: the control plane
+ * has no idea which models a given volunteer's plan includes, and a task should
+ * outlive any particular model name. A volunteer whose plan lacks Opus, or who
+ * would rather spend Sonnet on everything, overrides it:
+ *
+ *   GIVEWORK_MODEL_HIGH=claude-sonnet-4-6 givework run --watch
+ *
+ * A different harness (codex, a local model) supplies its own table — the task
+ * says "this needs careful reasoning" and each harness answers in its own terms.
+ */
+const EFFORT_MODELS: Record<Effort, string> = {
+  low: 'claude-haiku-4-5',
+  medium: 'claude-sonnet-4-6',
+  high: 'claude-opus-4-8',
+};
+
+export function modelForEffort(
+  effort: Effort | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const tier: Effort = effort ?? 'medium';
+  const override = env[`GIVEWORK_MODEL_${tier.toUpperCase()}`];
+  return override?.trim() ? override.trim() : EFFORT_MODELS[tier];
+}
 
 function pricingFor(model: string) {
   return PRICING[model] ?? PRICING[DEFAULT_MODEL];
@@ -237,7 +270,13 @@ export class ClaudeCliExecutor implements Executor {
   }
 
   async execute(task: ExecTask): Promise<ExecResult> {
-    const model = task.model || DEFAULT_MODEL;
+    // Prefer the tier. Fall back to a legacy task that named a real model, then
+    // to the default — so old rows keep working through the transition.
+    const model = task.effort
+      ? modelForEffort(task.effort)
+      : task.model && task.model !== 'by-effort'
+        ? task.model
+        : DEFAULT_MODEL;
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +

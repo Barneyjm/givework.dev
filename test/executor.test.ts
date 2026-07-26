@@ -4,6 +4,7 @@ import {
   coerceResult,
   type ExecTask,
   getExecutor,
+  modelForEffort,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
@@ -81,6 +82,39 @@ describe('ClaudeCliExecutor', () => {
     expect(r.result).toEqual({ summary: 'done' });
     expect(r.actual_cost_cents).toBe(2); // ceil(0.0123 * 100)
     expect((r.raw_usage as any).total_cost_usd).toBe(0.0123);
+  });
+
+  it('maps the effort tier to a model, and lets the volunteer override it', async () => {
+    const seen: string[] = [];
+    const run = async (args: string[]) => {
+      seen.push(args[args.indexOf('--model') + 1]);
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    const exec = new ClaudeCliExecutor({ run });
+    await exec.execute({ ...task, effort: 'high' });
+    await exec.execute({ ...task, effort: 'medium' });
+    await exec.execute({ ...task, effort: 'low' });
+    expect(seen).toEqual(['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']);
+
+    // a volunteer whose plan lacks Opus (or who'd rather not spend it) remaps the tier
+    expect(modelForEffort('high', { GIVEWORK_MODEL_HIGH: 'claude-sonnet-4-6' })).toBe(
+      'claude-sonnet-4-6',
+    );
+    // blank/absent overrides fall through to the default table
+    expect(modelForEffort('high', { GIVEWORK_MODEL_HIGH: '  ' })).toBe('claude-opus-4-8');
+    expect(modelForEffort(undefined, {})).toBe('claude-sonnet-4-6'); // unset -> medium
+  });
+
+  it('still honours a legacy task that named a real model', async () => {
+    const seen: string[] = [];
+    const run = async (args: string[]) => {
+      seen.push(args[args.indexOf('--model') + 1]);
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    const exec = new ClaudeCliExecutor({ run });
+    await exec.execute({ ...task, model: 'claude-opus-4-8' }); // no effort set
+    await exec.execute({ ...task, model: 'by-effort' }); // sentinel -> default tier
+    expect(seen).toEqual(['claude-opus-4-8', 'claude-sonnet-4-6']);
   });
 
   it('honours a task-advertised timeout, but only to raise it and only up to the cap', async () => {

@@ -17,7 +17,8 @@ import { closePool, pool } from '../src/db.js';
 // slug `erdos-<n>`.
 const EST_CENTS = 300;
 const MAX_CENTS = 700;
-const MODEL = 'claude-opus-4-8';
+// These want genuine mathematical reasoning, not throughput.
+const EFFORT = 'high';
 
 interface ErdosTask {
   erdos_number: number;
@@ -69,10 +70,10 @@ async function main() {
       continue;
     }
     await pool.query(
-      `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model,
+      `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, effort,
                           kind, verify_via, sensitivity)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::task_kind, 'human_review', 'public')`,
-      [targetId, t.title, t.spec, EST_CENTS, MAX_CENTS, MODEL, t.kind],
+       VALUES ($1, $2, $3, $4, $5, $6::task_effort, $7::task_kind, 'human_review', 'public')`,
+      [targetId, t.title, t.spec, EST_CENTS, MAX_CENTS, EFFORT, t.kind],
     );
     inserted++;
     console.log(`  + ${slug.padEnd(12)} ${t.title.slice(0, 68)}`);
