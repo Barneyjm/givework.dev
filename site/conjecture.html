@@ -274,9 +274,15 @@
       .then(function (r) {
         var slot = document.getElementById('cj-video');
         if (!r.ok || !slot) return;
+        // Captions are a <track>, so they can be toggled and read by assistive
+        // tech. WebVTT, not SRT — browsers don't accept SRT here. A conjecture
+        // whose .vtt hasn't been generated simply shows no caption button.
+        var vtt = '/videos/' + encodeURIComponent(slug) + '.vtt';
         slot.innerHTML =
           '<div class="video"><span class="k">Watch: what this conjecture is</span>' +
-          '<video controls preload="metadata" playsinline poster="' + poster + '" src="' + src + '"></video></div>';
+          '<video controls preload="metadata" playsinline poster="' + poster + '" src="' + src + '">' +
+          '<track kind="captions" srclang="en" label="English" default src="' + vtt + '" />' +
+          '</video></div>';
       })
       .catch(function () {});
   }
