@@ -62,6 +62,13 @@ const LIMITS = {
   maxFlashesPerSec: 3,
   flashLumaDelta: 20, // 0-255 mean-luma jump that counts as a flash
   maxFreezeSeconds: 12, // a long motionless stretch is a stall or a still
+  // Broadcast keeps text inside a title-safe box (~10%); the 2.5% edge test only
+  // catches content actually falling off. This is the softer legibility rule.
+  titleSafe: 0.1,
+  maxTitleSafeInk: 0.22,
+  // Narration cut mid-word at the tail — the render ended before the voice did.
+  tailWindow: 0.45, // seconds examined at the very end
+  maxTailLevelDb: -34, // still this loud at the cut => speech was truncated
 
 };
 
@@ -138,6 +145,8 @@ function inspectFrame(video, t) {
   let off = 0;
   let edgeInk = 0;
   let edgeTotal = 0;
+  let tsInk = 0;
+  let tsTotal = 0;
   for (let i = 0; i < total; i++) {
     const r = raw[i * 3];
     const g = raw[i * 3 + 1];
@@ -157,12 +166,20 @@ function inspectFrame(video, t) {
       edgeTotal++;
       if (isInk) edgeInk++;
     }
+    const tx = Math.round(W * LIMITS.titleSafe);
+    const ty = Math.round(H * LIMITS.titleSafe);
+    const outsideTitleSafe = x < tx || x >= W - tx || y < ty || y >= H - ty;
+    if (outsideTitleSafe) {
+      tsTotal++;
+      if (isInk) tsInk++;
+    }
   }
   return {
     t: Number(t.toFixed(2)),
     ink: ink / total,
     off_palette: ink ? off / ink : 0,
     edge_ink: edgeTotal ? edgeInk / edgeTotal : 0,
+    title_safe_ink: tsTotal ? tsInk / tsTotal : 0,
   };
 }
 
@@ -334,6 +351,11 @@ function main() {
         `beat "${name}" at ${f.t}s: ${(f.off_palette * 100).toFixed(0)}% of its ink is off-palette`,
       );
     }
+    if (f.title_safe_ink > LIMITS.maxTitleSafeInk && f.edge_ink <= LIMITS.maxEdgeInk) {
+      warnings.push(
+        `beat "${name}" at ${f.t}s puts ${(f.title_safe_ink * 100).toFixed(0)}% of its ink outside the title-safe area`,
+      );
+    }
     if (f.edge_ink > LIMITS.maxEdgeInk) {
       failures.push(
         `beat "${name}" at ${f.t}s has ink in the outer margin (${(f.edge_ink * 100).toFixed(0)}%) — content is clipped or off-frame`,
@@ -374,6 +396,21 @@ function main() {
   }
   if (longestFreeze > LIMITS.maxFreezeSeconds) {
     warnings.push(`${motion.longest_freeze_s}s with no visible change — a stalled beat or a still`);
+  }
+
+  // --- tail: did the render stop while the voice was still going? ---
+  const tailStart = Math.max(0, duration - LIMITS.tailWindow);
+  const tailTxt = ffText([
+    '-ss', String(tailStart), '-i', video, '-af', 'astats=metadata=1:reset=0', '-f', 'null', '-',
+  ]);
+  const tailRms = [...tailTxt.matchAll(/RMS level dB:\s*(-?\d+(?:\.\d+)?)/g)].map((m) =>
+    Number(m[1]),
+  );
+  const tailLevel = tailRms.length ? Math.max(...tailRms) : null;
+  if (tailLevel != null && tailLevel > LIMITS.maxTailLevelDb) {
+    warnings.push(
+      `audio is still at ${tailLevel} dB in the final ${LIMITS.tailWindow}s — the narration may be cut off mid-word`,
+    );
   }
 
   // --- audio ---
