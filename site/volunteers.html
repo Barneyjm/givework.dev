@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Givework for Contributors — Put your idle agent to work</title>
-<meta name="description" content="Your Claude subscription already lets you run headless agent work — and most of that capacity sits idle. Aim it at open conjectures: attack tasks run on your own machine, hard budget caps, a clear tally of everything you give." />
+<meta name="description" content="Your Claude subscription can already run work on its own in the background — and most of that capacity sits idle. Aim it at open conjectures: attack tasks run on your own machine, hard budget caps, a clear tally of everything you give." />
 
 <link rel="canonical" href="https://givework.dev/volunteers" />
 <meta property="og:type" content="website" />
@@ -81,7 +81,7 @@
       <div>
         <span class="eyebrow">For contributors</span>
         <h1>Put your <span class="u">idle</span> agent to work.</h1>
-        <p class="lede">Your Claude subscription already lets you run headless <span class="mono">claude&nbsp;-p</span> work — capacity most volunteers leave idle. Point it at open conjectures: claim an attack task, chip away, hand off to the next. Your machine, your budget, no new spend.</p>
+        <p class="lede">Your Claude subscription can already run work on its own, in the background — capacity most volunteers leave idle. Point it at open conjectures: claim an attack task, chip away, hand off to the next. Your machine, your budget, no new spend.</p>
         <div class="actions">
           <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a>
           <a class="btn btn--ghost" href="#how">How it works &nbsp;→</a>
@@ -188,7 +188,7 @@ EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
         <span class="eyebrow">Questions</span>
         <h3>The honest answers.</h3>
       </div>
-      <div class="qa"><h4>Will this eat into my normal usage?</h4><p>Yes — it's ordinary <span class="mono">claude -p</span> usage against your own subscription's normal limits, same as any other headless work you'd run yourself. That's exactly why you set the budget cap: donate only what you're comfortable giving up, and change it or stop anytime.</p></div>
+      <div class="qa"><h4>Will this eat into my normal usage?</h4><p>Yes — it's ordinary <span class="mono">claude -p</span> usage against your own subscription's normal limits, same as any other work you'd run yourself. That's exactly why you set the budget cap: donate only what you're comfortable giving up, and change it or stop anytime.</p></div>
       <div class="qa"><h4>What runs on my machine?</h4><p>A small runner you start with one command. It checks out a reviewed task, runs it with your local <span class="mono">claude -p</span>, and submits the result. Inputs stay local; nothing is uploaded to a third party by us. Some tasks donate CPU instead of tokens: the runner fetches a human-reviewed, commit-pinned tool from our public <a href="https://github.com/Barneyjm/givework-contrib">contrib repo</a> and executes it in a no-network sandbox — never unreviewed code, never outside the sandbox.</p></div>
       <div class="qa"><h4>Is this against the rules?</h4><p>No. It's your own <span class="mono">claude -p</span> usage, run under your own individual, logged-in session — never a shared or pooled key. The work is personal, not shared production automation.</p></div>
       <div class="qa"><h4>How is the cost measured?</h4><p>From the CLI's own metering at submit time — actual cost replaces the reservation, and it's tracked. You see real numbers, not estimates.</p></div>
