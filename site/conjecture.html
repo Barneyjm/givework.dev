@@ -258,13 +258,16 @@
   // broken-player flash on conjectures that don't have a video yet).
   function maybeAddVideo(slug) {
     var src = '/videos/' + encodeURIComponent(slug) + '.mp4';
+    // The branded still we render alongside every video. Without it the player is
+    // a black rectangle until the first frame decodes — and on iOS, until it plays.
+    var poster = '/videos/' + encodeURIComponent(slug) + '-poster.jpg';
     fetch(src, { method: 'HEAD' })
       .then(function (r) {
         var slot = document.getElementById('cj-video');
         if (!r.ok || !slot) return;
         slot.innerHTML =
           '<div class="video"><span class="k">Watch: what this conjecture is</span>' +
-          '<video controls preload="metadata" playsinline src="' + src + '"></video></div>';
+          '<video controls preload="metadata" playsinline poster="' + poster + '" src="' + src + '"></video></div>';
       })
       .catch(function () {});
   }
