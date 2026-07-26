@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ExecTask } from '../src/executor.js';
 import { extractWorkUnit, mergeWorkUnitInput, WorkUnitExecutor } from '../src/workunit.js';
@@ -127,5 +129,125 @@ describe('WorkUnitExecutor', () => {
       run: async (cmd, args) => (cmd === 'podman' && args[0] === 'run' ? 'garbage' : ''),
     });
     await expect(ex.execute(task({ code: CODE }))).rejects.toThrow(/non-JSON/);
+  });
+});
+
+describe('WorkUnitExecutor runtime dispatch', () => {
+  const ENTRYPOINT = 'example-conjecture/native-check/check.c';
+
+  /** Mocks the real `git checkout` side effect: a manifest.json (and, for a
+   * compiled runtime, the source file) landing next to the entrypoint in the
+   * checkout dir — exactly what a real merged contribution provides. */
+  function runWriting(manifest: unknown, calls: string[][]) {
+    return async (cmd: string, args: string[], opts?: { cwd?: string; input?: string }) => {
+      calls.push([cmd, ...args]);
+      if (cmd === 'git' && args[0] === 'checkout' && opts?.cwd) {
+        const entryDir = path.join(opts.cwd, path.dirname(ENTRYPOINT));
+        await mkdir(entryDir, { recursive: true });
+        await writeFile(path.join(entryDir, 'manifest.json'), JSON.stringify(manifest));
+        await writeFile(path.join(opts.cwd, ENTRYPOINT), '// stub — podman is mocked below');
+        return '';
+      }
+      if (cmd === 'podman' && args[0] === 'run') {
+        return '{"outcome":"progress","summary":"ok"}';
+      }
+      return '';
+    };
+  }
+
+  it('dispatches to the gcc image and a compile-then-run command for c11-gcc', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: runWriting({ runtime: 'c11-gcc' }, calls),
+    });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toBeDefined();
+    expect(run?.some((a) => a.startsWith('docker.io/library/gcc@sha256:'))).toBe(true);
+    expect(run).toContain('sh');
+    expect(run?.some((a) => a.includes('cc -O2 -std=c11') && a.includes(ENTRYPOINT))).toBe(true);
+    expect(run?.some((a) => a.includes('&& /tmp/wu_bin'))).toBe(true);
+    // never the python image for this runtime
+    expect(run?.some((a) => a.includes('python'))).toBe(false);
+  });
+
+  it('still dispatches to python3 when the manifest says so explicitly', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: runWriting({ runtime: 'python3-stdlib' }, calls),
+    });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain('python3');
+    expect(run).toContain(ENTRYPOINT);
+    expect(run?.some((a) => a.startsWith('docker.io/library/python@sha256:'))).toBe(true);
+  });
+
+  it('falls back to python3-stdlib for an unrecognized runtime name', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: runWriting({ runtime: 'rust-nightly-unsandboxed' }, calls),
+    });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain('python3'); // unknown runtime never silently gets a wider sandbox
+  });
+
+  it('falls back to python3-stdlib when no manifest.json is present at all', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) => {
+        calls.push([cmd, ...args]);
+        return cmd === 'podman' && args[0] === 'run' ? '{"outcome":"progress"}' : '';
+      },
+    });
+    await ex.execute(task({ code: CODE })); // no checkout side effect -> empty dir
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain('python3');
+  });
+
+  it('honors a per-runtime image override for c11-gcc without touching python', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      runtimeImages: { 'c11-gcc': `docker.io/example/pinned-gcc@sha256:${'ab'.repeat(32)}` },
+      run: runWriting({ runtime: 'c11-gcc' }, calls),
+    });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain(`docker.io/example/pinned-gcc@sha256:${'ab'.repeat(32)}`);
+  });
+
+  it('single-quote-escapes an entrypoint path for the c11-gcc shell command', async () => {
+    // isSafeRelPath already forbids '..', leading '/', backslashes and NUL, but a
+    // segment may still contain shell metacharacters (spaces, quotes) — the sh -c
+    // interpolation must not let that break out of the intended `cc ... && run` form.
+    const tricky = "example-conjecture/it's a dir/check.c";
+    const calls: string[][] = [];
+    const run = async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      calls.push([cmd, ...args]);
+      if (cmd === 'git' && args[0] === 'checkout' && opts?.cwd) {
+        const entryDir = path.join(opts.cwd, path.dirname(tricky));
+        await mkdir(entryDir, { recursive: true });
+        await writeFile(
+          path.join(entryDir, 'manifest.json'),
+          JSON.stringify({ runtime: 'c11-gcc' }),
+        );
+        return '';
+      }
+      return cmd === 'podman' && args[0] === 'run' ? '{"outcome":"progress"}' : '';
+    };
+    const ex = new WorkUnitExecutor({ allowedRepo: REPO, run });
+    await ex.execute(task({ code: { ...CODE, entrypoint: tricky } }));
+    const podmanRun = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    const shCmd = podmanRun?.at(-1) ?? '';
+    expect(shCmd).toContain(`'example-conjecture/it'\\''s a dir/check.c'`);
   });
 });

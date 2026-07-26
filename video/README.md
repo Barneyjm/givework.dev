@@ -124,3 +124,27 @@ than hard-coding it (`sc_collatz.py` generates the real hailstone sequence;
 so the picture can't drift from the arithmetic. State honestly what is known versus
 conjectured: "checked to 2⁷¹, still unproven" is the interesting truth, and claiming
 more than that is the one thing we won't ship.
+
+## Vertical cuts for short-form
+
+`make_vertical.sh <slug>` reformats a finished 16:9 video into a 1080x1920 cut
+for YouTube Shorts, Reels and TikTok:
+
+```bash
+cd video
+SPEC_DIR=/path/to/specs ./make_vertical.sh collatz collatz-share.mp4
+```
+
+The landscape video is **composited into a branded frame**, not re-rendered — the
+scenes are composed for 16:9, so every position and wrap width would break in a
+vertical viewport. `make_vertical_frame.mjs` draws the backdrop (wordmark, the
+conjecture's name, its subtitle, the page URL, and the footer) and prints the
+geometry the shell script overlays against, so the layout maths lives in one
+place.
+
+The video sits **above centre on purpose**: short-form platforms overlay a
+caption, a handle and an action rail across the bottom fifth, so that band is
+left to them rather than fought over.
+
+Reels caps at 90 seconds and most of these run 85-115s; the script warns rather
+than trimming, since where to cut is an editorial call.
