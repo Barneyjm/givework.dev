@@ -1,8 +1,9 @@
 import { createInterface } from 'node:readline';
 import type { ExecTask, Executor } from '../executor.js';
 import { getExecutor } from '../executor.js';
+import { ONBOARDING_MAX_CENTS } from '../goldbach.js';
 import { getDecomposer } from '../intake/decompose.js';
-import { HttpBackend, runLoop } from '../run-loop.js';
+import { HttpBackend, runLoop, withLease } from '../run-loop.js';
 import { apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 import { login } from './login.js';
@@ -247,6 +248,37 @@ export function siteUrlFor(api: string): string {
 /** Default monthly cap offered to a newcomer, in cents. A cap, not a spend. */
 const DEFAULT_ONBOARD_BUDGET_CENTS = 500;
 
+/** The budget shape `/devs/me` returns, or nothing when no cap is set this period. */
+interface DevBudget {
+  budget_cents?: number;
+  available_cents?: number;
+}
+
+/**
+ * Whether the guided flow has to set a cap before it can mint the first task.
+ *
+ * The threshold is ONBOARDING_MAX_CENTS, not 0. `mintOnboardingTask` refuses
+ * anything below its own reservation, so a dev sitting on 1–4¢ available sails
+ * past an `available > 0` check and then dead-ends on a raw `insufficient_budget`
+ * from the API — and re-running reproduces it exactly, which breaks the one
+ * promise this command makes: that it is always safe to run again.
+ */
+export function needsCapBeforeOnboarding(budget: DevBudget | null | undefined): boolean {
+  return !budget || (budget.available_cents ?? 0) < ONBOARDING_MAX_CENTS;
+}
+
+/**
+ * The cap to offer when we have to ask. Accepting the offer must actually leave
+ * room for the task, so a dev who has already spent most of an existing cap is
+ * offered enough to cover the shortfall rather than the flat default they
+ * already have.
+ */
+export function suggestedCap(budget: DevBudget | null | undefined): number {
+  const cap = budget?.budget_cents ?? 0;
+  const shortfall = ONBOARDING_MAX_CENTS - (budget?.available_cents ?? 0);
+  return Math.max(DEFAULT_ONBOARD_BUDGET_CENTS, shortfall > 0 ? cap + shortfall : cap);
+}
+
 export interface OnboardingSummary {
   range_start: number;
   range_end: number;
@@ -260,29 +292,54 @@ export interface OnboardingSummary {
  * sweep — territory ruled out — because "no counterexample found" is the
  * expected, correct result, not a null result and not a failure. Pure, so the
  * wording is testable.
+ *
+ * The verdict changes only ONE thing: whether the claim was accepted. It never
+ * changes whether the run happened. `submitResult` books the spend, writes the
+ * ledger row and inserts the contribution BEFORE verification runs, so "this run
+ * was not recorded" is false for every verdict — and it is a costly kind of false,
+ * because it sends someone back to `givework onboard` to spend their own credit a
+ * second time on a range that is already booked.
  */
 export function contributionLines(
   s: OnboardingSummary,
   outcome: { counterexamples: number[]; spentCents?: number; verdict?: string },
 ): string[] {
   const n = s.candidates.toLocaleString('en-US');
+  const range = `[${s.range_start.toLocaleString('en-US')}, ${s.range_end.toLocaleString('en-US')})`;
   const lines: string[] = [];
-  if (outcome.counterexamples.length > 0) {
+
+  if (outcome.verdict === 'failed') {
+    lines.push(`  The control plane re-swept ${range} itself and did not get`);
+    lines.push('  what your agent reported, so the claim was not accepted.');
+    lines.push('');
+    lines.push('  Your run is still on the record: the compute you donated is booked to');
+    lines.push('  your name, the ledger entry is written, and the contribution is stored.');
+    lines.push('  The range goes back on the board for someone else.');
+    lines.push('');
+    lines.push('  There is nothing to redo here — running onboard again would spend your');
+    lines.push('  credit on the same range a second time.');
+  } else if (outcome.counterexamples.length > 0) {
     lines.push(`  !! Your run reports a counterexample: ${outcome.counterexamples.join(', ')}`);
     lines.push(`     If it survives verification, that disproves ${s.target_name}.`);
+  } else if (outcome.verdict === 'inconclusive' || outcome.verdict === 'pending') {
+    lines.push(`  You swept ${n} candidates for ${s.target_name} — the range ${range}.`);
+    lines.push('  The compute you donated is booked and the contribution is stored.');
+    lines.push('');
+    lines.push('  The automatic checker could not settle this one either way, so it is');
+    lines.push('  queued for a person to look at rather than accepted on the spot.');
+    lines.push('  Nothing for you to do; nothing to re-run.');
   } else {
     lines.push(`  You ruled out ${n} candidates for ${s.target_name}.`);
-    lines.push(
-      `  Every even number in [${s.range_start.toLocaleString('en-US')}, ${s.range_end.toLocaleString('en-US')}) is a sum of two primes.`,
-    );
+    lines.push(`  Every even number in ${range} is a sum of two primes.`);
     lines.push('  No counterexample — which is the expected result, and the whole point:');
     lines.push('  that range is now checked, and the check is recorded under your name.');
   }
+
   lines.push('');
   // Omitted rather than reported as 0 when we're re-printing an earlier run: the
   // compute was donated, we just aren't the ones who measured it this time.
   if (outcome.spentCents !== undefined) {
-    lines.push(`  Donated compute: ${outcome.spentCents}¢`);
+    lines.push(`  Donated compute: ${outcome.spentCents}¢ (booked)`);
   }
   if (outcome.verdict) lines.push(`  Verification:    ${outcome.verdict} (machine-checked)`);
   return lines;
@@ -328,20 +385,21 @@ export async function onboard(args: string[]): Promise<void> {
     console.error('--budget must be a non-negative integer (cents)');
     process.exit(1);
   }
-  if (wanted === null && (!me.budget || available <= 0)) {
-    // No usable cap yet. Ask when there's a human at the keyboard; otherwise take
-    // the default so `npx … onboard` in a script still works.
+  if (wanted === null && needsCapBeforeOnboarding(me.budget)) {
+    // Not enough headroom to mint yet. Ask when there's a human at the keyboard;
+    // otherwise take the suggestion so `npx … onboard` in a script still works.
+    const suggested = suggestedCap(me.budget);
     if (process.stdin.isTTY) {
       const answer = await prompt(
-        `          How many cents of your own Claude credit will you donate this month? [${DEFAULT_ONBOARD_BUDGET_CENTS}] `,
+        `          How many cents of your own Claude credit will you donate this month? [${suggested}] `,
       );
-      wanted = answer ? Number(answer) : DEFAULT_ONBOARD_BUDGET_CENTS;
+      wanted = answer ? Number(answer) : suggested;
       if (!Number.isInteger(wanted) || wanted < 0) {
         console.error('          Budget must be a non-negative whole number of cents.');
         process.exit(1);
       }
     } else {
-      wanted = DEFAULT_ONBOARD_BUDGET_CENTS;
+      wanted = suggested;
     }
   }
   if (wanted !== null) {
@@ -401,7 +459,14 @@ export async function onboard(args: string[]): Promise<void> {
     const checkout = await backend.checkout(task.task_id);
     let exec: Awaited<ReturnType<Executor['execute']>>;
     try {
-      exec = await cliExecutor().execute(checkout as ExecTask);
+      // Same lease renewal the run loop uses. Checkout leases expire after ten
+      // minutes; a slow machine, a long CLI startup or one retried call can
+      // exceed that, and then the submit below throws `not_locked` — the
+      // volunteer's real Claude credit spent and nothing booked. That is exactly
+      // the failure onboarding exists to rule out, so it heartbeats too.
+      exec = await withLease(backend, task.task_id, () =>
+        cliExecutor().execute(checkout as ExecTask),
+      );
     } catch (err) {
       await backend.release(task.task_id).catch(() => {});
       console.error(`\n  ✗ Could not run the task: ${(err as Error).message}`);
@@ -422,12 +487,9 @@ export async function onboard(args: string[]): Promise<void> {
       summary: exec.summary,
     });
     console.log('Step 5/5  Your contribution\n');
-    if (submit.verification?.verdict === 'failed') {
-      console.log('  Verification did not confirm what your agent reported, so this run was');
-      console.log('  not recorded. The task is back and still yours — try:  givework onboard');
-      console.log(`\n  Donated compute: ${submit.spent_applied}¢`);
-      return;
-    }
+    // One renderer for every verdict. The accounting is identical in all of them
+    // — booked before verification ran — so the only thing that varies is what we
+    // say about the claim.
     for (const line of contributionLines(summary, {
       counterexamples: counterexamplesOf(exec.result),
       spentCents: submit.spent_applied,
@@ -455,6 +517,17 @@ function printNextSteps(base: string, handle: string, slug: string): void {
 
 // --- admin commands ---
 
+/**
+ * Render one funnel conversion rate. `null` means the ratio is undefined — the
+ * stage it is measured against has nobody in it — and must show as an em-dash,
+ * never as 0.0%. Devs normally predate the funnel log, so `signed_up` is 0 while
+ * later stages are not; printing "0.0% of signups" there tells the reader that
+ * onboarding converts nobody when in fact it converted everybody it was given.
+ */
+export function pct(rate: number | null | undefined): string {
+  return rate == null ? '—' : `${(rate * 100).toFixed(1)}%`;
+}
+
 export async function admin(args: string[]): Promise<void> {
   const sub = args[0];
   const rest = args.slice(1);
@@ -472,9 +545,14 @@ export async function admin(args: string[]): Promise<void> {
     case 'funnel': {
       const adminToken = requireAdminToken();
       const f = await apiRequest<any>(apiUrl(), { path: '/admin/funnel', token: adminToken });
-      const pct = (r: number) => `${(r * 100).toFixed(1)}%`;
       console.log(`devs in the database: ${f.devs_total}`);
       if (f.first_event_at) console.log(`tracked since:        ${f.first_event_at.slice(0, 10)}`);
+      if (f.untracked_devs > 0) {
+        console.log(
+          `untracked:            ${f.untracked_devs} dev(s) predate this log — ` +
+            'they emit no signup, so "of signups" is measured against the tracked ones only',
+        );
+      }
       console.log('');
       for (const s of f.stages) {
         console.log(

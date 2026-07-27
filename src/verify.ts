@@ -108,12 +108,28 @@ function eulerSumOfPowers(witness: any): CheckerResult {
  * whole sweep rather than trusting the claim, so an agent that fabricated a
  * result is caught: the recomputed counterexample list and the recomputed
  * `max_min_prime` must match what was claimed.
+ *
+ * Which shape applies is decided by the TASK, never by the witness. A range
+ * sweep is only creditable against a range the platform assigned: if the task
+ * assigned none, an agent could otherwise declare a four-number range, sweep it
+ * cleanly, and be auto-accepted for work nobody asked for. So a self-declared
+ * range with no assignment is inconclusive — recorded, held for a human, never a
+ * pass.
  */
 const GOLDBACH_MAX = 5_000_000;
 function goldbach(witness: any, ctx?: CheckerContext): CheckerResult {
   const assigned = assignedRange(ctx?.spec);
-  if (assigned || witness?.range_start !== undefined || witness?.range_end !== undefined) {
-    return goldbachRange(witness, assigned);
+  if (assigned) return goldbachRange(witness, assigned);
+  if (witness?.range_start !== undefined || witness?.range_end !== undefined) {
+    return {
+      disproves: false,
+      inconclusive: true,
+      detail: {
+        reason:
+          'this task assigned no range, so a self-declared range sweep cannot be credited here',
+        reported: [witness?.range_start, witness?.range_end],
+      },
+    };
   }
   const n = witness?.n;
   if (!Number.isInteger(n) || n <= 2 || n % 2 !== 0) {
@@ -151,12 +167,16 @@ function assignedRange(spec: unknown): [number, number] | null {
  * agent could actually execute code reports it and gets it verified; one whose
  * agent could not simply omits it, and still gets an honest confirmed sweep
  * (the authoritative arithmetic happens here either way).
+ *
+ * `assigned` is non-nullable on purpose: the only range this will ever sweep is
+ * one the platform wrote into the task's spec. There is deliberately no fallback
+ * to the witness's own numbers — that fallback was the auto-accept hole.
  */
-function goldbachRange(witness: any, assigned: [number, number] | null): CheckerResult {
+function goldbachRange(witness: any, assigned: [number, number]): CheckerResult {
   // The assigned range wins. A claim about a DIFFERENT range is not a lesser
   // contribution, it's the wrong contribution — verifying it would let an agent
   // sweep four numbers and be credited with forty thousand.
-  if (assigned && witness?.range_start !== undefined) {
+  if (witness?.range_start !== undefined || witness?.range_end !== undefined) {
     if (witness.range_start !== assigned[0] || witness.range_end !== assigned[1]) {
       return {
         disproves: false,
@@ -168,14 +188,7 @@ function goldbachRange(witness: any, assigned: [number, number] | null): Checker
       };
     }
   }
-  const start = assigned ? assigned[0] : witness?.range_start;
-  const end = assigned ? assigned[1] : witness?.range_end;
-  if (!Number.isInteger(start) || !Number.isInteger(end)) {
-    return {
-      disproves: false,
-      detail: { reason: 'range_start and range_end must be integers' },
-    };
-  }
+  const [start, end] = assigned;
   const claimed = witness?.counterexamples;
   if (claimed !== undefined && !Array.isArray(claimed)) {
     return { disproves: false, detail: { reason: 'counterexamples must be an array' } };

@@ -421,8 +421,11 @@ the loop, distinct ranges mean newcomers never collide, and a bad run fails safe
   target's built-in checker, which **re-runs the entire assigned range** in the
   control plane (`src/goldbach.ts`, a segmented sieve — ~6 ms per block) and
   compares. A fabricated claim, or a claim about a different range than the one
-  assigned, fails verification and the task returns to its owner. No human review
-  queue: 200 signups in a week cost zero review minutes.
+  assigned, fails verification and the task returns to its owner. The range being
+  *assigned* is what makes an auto-pass possible at all: a witness that names its
+  own range on a task that assigned none is `inconclusive` and waits for a human,
+  never `confirmed`. No human review queue for the real thing: 200 signups in a
+  week cost zero review minutes.
 - **A clean sweep is a pass.** Finding nothing is the expected, correct outcome,
   so the checker reports `confirmed` and the contribution is accepted — without
   claiming the conjecture is settled. Treating "found nothing" as a rejection
@@ -435,11 +438,23 @@ the loop, distinct ranges mean newcomers never collide, and a bad run fails safe
 
 `funnel_events` is a small append-only log — dev created, budget set, onboarding
 minted, checkout, submit — kept deliberately separate from `ledger` (money must
-never depend on analytics). Writes are swallowed on failure: a missing analytics
-row is a reporting gap, a failed checkout is a lost donation. Every checkout and
-submit is recorded, so first-vs-repeat is derived rather than stored.
-`GET /admin/funnel` (or `givework admin funnel`) reports it as counts and
-conversion rates — including how many contributors were one-and-done.
+never depend on analytics). Two rules make it free and safe on the donation path:
+
+- **No extra connection.** Money operations hand `recordEvent` the connection
+  they already hold, so a checkout is still one connect, not two. That matters on
+  Workers, where every `query()` opens and closes its own `pg.Client` against a
+  possibly-cold Neon compute.
+- **Swallowed on failure, under a `SAVEPOINT`.** A missing analytics row is a
+  reporting gap; a failed checkout is a lost donation. The savepoint is what stops
+  a failed insert from aborting the transaction that carries the money.
+
+Every checkout and submit is recorded, so first-vs-repeat is derived rather than
+stored. `GET /admin/funnel` (or `givework admin funnel`) reports it as counts and
+conversion rates — including how many contributors were one-and-done. A rate with
+no denominator is reported as `null` and rendered `—`, never `0%`: devs who
+predate the log emit no signup event, so `signed_up` can be 0 while later stages
+are not, and a `0%` there would read as "onboarding converts nobody" when it
+converted everybody. `untracked_devs` names that gap explicitly.
 
 ## HTTP surface
 

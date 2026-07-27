@@ -356,26 +356,47 @@ describe('onboarding end to end', () => {
   });
 
   it('holds a range it cannot check inline as inconclusive, not as a rejection', async () => {
-    // A task that assigned no range of its own, so the claim itself sets the
-    // bounds — and these are far wider than we are willing to sweep inline.
-    // Unverifiable is not the same as false: hold it for a human, don't reject.
+    // An ASSIGNED range far wider than we are willing to sweep inline. The
+    // assignment is what makes this about width rather than about provenance:
+    // unverifiable is not the same as false, so hold it for a human, don't reject.
+    const { rows } = await pool.query(`SELECT id FROM targets WHERE slug = 'goldbach'`);
+    const wide = { range_start: 4, range_end: 4_000_000_000 };
+    const adhoc = await createTask(rows[0].id, {
+      max: 100,
+      kind: 'computational',
+      verify_via: 'auto_rerun',
+      spec: wide,
+    });
+    const dev = await createDev('unverifiable');
+    await setBudget(dev, 500);
+    await checkoutTask(dev, adhoc);
+
+    const r = await submitAndVerify(dev, adhoc, wide, 2, null);
+    expect(r.verification?.verdict).toBe('inconclusive');
+    expect((await getTaskRow(adhoc)).status).toBe('submitted');
+  });
+
+  it('an unassigned range is inconclusive on the real submit rail, never accepted', async () => {
+    // The same shape a runner would submit for a normal (non-onboarding) Goldbach
+    // task that assigned nothing. It must not book an accepted contribution.
     const { rows } = await pool.query(`SELECT id FROM targets WHERE slug = 'goldbach'`);
     const adhoc = await createTask(rows[0].id, {
       max: 100,
       kind: 'computational',
       verify_via: 'auto_rerun',
     });
-    const dev = await createDev('unverifiable');
+    const dev = await createDev('self-declared-range');
     await setBudget(dev, 500);
     await checkoutTask(dev, adhoc);
 
     const r = await submitAndVerify(
       dev,
       adhoc,
-      { range_start: 4, range_end: 4_000_000_000 },
+      { range_start: 4, range_end: 8, counterexamples: [] },
       2,
       null,
     );
+    expect(r.status).toBe('submitted'); // not 'accepted'
     expect(r.verification?.verdict).toBe('inconclusive');
     expect((await getTaskRow(adhoc)).status).toBe('submitted');
   });

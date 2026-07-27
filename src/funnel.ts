@@ -1,3 +1,4 @@
+import type { Client } from './db.js';
 import { query } from './db.js';
 
 // Funnel instrumentation — the minimum needed to answer "what fraction of the
@@ -13,9 +14,13 @@ import { query } from './db.js';
 //  3. Separate from `ledger`. The ledger is money and is load-bearing for
 //     accounting; mixing analytics into it would make an analytics bug an
 //     accounting bug.
-//  4. Cheap. One small INSERT per event, on the same connection pool. Events are
-//     emitted after the transaction they describe has committed, so they never
-//     hold a lock or extend a transaction.
+//  4. Free on the hot path. Analytics must not cost a database connection. On
+//     Cloudflare Workers `query()` opens, connects and closes a NEW pg.Client per
+//     call, so a standalone insert would double the connects on POST /checkout
+//     and POST /submit — against a possibly-cold Neon compute, on the donation
+//     path. So the money operations hand recordEvent the connection they already
+//     hold and it writes on that, inside their transaction, guarded by a
+//     SAVEPOINT (see below).
 //
 // "First X" is not stored as its own event type: we record EVERY checkout and
 // EVERY submit and derive first-vs-repeat by counting per dev. That keeps the
@@ -34,6 +39,8 @@ export type FunnelEvent =
   /** A contribution was submitted. Recorded every time. */
   | 'submit';
 
+const INSERT_EVENT = `INSERT INTO funnel_events (dev_id, event, detail) VALUES ($1, $2, $3)`;
+
 /**
  * Append one funnel event. Never throws and never rejects — a failure here is
  * logged and dropped so the caller's action (checkout, submit, budget change)
@@ -41,21 +48,39 @@ export type FunnelEvent =
  *
  * Awaited rather than fire-and-forget on purpose: on Cloudflare Workers a
  * floating promise is cancelled when the response is returned, so a
- * "non-blocking" write would simply not happen in production. The insert is a
- * single row on an already-open pool, and it can only ever add latency — never
- * an error — to the path it instruments.
+ * "non-blocking" write would simply not happen in production.
+ *
+ * Pass `client` when the caller already holds a connection — every money
+ * operation does, inside its transaction. That is the difference between one
+ * connect per checkout and two, which on Workers is a real per-request cost. The
+ * insert then rides the caller's transaction, wrapped in a SAVEPOINT so a failed
+ * analytics write (a missing table, a dropped column, an FK violation) rolls back
+ * to the savepoint instead of poisoning the transaction that carries the money.
+ * With no client it falls back to a standalone write, which is right for the
+ * paths that have no transaction to join.
  */
 export async function recordEvent(
   devId: string | null,
   event: FunnelEvent,
   detail?: unknown,
+  client?: Client,
 ): Promise<void> {
+  const params = [devId, event, detail !== undefined ? JSON.stringify(detail) : null];
   try {
-    await query(`INSERT INTO funnel_events (dev_id, event, detail) VALUES ($1, $2, $3)`, [
-      devId,
-      event,
-      detail !== undefined ? JSON.stringify(detail) : null,
-    ]);
+    if (!client) {
+      await query(INSERT_EVENT, params);
+      return;
+    }
+    await client.query('SAVEPOINT funnel_evt');
+    try {
+      await client.query(INSERT_EVENT, params);
+      await client.query('RELEASE SAVEPOINT funnel_evt');
+    } catch (err) {
+      // Postgres aborts the whole transaction on any error; rolling back to the
+      // savepoint is what lets the caller's COMMIT still succeed.
+      await client.query('ROLLBACK TO SAVEPOINT funnel_evt');
+      throw err;
+    }
   } catch (err) {
     // Deliberately swallowed. See the contract above.
     console.error(`funnel: failed to record ${event}`, err);
@@ -67,15 +92,28 @@ export interface FunnelStage {
   stage: string;
   /** Distinct devs that reached this stage. */
   devs: number;
-  /** Share of devs that reached the PREVIOUS stage and also reached this one. */
-  conversion_from_previous: number;
-  /** Share of all signed-up devs that reached this stage. */
-  conversion_from_signup: number;
+  /**
+   * Share of devs that reached the PREVIOUS stage and also reached this one.
+   * `null` — never 0 — when the previous stage has nobody in it, because a ratio
+   * with no denominator is undefined, not zero. Rendering it as 0% would report
+   * "this stage converts nobody" for a stage that in fact converted everybody it
+   * was given.
+   */
+  conversion_from_previous: number | null;
+  /** Share of all signed-up devs that reached this stage; null when nobody is tracked as signed up. */
+  conversion_from_signup: number | null;
 }
 
 export interface FunnelReport {
   /** Rows in `devs` — the ground truth, including devs that predate this log. */
   devs_total: number;
+  /**
+   * Devs that exist but never emitted `dev_created` — i.e. they predate this log.
+   * While this is non-zero the signup baseline is incomplete, so the "of signups"
+   * column is measured against a partial denominator (or, when every dev predates
+   * the log, against none at all and the rates are null).
+   */
+  untracked_devs: number;
   /** Ordered funnel: signed_up -> set_budget -> minted_onboarding -> checked_out -> submitted -> submitted_again. */
   stages: FunnelStage[];
   counts: {
@@ -95,9 +133,16 @@ export interface FunnelReport {
   last_event_at: string | null;
 }
 
-/** cents-free ratio, rounded to 4dp so the JSON stays readable. 0 when the base is 0. */
-function rate(numerator: number, denominator: number): number {
-  if (denominator <= 0) return 0;
+/**
+ * Ratio rounded to 4dp so the JSON stays readable — or `null` when the base is
+ * 0. Reporting an undefined ratio as 0 is not a rounding choice, it is a wrong
+ * answer: devs who predate this log emit no dev_created, so `signed_up` is 0
+ * while every later stage is non-zero, and a 0 there reads as "onboarding
+ * converts nobody" when it converted everybody. Undefined is undefined; the
+ * renderer shows it as "—".
+ */
+function rate(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null;
   return Math.round((numerator / denominator) * 10_000) / 10_000;
 }
 
@@ -166,6 +211,7 @@ export async function getFunnel(): Promise<FunnelReport> {
 
   return {
     devs_total: r.devs_total,
+    untracked_devs: Math.max(0, r.devs_total - r.signed_up),
     stages,
     counts: {
       signed_up: r.signed_up,

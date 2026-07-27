@@ -103,6 +103,8 @@ export async function createTask(
     title?: string;
     kind?: string;
     verify_via?: string;
+    /** The task's spec. Defaults to a bare prompt — i.e. a task that assigns no range. */
+    spec?: unknown;
   } = { max: 500 },
 ): Promise<string> {
   const { rows } = await pool.query(
@@ -114,7 +116,7 @@ export async function createTask(
     [
       targetId,
       opts.title ?? 'Test task',
-      JSON.stringify({ prompt: 'do the thing' }),
+      JSON.stringify(opts.spec ?? { prompt: 'do the thing' }),
       opts.est ?? Math.min(opts.max, 100),
       opts.max,
       'claude-opus-4-8',

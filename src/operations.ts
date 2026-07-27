@@ -1,6 +1,6 @@
 import { type Client, query, withTransaction } from './db.js';
 import { recordEvent } from './funnel.js';
-import { blockAt, ONBOARDING_CANDIDATES } from './goldbach.js';
+import { blockAt, ONBOARDING_CANDIDATES, ONBOARDING_MAX_CENTS } from './goldbach.js';
 
 /**
  * Domain error carrying the HTTP status the server layer should surface. Lets
@@ -117,13 +117,13 @@ async function reservedPeriodOf(client: Client, taskId: string): Promise<string 
 export const ONBOARDING_SLUG = 'goldbach';
 
 /**
- * The onboarding task's hard cap. Small on purpose: what a newcomer is buying
- * with it is not the arithmetic (the control plane redoes that for free during
- * verification) — it is the certainty that their own `claude -p` credential works
- * end to end. A few cents to remove that doubt is the whole point of routing this
- * through the model path instead of a free sandboxed work unit.
+ * The onboarding task's hard cap. Defined in goldbach.ts (which the CLI bundle
+ * can import — it has no `pg` dependency) and re-exported here, so the guided
+ * flow's "do you have enough left to mint?" check and the mint's own guard are
+ * the same number.
  */
-export const ONBOARDING_MAX_CENTS = 5;
+export { ONBOARDING_MAX_CENTS };
+
 const ONBOARDING_EST_CENTS = 3;
 
 /** Where the sweep cursor starts if the target has never been swept. */
@@ -324,6 +324,14 @@ export async function mintOnboardingTask(devId: string): Promise<OnboardingTask>
         devId,
       ],
     );
+    // Funnel: on this connection, under a savepoint (see recordEvent) — no second
+    // connect, and an analytics failure cannot lose the dev their minted task.
+    await recordEvent(
+      devId,
+      'onboarding_minted',
+      { task_id: inserted.rows[0].task_id, range: [range.start, range.end] },
+      client,
+    );
     return {
       row: {
         task_id: inserted.rows[0].task_id,
@@ -345,14 +353,7 @@ export async function mintOnboardingTask(devId: string): Promise<OnboardingTask>
     return { row: rows[0], existing: true };
   });
 
-  const result = projectOnboarding(minted.row, minted.existing);
-  if (!minted.existing) {
-    await recordEvent(devId, 'onboarding_minted', {
-      task_id: result.task_id,
-      range: [result.range_start, result.range_end],
-    });
-  }
-  return result;
+  return projectOnboarding(minted.row, minted.existing);
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +513,18 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       [taskId, PRIOR_CONTRIBUTIONS_LIMIT],
     );
 
+    // 7. Funnel: on THIS connection, inside this transaction, under a savepoint.
+    //    Analytics must not cost a second database connect on the donation path
+    //    (on Workers every query() opens its own client), and the savepoint means
+    //    a failed insert rolls back to here rather than failing the checkout.
+    //    Every checkout is logged; "first checkout" is derived by counting per dev.
+    await recordEvent(
+      devId,
+      'checkout',
+      { task_id: claimed.id, max_cost_cents: claimed.max_cost_cents },
+      client,
+    );
+
     return {
       task_id: claimed.id,
       spec: claimed.spec,
@@ -523,13 +536,6 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       target_state: stateRes.rows[0]?.state ?? {},
       prior_contributions: prior.rows,
     };
-  });
-  // Funnel: recorded after the transaction commits, so it can neither hold the
-  // budget lock open nor fail a checkout that already succeeded. Every checkout
-  // is logged; "first checkout" is derived by counting per dev.
-  await recordEvent(devId, 'checkout', {
-    task_id: result.task_id,
-    max_cost_cents: result.max_cost_cents,
   });
   return result;
 }
@@ -751,6 +757,18 @@ export async function submitResult(
       ]);
     }
 
+    // 7. Funnel: on THIS connection, under a savepoint — see checkoutTask. The
+    //    contribution and its booked spend are real whether or not analytics
+    //    records them, and analytics must not add a connect to the submit path.
+    //    Every submit is logged, so a repeat contributor is distinguishable from
+    //    a one-and-done without any extra bookkeeping.
+    await recordEvent(
+      devId,
+      'submit',
+      { task_id: taskId, outcome, spent_cents: spendApplied },
+      client,
+    );
+
     return {
       task_id: taskId,
       status: terminal ? 'submitted' : 'open',
@@ -760,15 +778,6 @@ export async function submitResult(
       spent_applied: spendApplied,
       overage_clamped: overageClamped,
     };
-  });
-  // Funnel: after the commit, and swallowing its own failures — the contribution
-  // and its booked spend are real whether or not analytics records them. Every
-  // submit is logged, so a repeat contributor is distinguishable from a
-  // one-and-done without any extra bookkeeping.
-  await recordEvent(devId, 'submit', {
-    task_id: settled.task_id,
-    outcome: settled.outcome,
-    spent_cents: settled.spent_applied,
   });
   return settled;
 }

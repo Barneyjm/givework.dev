@@ -37,6 +37,21 @@ export const MAX_SWEEP_SPAN = 1_000_000;
 /** Even numbers allocated to one onboarding sweep. Span is twice this. */
 export const ONBOARDING_CANDIDATES = 40_000;
 
+/**
+ * The onboarding task's hard cap, in cents. Small on purpose: what a newcomer is
+ * buying with it is not the arithmetic (the control plane redoes that for free
+ * during verification) — it is the certainty that their own `claude -p`
+ * credential works end to end. A few cents to remove that doubt is the whole
+ * point of routing this through the model path instead of a free sandboxed work
+ * unit.
+ *
+ * It lives here, in the dependency-free module, rather than in operations.ts:
+ * the CLI's guided flow has to know the amount it must leave available BEFORE
+ * asking the control plane to mint, and the CLI bundle cannot import anything
+ * that pulls in `pg`. One constant, one source of truth, both planes.
+ */
+export const ONBOARDING_MAX_CENTS = 5;
+
 export interface GoldbachRange {
   /** First even integer in the sweep (inclusive). */
   start: number;

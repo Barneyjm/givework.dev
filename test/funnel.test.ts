@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closePool, pool } from '../src/db.js';
 import { getFunnel, recordEvent } from '../src/funnel.js';
 import { upsertDev } from '../src/oauth.js';
@@ -122,8 +122,36 @@ describe('getFunnel report', () => {
     expect(f.first_event_at).toBeNull();
     for (const s of f.stages) {
       expect(s.devs).toBe(0);
-      expect(s.conversion_from_previous).toBe(0);
+      // Undefined, not zero: there is no denominator to divide by.
+      expect(s.conversion_from_previous).toBeNull();
+      expect(s.conversion_from_signup).toBeNull();
     }
+  });
+
+  it('reports an undefined rate as null when the baseline predates the log', async () => {
+    // The realistic case the moment this shipped: the devs already in the
+    // database never emitted dev_created, so signed_up is 0 while every later
+    // stage is non-zero. A 0 rate here would tell the reader that onboarding
+    // converted nobody, when it in fact converted everybody it was given.
+    const target = await createTarget();
+    const dev = await createDev('predates-the-log');
+    await setOwnBudget(dev, 5000);
+    const t = await createTask(target, { max: 100 });
+    await checkoutTask(dev, t);
+    await submitResult(dev, t, { ok: true }, 50, null);
+
+    const f = await getFunnel();
+    expect(f.counts.signed_up).toBe(0);
+    expect(f.counts.submitted).toBe(1);
+    expect(f.devs_total).toBe(1);
+    expect(f.untracked_devs).toBe(1); // the gap is reported, not hidden
+
+    const byStage = Object.fromEntries(f.stages.map((s) => [s.stage, s]));
+    expect(byStage.submitted.devs).toBe(1);
+    expect(byStage.submitted.conversion_from_signup).toBeNull();
+    expect(byStage.set_budget.conversion_from_previous).toBeNull(); // signed_up is 0
+    // A stage whose predecessor DOES have devs still gets a real number.
+    expect(byStage.submitted.conversion_from_previous).toBe(1);
   });
 
   it('computes the drop-off from signup to first submit', async () => {
@@ -235,5 +263,52 @@ describe('recordEvent resilience', () => {
     ).resolves.toBeUndefined();
     const { rows } = await pool.query(`SELECT count(*)::int AS n FROM funnel_events`);
     expect(rows[0].n).toBe(0);
+  });
+});
+
+// The funnel rides the money operation's own connection. It has to: on Workers
+// every `query()` opens, connects and closes a fresh pg.Client, so a standalone
+// analytics insert would double the connects on POST /checkout and POST /submit
+// — the hot donation path, against a possibly-cold Neon compute. On Node,
+// pool.connect() is called once per acquired connection (pool.query acquires one
+// too), which makes the count directly observable.
+describe('funnel writes cost no extra database connection', () => {
+  beforeEach(resetDb);
+
+  it('checkout and submit each take exactly one connection, event included', async () => {
+    const dev = await createDev('one-connect');
+    await setBudget(dev, 5000);
+    const target = await createTarget();
+    const task = await createTask(target, { max: 100 });
+
+    const spy = vi.spyOn(pool, 'connect');
+    try {
+      await checkoutTask(dev, task);
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockClear();
+
+      await submitResult(dev, task, { ok: true }, 50, null);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // …and the events really were written, on that one connection.
+    expect((await getFunnelEvents(dev)).map((e) => e.event)).toEqual(['checkout', 'submit']);
+  });
+
+  it('minting an onboarding task takes exactly one connection', async () => {
+    await createOnboardingTarget(4);
+    const dev = await createDev('one-connect-mint');
+    await setBudget(dev, 5000);
+
+    const spy = vi.spyOn(pool, 'connect');
+    try {
+      await mintOnboardingTask(dev);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await getFunnelEvents(dev)).map((e) => e.event)).toEqual(['onboarding_minted']);
   });
 });

@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closePool, pool } from '../src/db.js';
 import { checkoutTask, submitResult } from '../src/operations.js';
 import { app } from '../src/server.js';
-import { runAutoVerification, submitAndVerify } from '../src/verify.js';
+import { CHECKERS, runAutoVerification, submitAndVerify } from '../src/verify.js';
 import { createDev, createTask, mintAdminToken, resetDb, setBudget } from './helpers.js';
 
 // Phase 5: verification core. auto_rerun re-evaluates a counterexample witness
@@ -110,6 +110,40 @@ describe('auto_rerun verification', () => {
     const v = await runAutoVerification(task);
     expect(v.verdict).toBe('failed');
     expect((await targetRow(target)).status).toBe('open');
+  });
+
+  // The auto-accept hole: `confirmed` is a PASS that accepts the contribution
+  // with no human in the loop, so the range it is computed over must come from
+  // the platform. A witness that names its own range on a task that assigned
+  // none must never be able to earn it — otherwise "I swept [4,8) and found
+  // nothing" is a free, auto-accepted contribution.
+  it('a self-declared range cannot auto-pass a task that assigned no range', async () => {
+    const target = await createConjecture({ slug: 'goldbach-selfrange', checker: 'goldbach' });
+    // Default spec is a bare prompt — this task assigns no range.
+    const task = await createTask(target, { max: 500, verify_via: 'auto_rerun' });
+    // Trivially small and genuinely clean: the sweep really does confirm.
+    await submitCandidate(task, { range_start: 4, range_end: 8, counterexamples: [] });
+
+    const v = await runAutoVerification(task);
+    expect(v.verdict).toBe('inconclusive');
+    expect(await taskStatus(task)).toBe('submitted'); // held for a human, NOT accepted
+    expect((await targetRow(target)).status).toBe('open');
+    expect((await verificationsFor(task))[0]).toMatchObject({ verdict: 'inconclusive' });
+  });
+
+  it('the checker itself refuses to confirm an unassigned range', () => {
+    const witness = { range_start: 4, range_end: 8, counterexamples: [] };
+    // No spec at all, and a spec that carries no range: neither may confirm.
+    for (const ctx of [undefined, { spec: { prompt: 'do the thing' } }]) {
+      const r = CHECKERS.goldbach(witness, ctx);
+      expect(r.confirmed).toBeFalsy();
+      expect(r.disproves).toBe(false);
+      expect(r.inconclusive).toBe(true);
+    }
+    // The assigned range is what makes a sweep creditable.
+    expect(CHECKERS.goldbach(witness, { spec: { range_start: 4, range_end: 8 } })).toMatchObject({
+      confirmed: true,
+    });
   });
 
   it('leaves human_review to the caller (not handled)', async () => {
