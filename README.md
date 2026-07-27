@@ -23,7 +23,7 @@
 ## Volunteer in one command
 
 ```bash
-npx github:Barneyjm/givework.dev onboard
+npx givework onboard
 ```
 
 Signs you in, asks what you're willing to donate this month, hands you a **real
@@ -45,7 +45,7 @@ a runner going.
 Then keep going:
 
 ```bash
-EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch
+EXECUTOR=claude npx givework run --watch
 ```
 
 ## What is Givework?
@@ -560,9 +560,10 @@ account IDs, Neon project IDs, tokens) — CI injects them as secrets.
 npx givework onboard
 ```
 
-`npx github:Barneyjm/givework.dev …` also works and needs no registry at all:
+`npx github:Barneyjm/givework.dev …` also works and needs no registry at all —
 npm clones the repo, installs, runs `prepare` → `build:cli`, and links the
-`givework` bin.
+`givework` bin. Useful for running an unreleased branch; `npx givework` is the
+one to hand to a stranger.
 
 **Releases run from CI with no stored credential.** `.github/workflows/publish-cli.yml`
 publishes on a GitHub Release using npm **trusted publishing**: the job mints a

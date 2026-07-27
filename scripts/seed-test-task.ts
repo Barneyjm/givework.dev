@@ -54,10 +54,8 @@ async function main() {
   console.log(`\n✓ Seeded PUBLIC task ${task.rows[0].id}`);
   console.log(`  title: "Summarize a short note (test)"  cap: 100¢  model: claude-sonnet-4-6`);
   console.log(`\nClaim it:`);
-  console.log(
-    `  npx github:Barneyjm/givework.dev run --once               # stub executor (no credit)`,
-  );
-  console.log(`  EXECUTOR=claude npx github:Barneyjm/givework.dev run --once  # real claude -p`);
+  console.log(`  npx givework run --once               # stub executor (no credit)`);
+  console.log(`  EXECUTOR=claude npx givework run --once  # real claude -p`);
 }
 
 main()

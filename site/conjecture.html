@@ -312,7 +312,7 @@
             (t.angle ? '<span class="tk-a">' + esc(t.angle) + '</span>' : '') + '</span>' +
             '<span class="tk-cap">up to $' + (t.max_cost_cents / 100).toFixed(2) + '</span></li>';
         });
-        h += '</ul><p class="tk-note">Claim one with <span class="mono">npx github:Barneyjm/givework.dev run --watch</span> · <a href="/tasks">see all open work →</a></p>';
+        h += '</ul><p class="tk-note">Claim one with <span class="mono">npx givework run --watch</span> · <a href="/tasks">see all open work →</a></p>';
         slot.innerHTML = h;
       })
       .catch(function () {});
