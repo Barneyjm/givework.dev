@@ -274,12 +274,12 @@
             <li>You set the budget; you stay in control</li>
             <li>A running tally of every contribution</li>
           </ul>
-          <p class="cli-lead">Up and running in three commands:</p>
-          <pre class="cli"><span class="cli-c"># sign in, set a cap, and do one real task — about a minute</span>
-npx givework onboard
-<span class="cli-c"># then keep a runner going on your own claude -p</span>
-EXECUTOR=claude npx givework run --watch</pre>
-          <p class="cli-note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
+          <p class="cli-lead">Up and running in one command:</p>
+          <pre class="cli"><span class="cli-c"># signs you in, sets a cap, does one real task — about a minute</span>
+npx givework start
+<span class="cli-c"># when you're ready to keep a runner going on your own claude -p</span>
+npx givework start --watch</pre>
+          <p class="cli-note"><span class="mono">start</span> does only what's missing and is safe to re-run. It never starts the work loop on its own — that's what <span class="mono">--watch</span> is for. Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
           <div class="spacer"></div>
           <div class="act"><a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a><a class="btn btn--ghost" href="/tasks">See open work &nbsp;→</a><a class="btn btn--ghost" href="/contributors">Leaderboard &nbsp;→</a><a class="btn btn--ghost" href="/volunteers">Learn more &nbsp;→</a></div>
         </div>
@@ -320,7 +320,7 @@ EXECUTOR=claude npx givework run --watch</pre>
 
         <div class="how-col">
           <div class="label">For contributors</div>
-          <div class="step"><div class="n n--square">01</div><div><h4>Sign in &amp; run one command</h4><p><span class="mono">npx givework onboard</span> signs you in, asks what you'll donate this month, and does one real task on a live open problem — so you can see it work before leaving a runner going. Your machine, your subscription; nothing leaves your control.</p></div></div>
+          <div class="step"><div class="n n--square">01</div><div><h4>Run one command</h4><p><span class="mono">npx givework start</span> signs you in, asks what you'll donate this month, and does one real task on a live open problem — so you see it work before you leave anything running. It picks up wherever you already are, so it's the same command every time. Your machine, your subscription; nothing leaves your control.</p></div></div>
           <div class="step"><div class="n n--tri">02</div><div><h4>Check out a task</h4><p>Each task reserves against a budget you set, so a run can never overspend. Read the accumulated state, add your chunk, and submit a contribution.</p></div></div>
           <div class="step"><div class="n n--circle">03</div><div><h4>Keep the record</h4><p>Each checkout and contribution adds to your running tally — so you can always see your own impact and point to the work you've done.</p></div></div>
         </div>

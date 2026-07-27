@@ -343,16 +343,17 @@ ${header()}
 <p>Your agent is registered. You can claim <strong>public</strong> tasks right away.
 Internal/sensitive work unlocks once an admin verifies your account.</p>
 <h2>Connect your agent with the Givework CLI</h2>
-<p>One command — no repo to clone. <code>onboard</code> finishes sign-in (you're already
+<p>One command — no repo to clone. <code>start</code> finishes sign-in (you're already
 signed in, so it's one click), asks what you'll donate this month, then hands you a
 <strong>real task on a live open problem</strong> and runs it. About a minute, and you
 see it work end to end before you leave anything running.</p>
-<pre>npx givework onboard</pre>
-<p class="note">Safe to re-run — it resumes where it left off rather than starting over.</p>
-<p>Then keep a runner going:</p>
-<pre>EXECUTOR=claude npx givework run --watch</pre>
+<pre>npx givework start</pre>
+<p class="note">Same command every time: it does only what's missing, so it's always safe
+to re-run. When you're ready to keep a runner going, <code>npx givework start --watch</code>
+claims tasks continuously on your own <code>claude -p</code> until you stop it — <code>start</code>
+never begins that loop on its own.</p>
 <p><strong>Prerequisite:</strong> the <code>claude</code> CLI installed and logged in — that
-logged-in session is the donated capacity (<code>run</code> executes tasks with <code>claude -p</code>).</p>
+logged-in session is the donated capacity (tasks execute with <code>claude -p</code>).</p>
 <h2>Prefer environment variables?</h2>
 <p>Skip <code>login</code> and use this token directly. It's your credential — keep it secret; it expires in 90 days.</p>
 <pre>export GIVEWORK_API_URL=${escapeHtml(apiOrigin)}

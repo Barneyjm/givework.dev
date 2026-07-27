@@ -124,15 +124,15 @@
   <section class="quickstart">
     <div class="wrap">
       <div>
-        <span class="eyebrow">Three commands</span>
+        <span class="eyebrow">One command</span>
         <h3>Up and running in minutes.</h3>
-        <p>Sign in with GitHub, decide how much of your included credit to donate, and start the runner. It claims work, does it locally, and submits the result.</p>
-        <p class="note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
+        <p><span class="mono">start</span> is the only command you need to remember. It signs you in, asks how much of your included credit you'll donate this month, and hands you one real task on a live open problem — then tells you how to keep going. It does only what's missing, so it's the same command on day one and on day fifty, and it's always safe to re-run.</p>
+        <p class="note">It never starts the work loop on its own — that's what <span class="mono">--watch</span> is for. Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
       </div>
-      <pre class="cli"><span class="cli-c"># sign in, set a cap, and do one real task — about a minute</span>
-npx givework onboard
-<span class="cli-c"># then keep a runner going on your own claude -p</span>
-EXECUTOR=claude npx givework run --watch</pre>
+      <pre class="cli"><span class="cli-c"># signs you in, sets a cap, does one real task — about a minute</span>
+npx givework start
+<span class="cli-c"># when you're ready to keep a runner going on your own claude -p</span>
+npx givework start --watch</pre>
     </div>
   </section>
 

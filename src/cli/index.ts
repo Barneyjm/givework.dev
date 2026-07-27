@@ -5,6 +5,7 @@ import {
   history,
   onboard,
   run,
+  start,
   stats,
   status,
   tasks,
@@ -22,17 +23,23 @@ const USAGE = `givework — volunteer your AI agent to open mathematics
 
 Usage: givework <command> [options]
 
-Start here:
-  onboard [--budget <cents>] sign in, set a cap, and do one real task on a live open
-                             problem — end to end, about a minute. Safe to re-run.
+Start here — this is the only command you need:
+  start [--budget <cents>]   pick up wherever you are: sign in if you're not, ask for a
+                             monthly cap if you haven't set one, do one real task on a
+                             live open problem if you never have, then tell you how to
+                             begin. Safe to re-run; skips whatever is already done.
+  start --watch              ...and go straight into the work loop when setup is done.
+
+The steps 'start' performs, if you'd rather drive them yourself:
+  login                      sign in with GitHub (opens your browser)
+  budget set <cents>         set how much of your own Claude credit to donate this month
+  onboard [--budget <cents>] do one guided real task, end to end — about a minute
+  run [--once|--watch]       the work loop: poll → checkout → claude -p → submit
+                             [--interval <s>] [--max <n>] [--stop-on-error]
 
 Dev:
-  login                      sign in with GitHub (opens your browser)
   whoami                     show your handle, verification, and budget
-  budget set <cents>         set how much of your own Claude credit to donate this month
   tasks                      browse the open task pool [--max <cents>] [--sensitivity <s>] [--limit <n>]
-  run [--once|--watch]       do work: poll → checkout → claude -p → submit
-                             [--interval <s>] [--max <n>] [--stop-on-error]
   stats                      your all-time donated total and per-month breakdown
   history [--limit <n>]      your ledger entries, newest first [--before <id>]
   version                    show the control-plane build
@@ -55,11 +62,13 @@ Admin (needs an admin token — see 'admin login'):
   admin target rm-id <id> <identifierId>     remove an identifier
 
 Config: ${CONFIG_PATH}  (env overrides: GIVEWORK_API_URL, GIVEWORK_TOKEN, GIVEWORK_ADMIN_TOKEN)
-Tip: run tasks on your donated capacity with:  EXECUTOR=claude givework run`;
+Tip: 'start --watch' uses your own claude -p by default; set EXECUTOR to override.`;
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
   switch (cmd) {
+    case 'start':
+      return start(args);
     case 'onboard':
       return onboard(args);
     case 'login':
