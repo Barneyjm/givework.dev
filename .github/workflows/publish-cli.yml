@@ -8,12 +8,12 @@
 #
 # Requires npm >= 11.5.1 and Node >= 22.14.0 for trusted publishing.
 #
-# ONE-TIME BOOTSTRAP (see video/../README "Publishing the CLI"): npm's docs do
-# not state whether a trusted publisher can be configured for a name that has
-# never been published. If it cannot, the very first publish has to be done
-# once from a maintainer's machine (`npm publish`) to claim `givework`, after
-# which the trusted publisher is configured on npmjs.com and every subsequent
-# release runs through this workflow with no token anywhere.
+# ONE-TIME BOOTSTRAP (see README "Publishing the CLI"): npm's docs do not state
+# whether a trusted publisher can be configured for a name that has never been
+# published. If it cannot, the very first publish has to be done once from a
+# maintainer's machine (`npm publish`) to claim `givework`, after which the
+# trusted publisher is configured on npmjs.com and every subsequent release runs
+# through this workflow with no token anywhere.
 name: publish-cli
 
 on:
@@ -29,12 +29,42 @@ on:
 permissions:
   contents: read
 
+# A publish cannot be taken back -- npm refuses `npm unpublish` after 72 hours --
+# so never let two of these overlap. Two releases published a minute apart would
+# otherwise race for the `latest` dist-tag, and whichever job finished last would
+# win, which is not necessarily the newer version. Queue, never cancel: a
+# cancelled run may be one that has already published.
+concurrency:
+  group: publish-cli
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # mint the OIDC token npm exchanges for publish rights
+
+    # `npm test` runs against a real Postgres, not a mock. Same throwaway service
+    # container CI uses; created and torn down with the job.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: givework
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/givework
+      JWT_SECRET: ci-publish-secret
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,21 +72,49 @@ jobs:
         with:
           node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
+          cache: npm
 
-      # setup-node pins an npm that predates trusted publishing.
+      # setup-node pins an npm that predates trusted publishing. Pinned to the
+      # documented floor rather than @latest: the point of this job is a
+      # reproducible, attested publish, and a future npm major could change pack
+      # semantics or drop the Node version pinned above -- which we would find
+      # out at the exact moment a release is being cut.
       - name: Upgrade npm to a trusted-publishing capable version
         run: |
-          npm install -g npm@latest
+          npm install -g npm@^11.5.1
           npm --version
 
+      # This is the ONE build. `npm ci` runs `prepare`, which runs `build:cli`
+      # and produces dist/givework.mjs. Everything downstream that would
+      # otherwise rebuild (`npm pack`, `npm publish`) passes --ignore-scripts, so
+      # the file that is linted around, smoke-tested, packed and published is one
+      # and the same artifact.
       - run: npm ci
 
-      # The package ships one built file (dist/givework.mjs). Publishing a stale
-      # or missing build is worse than not publishing, so gate on the real thing.
-      - run: npm run build:cli
+      # dist/ is gitignored, so that file can only exist because `prepare` just
+      # ran here. Assert both halves: nothing checked in, and something built.
+      - name: Assert the bundle was built in this job, not committed
+        run: |
+          if git ls-files --error-unmatch dist/givework.mjs >/dev/null 2>&1; then
+            echo "::error::dist/givework.mjs is committed -- the publish must build it, not ship a checked-in artifact"
+            exit 1
+          fi
+          test -s dist/givework.mjs
+          echo "dist/givework.mjs built in this job ($(wc -c < dist/givework.mjs) bytes)"
 
-      # --help only. `givework version` queries the control plane, and a build
-      # step must never depend on (or touch) a live environment.
+      # The gate CLAUDE.md and CONTRIBUTING.md require of every change. Without
+      # it a release cut from a red commit ships a broken dist/givework.mjs as
+      # the permanent `latest` for `npx givework onboard`, and npm blocks
+      # unpublish after 72 hours -- there is no taking it back.
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: Apply migrations
+        run: npm run migrate
+      - name: Run tests
+        run: npm test
+
+      # --help only. `givework version` queries the control plane, and a publish
+      # job must never depend on (or touch) a live environment.
       - name: Verify the built CLI runs
         run: |
           node dist/givework.mjs --help > /tmp/help.txt
@@ -77,9 +135,30 @@ jobs:
           fi
           echo "tag and package.json agree on $PKG"
 
+      # npm publishes to the `latest` dist-tag by default, and `latest` is what
+      # `npx givework onboard` resolves to -- so a GitHub prerelease must not
+      # land there. Two independent signals, either one is enough: the release
+      # was marked prerelease, or the version carries a SemVer prerelease
+      # component (0.2.0-rc.1).
+      - name: Choose the dist-tag
+        id: disttag
+        env:
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$IS_PRERELEASE" = "true" ] || printf '%s' "$PKG" | grep -q -- '-'; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+            echo "$PKG is a prerelease -> publishing under the 'next' dist-tag"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "$PKG -> publishing under 'latest'"
+          fi
+
+      # --ignore-scripts so this does not re-run `prepare` and rebuild what was
+      # already built and tested above.
       - name: Show what would be published
-        run: npm pack --dry-run
+        run: npm pack --dry-run --ignore-scripts
 
       - name: Publish
         if: github.event_name == 'release' || inputs.dry_run == false
-        run: npm publish --access public
+        run: npm publish --access public --ignore-scripts --tag "${{ steps.disttag.outputs.tag }}"
