@@ -145,7 +145,7 @@ export async function tasks(args: string[]): Promise<void> {
   const q = qs.toString();
   const rows = await apiRequest<any[]>(apiUrl(), { path: `/tasks/open${q ? `?${q}` : ''}`, token });
   if (!rows.length) {
-    console.log('No open tasks right now. Try again later, or run:  givework run --watch');
+    console.log('No open tasks right now. Try again later, or run:  givework start --watch');
     return;
   }
   console.log(`${rows.length} open task${rows.length === 1 ? '' : 's'}:`);
@@ -279,6 +279,71 @@ export function suggestedCap(budget: DevBudget | null | undefined): number {
   return Math.max(DEFAULT_ONBOARD_BUDGET_CENTS, shortfall > 0 ? cap + shortfall : cap);
 }
 
+/** What `ensureCap` settled on, plus whether it had to write anything. */
+export interface CapResult {
+  budget_cents: number;
+  available_cents: number;
+  /** False when the existing cap was already good enough and we left it alone. */
+  changed: boolean;
+}
+
+/**
+ * Make sure this period's cap leaves room to claim work, and report what is
+ * available afterwards.
+ *
+ * `--budget <cents>` is always honoured. Otherwise the cap is only touched when
+ * there isn't enough headroom to check anything out — and then we ask, unless
+ * there is no human at the keyboard (no TTY: CI, a pipe), where we take the
+ * suggestion so a scripted `givework start` still works.
+ *
+ * Shared by `onboard` and `start` so exactly one place decides what to offer and
+ * exactly one place writes the cap. Budgets are per period, so a returning
+ * contributor hits this again in a new month even though everything else about
+ * their setup is done.
+ */
+export async function ensureCap(
+  base: string,
+  token: string,
+  budget: DevBudget | null | undefined,
+  args: string[],
+): Promise<CapResult> {
+  const budgetArg = arg(args, '--budget');
+  let wanted = budgetArg !== undefined ? Number(budgetArg) : null;
+  if (wanted !== null && (!Number.isInteger(wanted) || wanted < 0)) {
+    console.error('--budget must be a non-negative integer (cents)');
+    process.exit(1);
+  }
+  if (wanted === null && needsCapBeforeOnboarding(budget)) {
+    const suggested = suggestedCap(budget);
+    if (process.stdin.isTTY) {
+      const answer = await prompt(
+        `          How many cents of your own Claude credit will you donate this month? [${suggested}] `,
+      );
+      wanted = answer ? Number(answer) : suggested;
+      if (!Number.isInteger(wanted) || wanted < 0) {
+        console.error('          Budget must be a non-negative whole number of cents.');
+        process.exit(1);
+      }
+    } else {
+      wanted = suggested;
+    }
+  }
+  if (wanted === null) {
+    return {
+      budget_cents: budget?.budget_cents ?? 0,
+      available_cents: budget?.available_cents ?? 0,
+      changed: false,
+    };
+  }
+  const b = await apiRequest<any>(base, {
+    method: 'POST',
+    path: '/devs/budget',
+    token,
+    body: { budget_cents: wanted },
+  });
+  return { budget_cents: b.budget_cents, available_cents: b.available_cents, changed: true };
+}
+
 export interface OnboardingSummary {
   range_start: number;
   range_end: number;
@@ -361,8 +426,13 @@ function counterexamplesOf(result: unknown): number[] {
  * skipped if a token exists, the budget is skipped if it's already sufficient,
  * the mint is idempotent server-side, and a task left locked by a previous run is
  * released and re-checked-out rather than double-minted.
+ *
+ * `opts.footer` is off when `start` is driving: `start` owns the closing "here
+ * is how to begin the work loop" advice, and printing it twice in one run reads
+ * as two different instructions.
  */
-export async function onboard(args: string[]): Promise<void> {
+export async function onboard(args: string[], opts: { footer?: boolean } = {}): Promise<void> {
+  const footer = opts.footer ?? true;
   const base = apiUrl();
 
   // 1. Identity.
@@ -378,42 +448,12 @@ export async function onboard(args: string[]): Promise<void> {
 
   // 2. Budget — a cap on your own donated Claude credit, not a charge.
   console.log('Step 2/5  Set your monthly cap');
-  const budgetArg = arg(args, '--budget');
-  let available = me.budget?.available_cents ?? 0;
-  let wanted = budgetArg !== undefined ? Number(budgetArg) : null;
-  if (wanted !== null && (!Number.isInteger(wanted) || wanted < 0)) {
-    console.error('--budget must be a non-negative integer (cents)');
-    process.exit(1);
-  }
-  if (wanted === null && needsCapBeforeOnboarding(me.budget)) {
-    // Not enough headroom to mint yet. Ask when there's a human at the keyboard;
-    // otherwise take the suggestion so `npx … onboard` in a script still works.
-    const suggested = suggestedCap(me.budget);
-    if (process.stdin.isTTY) {
-      const answer = await prompt(
-        `          How many cents of your own Claude credit will you donate this month? [${suggested}] `,
-      );
-      wanted = answer ? Number(answer) : suggested;
-      if (!Number.isInteger(wanted) || wanted < 0) {
-        console.error('          Budget must be a non-negative whole number of cents.');
-        process.exit(1);
-      }
-    } else {
-      wanted = suggested;
-    }
-  }
-  if (wanted !== null) {
-    const b = await apiRequest<any>(base, {
-      method: 'POST',
-      path: '/devs/budget',
-      token,
-      body: { budget_cents: wanted },
-    });
-    available = b.available_cents;
-    console.log(`          cap ${b.budget_cents}¢ this month · ${available}¢ available\n`);
-  } else {
-    console.log(`          already set · ${available}¢ available\n`);
-  }
+  const cap = await ensureCap(base, token, me.budget, args);
+  console.log(
+    cap.changed
+      ? `          cap ${cap.budget_cents}¢ this month · ${cap.available_cents}¢ available\n`
+      : `          already set · ${cap.available_cents}¢ available\n`,
+  );
 
   // 3. A real task on a live open problem, on a range nobody else has.
   console.log('Step 3/5  Claim your first task');
@@ -439,7 +479,8 @@ export async function onboard(args: string[]): Promise<void> {
         console.log(line);
       }
       console.log('  Already recorded — the totals are on your contributor page.');
-      printNextSteps(base, me.github_handle, summary.target_slug);
+      printLinks(base, me.github_handle, summary.target_slug);
+      if (footer) printKeepGoing();
       return;
     }
     if (task.status === 'locked') {
@@ -473,7 +514,7 @@ export async function onboard(args: string[]): Promise<void> {
       console.error('\n  The task is still yours — nothing was spent, nothing was lost.');
       console.error('  Most often this means the Claude CLI is not installed or not logged in:');
       console.error('    npm install -g @anthropic-ai/claude-code   then   claude   (sign in)');
-      console.error('  Then re-run:  givework onboard');
+      console.error('  Then re-run:  givework start');
       process.exit(1);
     }
     console.log(`          ran in ${exec.actual_cost_cents}¢ of your credit\n`);
@@ -497,22 +538,187 @@ export async function onboard(args: string[]): Promise<void> {
     })) {
       console.log(line);
     }
-    printNextSteps(base, me.github_handle, summary.target_slug);
+    printLinks(base, me.github_handle, summary.target_slug);
+    if (footer) printKeepGoing();
   } finally {
     await backend.close();
   }
 }
 
-function printNextSteps(base: string, handle: string, slug: string): void {
+function printLinks(base: string, handle: string, slug: string): void {
   const site = siteUrlFor(base);
   console.log('');
   console.log(`  Your contributor page:  ${site}/contributors/${handle}`);
   console.log(`  The conjecture:         ${site}/conjectures/${slug}`);
+}
+
+function printKeepGoing(): void {
   console.log('');
   console.log('  Next: keep going. This picks up open tasks as they appear —');
   console.log('');
-  console.log('      EXECUTOR=claude givework run --watch');
+  console.log('      givework start --watch');
   console.log('');
+}
+
+// --- the front door ---
+
+/** The slice of GET /devs/me/stats that answers "have they ever finished a task?". */
+export interface ContributionTally {
+  tasks_completed?: number;
+}
+
+/**
+ * Has this contributor ever completed a task?
+ *
+ * The signal is `tasks_completed` from GET /devs/me/stats — COUNT(DISTINCT
+ * task_id) over the caller's own `submit` rows in `ledger`, scoped to the JWT.
+ *
+ * Chosen over the funnel's `submit` event deliberately. Funnel writes are
+ * swallowed on failure by design (analytics must never be able to fail a
+ * donation — see src/funnel.ts), so a dropped analytics insert would make a real
+ * contributor look like a newcomer and march them back through onboarding. The
+ * ledger row is written inside submitResult's transaction and is the durable
+ * record of the same moment. It is also a read that already exists and is
+ * already rendered by `givework stats`, so `start` invents no new state.
+ */
+export function hasContributed(stats: ContributionTally | null | undefined): boolean {
+  return (stats?.tasks_completed ?? 0) > 0;
+}
+
+/** How many tasks the pool is showing, and whether we hit the page cap. */
+export interface OpenPool {
+  count: number;
+  capped: boolean;
+}
+
+/**
+ * The closing report: what is true now, and the exact command that begins the
+ * work loop. Pure, so the wording is testable — in particular that it *tells*
+ * the user how to start rather than claiming to have started.
+ */
+export function readyLines(
+  handle: string,
+  budget: DevBudget | null | undefined,
+  pool: OpenPool | null,
+): string[] {
+  const lines = [`You're set up, @${handle}.`];
+  if (budget) {
+    lines.push(
+      `  cap ${budget.budget_cents ?? 0}¢ this month · ${budget.available_cents ?? 0}¢ available`,
+    );
+  }
+  if (pool) {
+    const n = `${pool.count}${pool.capped ? '+' : ''}`;
+    lines.push(
+      pool.count === 0
+        ? '  No tasks open right now — the loop below waits and picks them up as they appear'
+        : `  ${n} task${pool.count === 1 && !pool.capped ? '' : 's'} available to you right now`,
+    );
+  }
+  lines.push('');
+  lines.push('  To start working, run this. It claims tasks as they appear and runs');
+  lines.push('  them on your own Claude credit until you stop it (Ctrl-C):');
+  lines.push('');
+  lines.push('      givework start --watch');
+  lines.push('');
+  lines.push('  Or one at a time:  EXECUTOR=claude givework run --once');
+  return lines;
+}
+
+/**
+ * `givework start` — the single front door. It reads the contributor's current
+ * state and does only what is missing:
+ *
+ *   not signed in                  -> browser sign-in
+ *   signed in, no cap this month   -> ask for a monthly cap (cents)
+ *   cap set, never finished a task -> the guided first task (what `onboard` does)
+ *   all of the above already done  -> nothing
+ *
+ * Every step is skipped silently when it is already satisfied, so re-running is
+ * cheap and idempotent: sign-in is skipped when a token exists, the cap is
+ * skipped when it already has headroom, and the onboarding mint is idempotent
+ * server-side (one task per dev, enforced by a UNIQUE index on
+ * `tasks.onboarding_dev_id`), so a second `start` resumes the same task rather
+ * than minting — or paying for — a second one. Once a task has been completed,
+ * `start` does not go near onboarding at all.
+ *
+ * WHY `start` DOES NOT ENTER THE WORK LOOP ON ITS OWN
+ * ---------------------------------------------------
+ * `run --watch` spends the volunteer's own Claude credit continuously and
+ * unattended. A command called `start` that silently drops someone into that the
+ * first time they type it is a genuinely unpleasant surprise: the budget cap
+ * bounds how much it can cost, but it does not bound the surprise, and "I typed
+ * one word and my agent has been burning my credit ever since" is the story that
+ * gets somebody to uninstall — and to warn their friends off. Consent to donate
+ * a capped amount is not consent to start donating it right now, unattended.
+ *
+ * So the default finishes by reporting the state and naming the command that
+ * begins the loop, and `--watch` is the explicit opt-in that goes straight into
+ * it. The verb someone types is the whole of their consent, so `start --watch`
+ * has to be the only spelling that leaves a process running.
+ */
+export async function start(args: string[]): Promise<void> {
+  const base = apiUrl();
+
+  // 1. Identity. Silently skipped when a token is already on disk (or in env).
+  if (!loadConfig().token) {
+    console.log('Signing you in with GitHub — a browser window will open.\n');
+    await login();
+    console.log('');
+  }
+  const token = requireToken();
+
+  const [me, stats] = await Promise.all([
+    apiRequest<any>(base, { path: '/devs/me', token }),
+    apiRequest<ContributionTally>(base, { path: '/devs/me/stats', token }),
+  ]);
+
+  let changed = false;
+  if (!hasContributed(stats)) {
+    // 2 + 3. The cap and the guided first task. `onboard` already does both,
+    // checks each before acting, and is safe to re-run — so `start` delegates
+    // instead of growing a second copy of that flow.
+    await onboard(args, { footer: false });
+    changed = true;
+  } else if (needsCapBeforeOnboarding(me.budget)) {
+    // 2 alone. A returning contributor in a new month: caps are per period, so
+    // theirs is gone even though everything else about their setup is done.
+    console.log(`Welcome back, @${me.github_handle}. Set this month's cap:\n`);
+    const cap = await ensureCap(base, token, me.budget, args);
+    if (cap.changed) {
+      console.log(
+        `          cap ${cap.budget_cents}¢ this month · ${cap.available_cents}¢ available`,
+      );
+    }
+    changed = true;
+  }
+
+  // 4. Report where they stand and hand over. Both reads are best-effort: every
+  //    state change above already succeeded, so a hiccup here must not turn a
+  //    finished setup into a non-zero exit.
+  const current = changed
+    ? await apiRequest<any>(base, { path: '/devs/me', token }).catch(() => me)
+    : me;
+  const open = await apiRequest<any[]>(base, { path: '/tasks/open?limit=100', token }).catch(
+    () => null,
+  );
+  console.log('');
+  for (const line of readyLines(
+    current.github_handle,
+    current.budget,
+    open ? { count: open.length, capped: open.length >= 100 } : null,
+  )) {
+    console.log(line);
+  }
+
+  if (!has(args, '--watch')) return;
+
+  // The explicit opt-in. Default to the volunteer's own `claude -p` — the whole
+  // point is donated capacity, and silently looping on the stub executor would
+  // donate nothing while looking like it worked.
+  if (!process.env.EXECUTOR) process.env.EXECUTOR = 'claude';
+  console.log('\n--watch: starting the work loop. Ctrl-C to stop.\n');
+  await run(args);
 }
 
 // --- admin commands ---

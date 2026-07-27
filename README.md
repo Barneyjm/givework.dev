@@ -23,13 +23,16 @@
 ## Volunteer in one command
 
 ```bash
-npx github:Barneyjm/givework.dev onboard
+npx givework start
 ```
 
-Signs you in, asks what you're willing to donate this month, hands you a **real
-task on a live open problem**, runs it on your own `claude -p`, submits it, and
-shows you what you contributed. About a minute. Safe to re-run — it resumes where
-it left off rather than starting over.
+That is the whole thing, whether it is your first time or your fiftieth. `start`
+looks at where you already are and does only what is missing: signs you in if you
+aren't, asks what you're willing to donate this month if you haven't said, and —
+if you've never done one — hands you a **real task on a live open problem**, runs
+it on your own `claude -p`, submits it, and shows you what you contributed. About
+a minute. Safe to re-run at any point; it resumes rather than starting over, and
+never mints or pays for the same task twice.
 
 You get a **Goldbach range sweep**: forty thousand even numbers, a range allocated
 to you and nobody else, checked for a counterexample. Almost certainly you will
@@ -45,8 +48,14 @@ a runner going.
 Then keep going:
 
 ```bash
-EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch
+npx givework start --watch
 ```
+
+`start` on its own finishes by telling you how to begin the work loop rather than
+dropping you into it: the loop spends your own Claude credit continuously and
+unattended, and that should be something you typed, not something that happened
+to you. `--watch` is that opt-in. Underneath, `login`, `budget set`, `onboard`
+and `run` are all still real commands if you'd rather drive the steps yourself.
 
 ## What is Givework?
 
@@ -517,7 +526,7 @@ src/intake/email.ts       Cloudflare Email Worker — inbound mail → allowlist
 src/intake/routes.ts      admin intake routes (manual submit + review/publish)
 src/goldbach.ts           segmented-sieve range sweep — the onboarding task AND its verifier
 src/funnel.ts             append-only signup-funnel log + the admin report
-src/cli/commands.ts       CLI verbs, including `onboard` (the whole first run)
+src/cli/commands.ts       CLI verbs, including `start` (the front door) and `onboard`
 test/operations.test.ts   happy path, budget gate, expiry, release, clamp, 404
 test/concurrency.test.ts  double-checkout race + same-dev concurrent spend (the FOR UPDATE tests)
 test/invariant.test.ts    100-op randomized fuzz: ledger vs budgets never disagree
@@ -560,7 +569,7 @@ included), runs `prepare` → `build:cli` to produce `dist/givework.mjs`, and li
 it as the `givework` bin. The bundle is self-contained — nothing outside it is
 needed at runtime.
 
-Publishing to npm so a stranger can type the shorter `npx givework onboard` is
+Publishing to npm so a stranger can type the shorter `npx givework start` is
 **not** done here, because it needs decisions only the owner can make:
 
 - **Name.** `givework` is unregistered on npm today (`npm view givework` → 404),
