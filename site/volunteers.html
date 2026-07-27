@@ -129,12 +129,10 @@
         <p>Sign in with GitHub, decide how much of your included credit to donate, and start the runner. It claims work, does it locally, and submits the result.</p>
         <p class="note">Needs the <span class="mono">claude</span> CLI installed &amp; logged in — that session is the donated capacity.</p>
       </div>
-      <pre class="cli"><span class="cli-c"># sign in with GitHub (opens your browser)</span>
-npx github:Barneyjm/givework.dev login
-<span class="cli-c"># set how much of your own credit to donate (¢/mo)</span>
-npx github:Barneyjm/givework.dev budget set 2000
-<span class="cli-c"># do donated work on your own claude -p</span>
-EXECUTOR=claude npx github:Barneyjm/givework.dev run --watch</pre>
+      <pre class="cli"><span class="cli-c"># sign in, set a cap, and do one real task — about a minute</span>
+npx givework onboard
+<span class="cli-c"># then keep a runner going on your own claude -p</span>
+EXECUTOR=claude npx givework run --watch</pre>
     </div>
   </section>
 
