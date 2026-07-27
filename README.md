@@ -560,22 +560,58 @@ included), runs `prepare` → `build:cli` to produce `dist/givework.mjs`, and li
 it as the `givework` bin. The bundle is self-contained — nothing outside it is
 needed at runtime.
 
-Publishing to npm so a stranger can type the shorter `npx givework onboard` is
-**not** done here, because it needs decisions only the owner can make:
+Publishing to npm, so a stranger can type the shorter `npx givework onboard`,
+runs from `.github/workflows/publish-cli.yml` on a **published GitHub Release**.
+Never from a laptop: that is how stale builds and untraceable versions get
+shipped, and a publish cannot be taken back — npm refuses `npm unpublish` after
+72 hours.
 
-- **Name.** `givework` is unregistered on npm today (`npm view givework` → 404),
-  so the unscoped name is available — but claiming it is the owner's call. The
-  alternative is a scope (`@barneyjm/givework`), which needs
-  `publishConfig.access: "public"` added to `package.json`.
-- **Credentials.** An npm account with 2FA, plus an automation token stored as a
-  repo secret (`NPM_TOKEN`) if publishing should run from CI.
-- **Versioning.** `version` is still `0.1.0` and has never been released; decide
-  whether the CLI versions with the repo or independently, and whether releases
-  are tag-triggered.
+**There is no `NPM_TOKEN`, and there must not be one.** The workflow uses npm
+**trusted publishing** (OIDC): the job mints a short-lived credential from
+GitHub's OIDC provider, npm verifies it against the trusted publisher configured
+on the package, and nothing long-lived is ever stored in this repo's secrets. A
+standing automation token is precisely the credential this design exists to
+eliminate — if you create one, you have reintroduced the thing that can be stolen
+from a repo secret and used to push a release from anywhere. Provenance
+attestations come free with it (no `--provenance` flag).
 
-Everything else is ready: `private` is removed, `files` ships only the built
+Setting it up, once:
+
+1. **Claim the name.** `givework` was unregistered on npm at the time of writing
+   (`npm view givework` → 404). Claiming the unscoped name is the owner's call;
+   the alternative is a scope (`@barneyjm/givework`), which needs
+   `publishConfig.access: "public"` in `package.json`.
+2. **Configure the trusted publisher** on npmjs.com → the package → *Settings* →
+   *Trusted publisher*: GitHub Actions, repository `Barneyjm/givework.dev`,
+   workflow `publish-cli.yml`. No environment is required by the workflow as
+   written; if you set one here, add a matching `environment:` to the job.
+   > **Honest caveat:** npm's documentation does not state whether a trusted
+   > publisher can be configured for a name that has never been published.
+   > If it cannot, the very first publish has to be done once by a maintainer
+   > from their own machine (`npm login` + `npm publish`) purely to claim the
+   > name, after which step 2 becomes possible and every subsequent release goes
+   > through the workflow with no token anywhere. Budget for that possibility
+   > rather than being surprised by it mid-release.
+3. **Cut a release.** Set `version` in `package.json`, tag `vX.Y.Z`, and publish
+   a GitHub Release with that tag. The workflow refuses to publish if the tag and
+   `package.json` disagree.
+
+What the job guarantees before anything reaches the registry: the bundle is
+**built in the job** (`dist/` is gitignored, so a committed artifact cannot be
+shipped, and the job asserts as much), `lint` + `typecheck` + the full test suite
+all pass against a throwaway Postgres, the built binary runs (`--help` only — a
+publish job must never touch a live control plane), and `npm pack --dry-run`
+prints the file list into the log. A release marked **prerelease**, or any SemVer
+prerelease version, publishes under the `next` dist-tag so it can never become
+what `npx givework onboard` resolves to. A `concurrency` group serializes runs,
+because two publishes racing for `latest` is not a race you can rerun.
+
+Dry run it any time with **Actions → publish-cli → Run workflow** (`dry_run`
+defaults to true): everything happens except the publish.
+
+The package metadata is ready: `private` is removed, `files` ships only the built
 bundle plus `README`/`LICENSE`, and `repository`/`homepage`/`license`/`engines`
-are set. Once a decision is made, `npm publish` is the only remaining step.
+are set.
 
 ## License
 
