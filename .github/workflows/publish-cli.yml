@@ -1,0 +1,85 @@
+# Publish the `givework` CLI to npm.
+#
+# Uses npm trusted publishing (OIDC), so there is NO long-lived NPM_TOKEN in
+# this repo's secrets: the job mints a short-lived credential from GitHub's
+# OIDC provider, which npm verifies against the trusted publisher configured on
+# the package. That also means provenance attestations are generated and
+# published automatically -- no --provenance flag needed.
+#
+# Requires npm >= 11.5.1 and Node >= 22.14.0 for trusted publishing.
+#
+# ONE-TIME BOOTSTRAP (see video/../README "Publishing the CLI"): npm's docs do
+# not state whether a trusted publisher can be configured for a name that has
+# never been published. If it cannot, the very first publish has to be done
+# once from a maintainer's machine (`npm publish`) to claim `givework`, after
+# which the trusted publisher is configured on npmjs.com and every subsequent
+# release runs through this workflow with no token anywhere.
+name: publish-cli
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack and validate without publishing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token npm exchanges for publish rights
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      # setup-node pins an npm that predates trusted publishing.
+      - name: Upgrade npm to a trusted-publishing capable version
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - run: npm ci
+
+      # The package ships one built file (dist/givework.mjs). Publishing a stale
+      # or missing build is worse than not publishing, so gate on the real thing.
+      - run: npm run build:cli
+
+      # --help only. `givework version` queries the control plane, and a build
+      # step must never depend on (or touch) a live environment.
+      - name: Verify the built CLI runs
+        run: |
+          node dist/givework.mjs --help > /tmp/help.txt
+          grep -q 'givework' /tmp/help.txt
+          grep -q 'onboard' /tmp/help.txt
+          echo "built CLI runs and advertises onboard"
+
+      # A release tag that disagrees with package.json produces a published
+      # version nobody can trace back to a tag. Fail loudly instead.
+      - name: Check tag matches package.json version
+        if: github.event_name == 'release'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::release tag $GITHUB_REF_NAME does not match package.json version $PKG"
+            exit 1
+          fi
+          echo "tag and package.json agree on $PKG"
+
+      - name: Show what would be published
+        run: npm pack --dry-run
+
+      - name: Publish
+        if: github.event_name == 'release' || inputs.dry_run == false
+        run: npm publish --access public
