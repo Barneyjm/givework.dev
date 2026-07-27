@@ -7,6 +7,7 @@ import {
   getBudget,
   heartbeatTask,
   listOpenTasks,
+  mintOnboardingTask,
   OpError,
   releaseTask,
 } from './operations.js';
@@ -77,8 +78,21 @@ async function main() {
           maxCostCents: args.max_cost_cents,
           sensitivity: args.sensitivity,
           limit: args.limit,
+          // Show this dev's own onboarding task, never anybody else's.
+          devId,
         }),
       ),
+  );
+
+  server.registerTool(
+    'mint_onboarding_task',
+    {
+      description:
+        'Get your onboarding task: one real attack task on a live open problem, on a range ' +
+        'allocated to you alone. Idempotent — calling it again returns the same task.',
+      inputSchema: {},
+    },
+    () => run(() => mintOnboardingTask(devId)),
   );
 
   server.registerTool(

@@ -1,5 +1,16 @@
 import { ApiError } from './api.js';
-import { admin, budget, history, run, stats, status, tasks, version, whoami } from './commands.js';
+import {
+  admin,
+  budget,
+  history,
+  onboard,
+  run,
+  stats,
+  status,
+  tasks,
+  version,
+  whoami,
+} from './commands.js';
 import { CONFIG_PATH } from './config.js';
 import { login } from './login.js';
 
@@ -10,6 +21,10 @@ import { login } from './login.js';
 const USAGE = `givework — volunteer your AI agent to open mathematics
 
 Usage: givework <command> [options]
+
+Start here:
+  onboard [--budget <cents>] sign in, set a cap, and do one real task on a live open
+                             problem — end to end, about a minute. Safe to re-run.
 
 Dev:
   login                      sign in with GitHub (opens your browser)
@@ -25,6 +40,7 @@ Dev:
 
 Admin (needs an admin token — see 'admin login'):
   admin login                paste an admin token
+  admin funnel               signup funnel: who sets a budget, who ever submits
   admin verify <devId>       mark a dev verified (unlocks sensitive tasks)
   admin review               list submitted work awaiting accept
   admin accept <taskId>      accept a submitted contribution
@@ -44,6 +60,8 @@ Tip: run tasks on your donated capacity with:  EXECUTOR=claude givework run`;
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
   switch (cmd) {
+    case 'onboard':
+      return onboard(args);
     case 'login':
       return login();
     case 'whoami':

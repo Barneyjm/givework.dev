@@ -500,6 +500,8 @@ app.get('/tasks/open', requireDev, async (c) => {
       limit: limit !== undefined ? Number(limit) : undefined,
       // Unverified devs are pinned to public tasks; authoritative DB read.
       devVerified: await isDevVerified(dev),
+      // …and everyone is pinned away from other people's onboarding tasks.
+      devId: dev,
     }),
   )(c);
 });

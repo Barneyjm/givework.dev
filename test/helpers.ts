@@ -22,10 +22,34 @@ if (url && !looksLocal && process.env.TEST_DB_ALLOW_REMOTE !== '1') {
 /** Wipe all data between tests. Order respects FK references. */
 export async function resetDb(): Promise<void> {
   await pool.query(
-    `TRUNCATE ledger, verifications, contributions, tasks, intake_attachments, intake_requests,
-              dev_budgets, target_budgets, target_identifiers, targets, devs
+    `TRUNCATE ledger, verifications, contributions, funnel_events, tasks, intake_attachments,
+              intake_requests, dev_budgets, target_budgets, target_identifiers, targets, devs
               RESTART IDENTITY CASCADE`,
   );
+}
+
+/**
+ * Seed the conjecture new contributors onboard on, with its sweep cursor at a
+ * known place. Mirrors what `npm run seed-conjectures` produces.
+ */
+export async function createOnboardingTarget(sweepCursor = 4): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO targets (name, kind, slug, statement_plain, checker, sweep_cursor)
+     VALUES ('Goldbach''s conjecture', 'conjecture', 'goldbach',
+             'Every even integer greater than 2 is the sum of two primes.', 'goldbach', $1)
+     RETURNING id`,
+    [sweepCursor],
+  );
+  return rows[0].id;
+}
+
+/** Every funnel event for a dev, oldest first. */
+export async function getFunnelEvents(devId: string) {
+  const { rows } = await pool.query(
+    `SELECT event, detail FROM funnel_events WHERE dev_id = $1 ORDER BY id ASC`,
+    [devId],
+  );
+  return rows as { event: string; detail: any }[];
 }
 
 export async function createDev(handle: string): Promise<string> {
@@ -79,6 +103,8 @@ export async function createTask(
     title?: string;
     kind?: string;
     verify_via?: string;
+    /** The task's spec. Defaults to a bare prompt — i.e. a task that assigns no range. */
+    spec?: unknown;
   } = { max: 500 },
 ): Promise<string> {
   const { rows } = await pool.query(
@@ -90,7 +116,7 @@ export async function createTask(
     [
       targetId,
       opts.title ?? 'Test task',
-      JSON.stringify({ prompt: 'do the thing' }),
+      JSON.stringify(opts.spec ?? { prompt: 'do the thing' }),
       opts.est ?? Math.min(opts.max, 100),
       opts.max,
       'claude-opus-4-8',

@@ -174,6 +174,41 @@ export interface RunLoopOptions {
 }
 
 /**
+ * How often the lease is renewed while work runs. `checkoutTask` sets
+ * `lock_expires_at = now() + 10 minutes`, so anything that can outlive that has
+ * to heartbeat or its submit hits the guarded UPDATE, matches 0 rows, and throws
+ * `not_locked` — the volunteer's real Claude credit spent for nothing.
+ */
+export const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Run `fn` while holding the task's lease open. Every path that executes a
+ * checked-out task must go through this — the run loop and `givework onboard`
+ * alike — because the failure it prevents (a slow machine, a long CLI startup, a
+ * retried call) is invisible until it costs someone their first contribution.
+ *
+ * Heartbeat failures are logged, not thrown: a dead lease just returns the task
+ * to the pool, which is the designed behaviour, and killing the run in flight
+ * would guarantee the loss it is trying to avoid.
+ */
+export async function withLease<T>(
+  backend: Backend,
+  taskId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lease = setInterval(() => {
+    backend
+      .heartbeat(taskId)
+      .catch((err) => console.error(`  ! heartbeat failed: ${(err as Error).message}`));
+  }, HEARTBEAT_INTERVAL_MS);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(lease);
+  }
+}
+
+/**
  * The volunteer's work loop: find an affordable open task, check it out, execute
  * it on the donated executor, submit the result, repeat — until the budget runs
  * out, the pool is empty, or maxTasks is reached. Returns the number of completed
@@ -254,20 +289,14 @@ export async function runLoop(
       // Run the work. If execution fails (e.g. the real Claude call errors), do
       // NOT submit — release the task so another volunteer can pick it up.
       // Submitting fabricated output would corrupt the ledger and the deliverable.
-      // A heartbeat renews the 10-minute lease every 5 minutes while execution
+      // withLease renews the 10-minute lease every 5 minutes while execution
       // runs, so long CPU work units keep their claim; failures are non-fatal
       // (a dead lease just returns the task to the pool, as designed).
       let exec: Awaited<ReturnType<typeof executor.execute>>;
-      const lease = setInterval(
-        () => {
-          backend
-            .heartbeat(checkout.task_id)
-            .catch((err) => console.error(`  ! heartbeat failed: ${(err as Error).message}`));
-        },
-        5 * 60 * 1000,
-      );
       try {
-        exec = await executor.execute(checkout as ExecTask);
+        exec = await withLease(backend, checkout.task_id, () =>
+          executor.execute(checkout as ExecTask),
+        );
       } catch (err) {
         console.error(
           `  ✗ execution failed for ${checkout.task_id.slice(0, 8)}: ${(err as Error).message} — releasing`,
@@ -282,8 +311,6 @@ export async function runLoop(
           break;
         }
         continue;
-      } finally {
-        clearInterval(lease);
       }
       consecutiveFailures = 0;
 

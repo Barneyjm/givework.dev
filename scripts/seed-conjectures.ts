@@ -17,6 +17,13 @@ interface SeedConjecture {
   significance: string;
   tags: string[];
   checker?: string;
+  /**
+   * Where range-sweep work starts on this target. Only meaningful for a target
+   * whose checker can verify a swept range (today: goldbach, which is what new
+   * contributors onboard on). Never rewound by a re-seed — the cursor is
+   * allocation state, not configuration.
+   */
+  sweep_start?: number;
 }
 
 const CONJECTURES: SeedConjecture[] = [
@@ -39,6 +46,7 @@ const CONJECTURES: SeedConjecture[] = [
       'The oldest famous problem in number theory (1742); the odd/ternary version finally fell in 2013.',
     tags: ['number-theory'],
     checker: 'goldbach',
+    sweep_start: 4,
   },
   {
     name: 'Twin prime conjecture',
@@ -86,17 +94,30 @@ async function main() {
   let inserted = 0;
   for (const c of CONJECTURES) {
     const { rows } = await pool.query<{ inserted: boolean }>(
-      `INSERT INTO targets (name, kind, slug, statement_plain, source_ref, significance, tags, checker)
-       VALUES ($1, 'conjecture', $2, $3, $4, $5, $6, $7)
+      `INSERT INTO targets
+         (name, kind, slug, statement_plain, source_ref, significance, tags, checker, sweep_cursor)
+       VALUES ($1, 'conjecture', $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (slug) WHERE slug IS NOT NULL DO UPDATE SET
          name = EXCLUDED.name,
          statement_plain = EXCLUDED.statement_plain,
          source_ref = EXCLUDED.source_ref,
          significance = EXCLUDED.significance,
          tags = EXCLUDED.tags,
-         checker = EXCLUDED.checker
+         checker = EXCLUDED.checker,
+         -- Never rewind an in-flight allocation cursor on a re-seed: doing so
+         -- would hand already-swept ranges to the next contributors.
+         sweep_cursor = COALESCE(targets.sweep_cursor, EXCLUDED.sweep_cursor)
        RETURNING (xmax = 0) AS inserted`,
-      [c.name, c.slug, c.statement_plain, c.source_ref, c.significance, c.tags, c.checker ?? null],
+      [
+        c.name,
+        c.slug,
+        c.statement_plain,
+        c.source_ref,
+        c.significance,
+        c.tags,
+        c.checker ?? null,
+        c.sweep_start ?? null,
+      ],
     );
     const isNew = rows[0]?.inserted ?? false;
     if (isNew) inserted++;

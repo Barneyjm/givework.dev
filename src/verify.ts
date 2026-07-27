@@ -1,4 +1,5 @@
 import { query } from './db.js';
+import { type SweepResult, sweepGoldbach } from './goldbach.js';
 import type { VerificationMethod } from './intake/decompose.js';
 import type { SendEmailBinding } from './mailer.js';
 import {
@@ -35,11 +36,29 @@ const RESOLVABLE_KINDS = ['conjecture', 'research_question'];
 export interface CheckerResult {
   /** True iff the witness genuinely disproves the conjecture. */
   disproves: boolean;
+  /**
+   * True iff the claim was independently re-computed and holds, WITHOUT settling
+   * the conjecture — the outcome of a clean range sweep. This is a pass, not a
+   * failure: ruling out territory is a real, permanent contribution, and treating
+   * "found nothing" as a rejection would throw that work away and hand the
+   * contributor a red X for doing exactly what was asked. Ignored when
+   * `disproves` is true (a counterexample outranks everything).
+   */
+  confirmed?: boolean;
   /** True iff the witness can't be decided here (e.g. beyond a safe range). */
   inconclusive?: boolean;
   detail?: unknown;
 }
-export type WitnessChecker = (witness: unknown) => CheckerResult;
+/**
+ * What the checker knows about the task the witness was produced for. Needed
+ * because some claims are only meaningful relative to their assignment: a swept
+ * range must be THE assigned range, or an agent could bank credit for sweeping
+ * four numbers instead of forty thousand.
+ */
+export interface CheckerContext {
+  spec?: unknown;
+}
+export type WitnessChecker = (witness: unknown, ctx?: CheckerContext) => CheckerResult;
 
 function isPrime(n: number): boolean {
   if (n < 2) return false;
@@ -70,13 +89,48 @@ function eulerSumOfPowers(witness: any): CheckerResult {
 }
 
 /**
- * Goldbach's conjecture — OPEN. A witness {n} disproves it iff n is an even
- * integer > 2 with NO representation as a sum of two primes (none is known). This
- * checker mostly *rejects* bogus counterexample claims — it always finds a
- * decomposition for real n — which is exactly the point: it won't false-positive.
+ * Goldbach's conjecture — OPEN. Accepts two witness shapes, because there are two
+ * genuinely different things a contributor can claim:
+ *
+ *   {n}                              — "n is a counterexample". Disproves the
+ *                                      conjecture iff n is an even integer > 2
+ *                                      with NO two-prime representation. This
+ *                                      path mostly *rejects* bogus claims — it
+ *                                      always finds a decomposition for real n —
+ *                                      which is the point: it won't false-positive.
+ *
+ *   {range_start, range_end, ...}    — "I swept this range and here is what is
+ *                                      in it". Re-run in full here; a clean sweep
+ *                                      is `confirmed` (a pass), and a genuine
+ *                                      counterexample found inside it disproves.
+ *
+ * The range shape is what the onboarding task submits. Verification re-does the
+ * whole sweep rather than trusting the claim, so an agent that fabricated a
+ * result is caught: the recomputed counterexample list and the recomputed
+ * `max_min_prime` must match what was claimed.
+ *
+ * Which shape applies is decided by the TASK, never by the witness. A range
+ * sweep is only creditable against a range the platform assigned: if the task
+ * assigned none, an agent could otherwise declare a four-number range, sweep it
+ * cleanly, and be auto-accepted for work nobody asked for. So a self-declared
+ * range with no assignment is inconclusive — recorded, held for a human, never a
+ * pass.
  */
 const GOLDBACH_MAX = 5_000_000;
-function goldbach(witness: any): CheckerResult {
+function goldbach(witness: any, ctx?: CheckerContext): CheckerResult {
+  const assigned = assignedRange(ctx?.spec);
+  if (assigned) return goldbachRange(witness, assigned);
+  if (witness?.range_start !== undefined || witness?.range_end !== undefined) {
+    return {
+      disproves: false,
+      inconclusive: true,
+      detail: {
+        reason:
+          'this task assigned no range, so a self-declared range sweep cannot be credited here',
+        reported: [witness?.range_start, witness?.range_end],
+      },
+    };
+  }
   const n = witness?.n;
   if (!Number.isInteger(n) || n <= 2 || n % 2 !== 0) {
     return { disproves: false, detail: { reason: 'witness must be an even integer > 2' } };
@@ -90,6 +144,97 @@ function goldbach(witness: any): CheckerResult {
     }
   }
   return { disproves: true, detail: { reason: 'no two-prime decomposition exists' } };
+}
+
+/** The range a task assigned, if it assigned one. Platform-authored, so authoritative. */
+function assignedRange(spec: unknown): [number, number] | null {
+  const s = spec as { range_start?: unknown; range_end?: unknown } | null | undefined;
+  if (!Number.isInteger(s?.range_start) || !Number.isInteger(s?.range_end)) return null;
+  return [s?.range_start as number, s?.range_end as number];
+}
+
+/**
+ * The range-sweep half of the Goldbach checker. Re-computes the sweep from
+ * scratch and compares it to the claim:
+ *
+ *   - a counterexample the recomputation agrees with  -> disproves
+ *   - nothing found, and we agree there is nothing    -> confirmed (a pass)
+ *   - claimed a counterexample that isn't one, or a
+ *     computed statistic that doesn't check out       -> failed
+ *   - range malformed / too wide to check inline      -> inconclusive
+ *
+ * `max_min_prime` is optional and only checked when supplied: a runner whose
+ * agent could actually execute code reports it and gets it verified; one whose
+ * agent could not simply omits it, and still gets an honest confirmed sweep
+ * (the authoritative arithmetic happens here either way).
+ *
+ * `assigned` is non-nullable on purpose: the only range this will ever sweep is
+ * one the platform wrote into the task's spec. There is deliberately no fallback
+ * to the witness's own numbers — that fallback was the auto-accept hole.
+ */
+function goldbachRange(witness: any, assigned: [number, number]): CheckerResult {
+  // The assigned range wins. A claim about a DIFFERENT range is not a lesser
+  // contribution, it's the wrong contribution — verifying it would let an agent
+  // sweep four numbers and be credited with forty thousand.
+  if (witness?.range_start !== undefined || witness?.range_end !== undefined) {
+    if (witness.range_start !== assigned[0] || witness.range_end !== assigned[1]) {
+      return {
+        disproves: false,
+        detail: {
+          reason: 'reported range does not match the range this task assigned',
+          assigned,
+          reported: [witness.range_start, witness.range_end],
+        },
+      };
+    }
+  }
+  const [start, end] = assigned;
+  const claimed = witness?.counterexamples;
+  if (claimed !== undefined && !Array.isArray(claimed)) {
+    return { disproves: false, detail: { reason: 'counterexamples must be an array' } };
+  }
+  let swept: SweepResult;
+  try {
+    swept = sweepGoldbach(start, end);
+  } catch (err) {
+    return {
+      disproves: false,
+      inconclusive: true,
+      detail: { reason: (err as Error).message },
+    };
+  }
+  const detail = {
+    range: [swept.start, swept.end],
+    checked: swept.checked,
+    counterexamples: swept.counterexamples,
+    max_min_prime: swept.max_min_prime,
+    max_min_prime_at: swept.max_min_prime_at,
+  };
+
+  // A real counterexample outranks everything — but only if we found it too.
+  if (swept.counterexamples.length > 0) {
+    return { disproves: true, detail };
+  }
+  // Claimed a counterexample the recomputation does not agree with.
+  if (Array.isArray(claimed) && claimed.length > 0) {
+    return {
+      disproves: false,
+      detail: { ...detail, reason: 'claimed counterexamples do not hold on recomputation' },
+    };
+  }
+  // Some n in the range needed a summand beyond what we search — undecided, not wrong.
+  if (!swept.exhaustive) {
+    return { disproves: false, inconclusive: true, detail };
+  }
+  // Optional computed statistic: verified when offered, so fabricating it fails.
+  const claimedMax = witness?.max_min_prime;
+  if (claimedMax !== undefined && claimedMax !== swept.max_min_prime) {
+    return {
+      disproves: false,
+      detail: { ...detail, reason: 'reported max_min_prime does not match recomputation' },
+    };
+  }
+  return { disproves: false, confirmed: true, detail };
 }
 
 /** Registry of named checkers a target can reference via targets.checker. */
@@ -183,6 +328,8 @@ interface TaskVerifyRow {
   verify_via: VerificationMethod;
   target_id: string;
   result: unknown;
+  /** The task's own spec — what it ASKED for, which some checks are relative to. */
+  spec: unknown;
   checker: string | null;
 }
 
@@ -200,7 +347,7 @@ export async function runAutoVerification(
   binding?: SendEmailBinding,
 ): Promise<VerifyOutcome> {
   const { rows } = await query<TaskVerifyRow>(
-    `SELECT t.status, t.verify_via::text AS verify_via, t.target_id, t.result, tg.checker
+    `SELECT t.status, t.verify_via::text AS verify_via, t.target_id, t.result, t.spec, tg.checker
        FROM tasks t
        JOIN targets tg ON tg.id = t.target_id
       WHERE t.id = $1`,
@@ -234,7 +381,7 @@ export async function runAutoVerification(
         verification_id: id,
       };
     }
-    const check = checker(row.result);
+    const check = checker(row.result, { spec: row.spec });
     if (check.inconclusive) {
       const id = await recordVerification({
         taskId,
@@ -267,6 +414,29 @@ export async function runAutoVerification(
       await acceptTaskAndNotify(taskId, binding);
       const target_status = await flipTargetStatus(row.target_id, 'disproven', contributionId);
       return { handled: true, method, verdict: 'passed', target_status, verification_id: id };
+    }
+    if (check.confirmed) {
+      // The claim was independently re-computed and holds, but it does not settle
+      // the conjecture — a swept range with nothing in it. That is a pass: accept
+      // the contribution and leave the target open. Ruling territory out is the
+      // expected outcome of a sweep and is worth recording permanently.
+      const id = await recordVerification({
+        taskId,
+        contributionId,
+        targetId: row.target_id,
+        method,
+        verdict: 'passed',
+        verifier: 'platform',
+        detail: check.detail,
+      });
+      await acceptTaskAndNotify(taskId, binding);
+      return {
+        handled: true,
+        method,
+        verdict: 'passed',
+        target_status: null,
+        verification_id: id,
+      };
     }
     // The claimed counterexample does not hold — reject back to the pool.
     const id = await recordVerification({

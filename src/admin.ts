@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { requireAdmin, signDevToken } from './auth.js';
 import { query } from './db.js';
+import { getFunnel, recordEvent } from './funnel.js';
 import type { SendEmailBinding } from './mailer.js';
 import { OpError } from './operations.js';
 import { adminVerify, recordHumanReview } from './verify.js';
@@ -41,6 +42,7 @@ adminRoutes.post('/devs', async (c) => {
       }
       throw err;
     }
+    await recordEvent(rows[0].id, 'dev_created', { via: 'admin' });
     // Hand back a dev token so the new dev (or their runner) can authenticate.
     const token = await signDevToken(rows[0].id);
     return { ...rows[0], token };
@@ -353,3 +355,9 @@ adminRoutes.post('/tasks/:id/accept', (c) =>
 adminRoutes.post('/tasks/:id/reject', (c) =>
   adminHandle(() => recordHumanReview(c.req.param('id'), 'failed', 'admin'))(c),
 );
+
+// The signup funnel: how many people who sign in ever set a budget, ever check
+// out a task, and ever submit — plus how many come back for a second one. Admin
+// only: this is aggregate product analytics, not public transparency, and it is
+// the number that tells us whether onboarding actually works.
+adminRoutes.get('/funnel', (c) => adminHandle(() => getFunnel())(c));

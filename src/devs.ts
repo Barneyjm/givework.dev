@@ -1,6 +1,13 @@
 import { Hono } from 'hono';
 import { type Principal, requireDev } from './auth.js';
-import { getDevLedger, getDevProfile, getDevStats, OpError, setOwnBudget } from './operations.js';
+import {
+  getDevLedger,
+  getDevProfile,
+  getDevStats,
+  mintOnboardingTask,
+  OpError,
+  setOwnBudget,
+} from './operations.js';
 
 // A dev's own self-serve surface. Every route is dev-token gated and acts only
 // on the caller: dev_id always comes from the token `sub`, never the body or
@@ -67,4 +74,13 @@ devRoutes.post('/budget', async (c) => {
     }
     return setOwnBudget(dev, Number(body.budget_cents));
   })(c);
+});
+
+// Mint (or fetch) my onboarding task — one real attack task on a live open
+// problem, with a range allocated to me alone. Idempotent: calling it again
+// returns the same task, which is what makes `givework onboard` resumable after
+// a crash instead of minting a second one. dev_id comes from the token.
+devRoutes.post('/onboarding', (c) => {
+  const dev = c.get('principal').dev_id!;
+  return handle(() => mintOnboardingTask(dev))(c);
 });
