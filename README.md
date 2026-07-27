@@ -554,28 +554,59 @@ account IDs, Neon project IDs, tokens) — CI injects them as secrets.
 
 ### Publishing the CLI
 
-The `npx github:Barneyjm/givework.dev …` path needs no registry at all and is
-verified to work end to end: npm clones the repo, installs (dev dependencies
-included), runs `prepare` → `build:cli` to produce `dist/givework.mjs`, and links
-it as the `givework` bin. The bundle is self-contained — nothing outside it is
-needed at runtime.
+`givework` is on npm, so the short form works:
 
-Publishing to npm so a stranger can type the shorter `npx givework onboard` is
-**not** done here, because it needs decisions only the owner can make:
+```bash
+npx givework onboard
+```
 
-- **Name.** `givework` is unregistered on npm today (`npm view givework` → 404),
-  so the unscoped name is available — but claiming it is the owner's call. The
-  alternative is a scope (`@barneyjm/givework`), which needs
-  `publishConfig.access: "public"` added to `package.json`.
-- **Credentials.** An npm account with 2FA, plus an automation token stored as a
-  repo secret (`NPM_TOKEN`) if publishing should run from CI.
-- **Versioning.** `version` is still `0.1.0` and has never been released; decide
-  whether the CLI versions with the repo or independently, and whether releases
-  are tag-triggered.
+`npx github:Barneyjm/givework.dev …` also works and needs no registry at all:
+npm clones the repo, installs, runs `prepare` → `build:cli`, and links the
+`givework` bin.
 
-Everything else is ready: `private` is removed, `files` ships only the built
-bundle plus `README`/`LICENSE`, and `repository`/`homepage`/`license`/`engines`
-are set. Once a decision is made, `npm publish` is the only remaining step.
+**Releases run from CI with no stored credential.** `.github/workflows/publish-cli.yml`
+publishes on a GitHub Release using npm **trusted publishing**: the job mints a
+short-lived OIDC token from GitHub, npm verifies it against the trusted publisher
+configured on the package, and provenance attestations are generated
+automatically. **There is no `NPM_TOKEN` in this repo, and there must not be one.**
+
+To cut a release: bump `version`, then publish a GitHub Release tagged
+`v<version>`. The workflow fails loudly if the tag and `package.json` disagree,
+runs lint + typecheck + the full suite before publishing, and routes prereleases
+to the `next` dist-tag so they never become `latest`.
+
+Requires npm >= 11.5.1 and Node >= 22.14.0, which is why the job upgrades npm
+explicitly — `actions/setup-node` pins an older one.
+
+#### Configuring the trusted publisher (already done; recorded here for recovery)
+
+npmjs.com → Packages → `givework` → Settings → Trusted publishing → GitHub Actions:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `Barneyjm` |
+| Repository | `givework.dev` |
+| Workflow filename | `publish-cli.yml` (filename only, not a path) |
+| Allowed actions | `npm publish` |
+| Environment name | *(blank)* |
+
+All fields are case-sensitive, `package.json`'s `repository.url` must match the
+repo exactly, and **npm does not validate the configuration when you save it** —
+a typo surfaces as a failed publish later, not an error at setup.
+
+#### Why the first publish was manual
+
+npm cannot bootstrap a new package over OIDC: the trusted-publisher settings live
+on the package page, so the package must already exist ([npm/cli#8544](https://github.com/npm/cli/issues/8544)).
+`0.1.0` was therefore published by hand to claim the name, and every release
+since goes through the workflow.
+
+That one manual publish is harder than it sounds if the account uses a passkey
+rather than TOTP. Classic tokens were removed in November 2025, granular tokens
+prompt for an OTP a security key cannot produce, and npm's browser handoff needs
+a real TTY — Git Bash on Windows is not one, and PowerShell blocks the unsigned
+`npm.ps1`, so `npm.cmd` is the way in. None of this recurs: the workflow is the
+only publishing path now.
 
 ## License
 
