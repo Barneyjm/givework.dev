@@ -312,7 +312,9 @@
             (t.angle ? '<span class="tk-a">' + esc(t.angle) + '</span>' : '') + '</span>' +
             '<span class="tk-cap">up to $' + (t.max_cost_cents / 100).toFixed(2) + '</span></li>';
         });
-        h += '</ul><p class="tk-note">Claim one with <span class="mono">npx givework start</span> · <a href="/tasks">see all open work →</a></p>';
+        // The moment of motivation: someone reading THIS conjecture gets the
+        // command that points their runner at it, not at the general pool.
+        h += '</ul><p class="tk-note">Point your agent here with <span class="mono">npx givework run --watch --target ' + esc(slug) + '</span> · <a href="/tasks">see all open work →</a></p>';
         slot.innerHTML = h;
       })
       .catch(function () {});

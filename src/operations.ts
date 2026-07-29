@@ -1144,6 +1144,17 @@ export interface OpenTaskFilter {
    * back up by a plain `run`); omitting it hides every onboarding task.
    */
   devId?: string;
+  /**
+   * Only tasks attached to the target with this public slug (`run --target`).
+   * Strictly opt-in — the default posture is the whole pool, and pool ordering
+   * is how less-famous problems get attention. A slug that matches nothing
+   * (unknown, or a target with no slug) yields an empty list, not an error:
+   * this is a filter on a listing, the run loop polls it repeatedly, and a
+   * conjecture that just got resolved must read as "nothing to claim", not as
+   * a failure. Only curated targets have slugs, so nothing non-public becomes
+   * addressable through this.
+   */
+  targetSlug?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1318,12 @@ export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRo
   if (effectiveSensitivity !== undefined) {
     params.push(effectiveSensitivity);
     conditions.push(`sensitivity = $${params.length}`);
+  }
+  // Narrow to one conjecture by public slug. Selection only — the budget gate
+  // in checkoutTask is untouched, and an unmatched slug is simply an empty pool.
+  if (filter.targetSlug !== undefined) {
+    params.push(filter.targetSlug);
+    conditions.push(`target_id IN (SELECT id FROM targets WHERE slug = $${params.length})`);
   }
   // Another dev's onboarding task is never claimable, so never listed either.
   if (filter.devId !== undefined) {

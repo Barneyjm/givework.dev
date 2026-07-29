@@ -28,7 +28,8 @@ Start here — this is the only command you need:
                              monthly cap if you haven't set one, do one real task on a
                              live open problem if you never have, then tell you how to
                              begin. Safe to re-run; skips whatever is already done.
-  start --watch              ...and go straight into the work loop when setup is done.
+  start --watch              ...and go straight into the work loop when setup is done
+                             (add --target <slug> to work one conjecture in particular).
 
 The steps 'start' performs, if you'd rather drive them yourself:
   login                      sign in with GitHub (opens your browser)
@@ -36,10 +37,15 @@ The steps 'start' performs, if you'd rather drive them yourself:
   onboard [--budget <cents>] do one guided real task, end to end — about a minute
   run [--once|--watch]       the work loop: poll → checkout → claude -p → submit
                              [--interval <s>] [--max <n>] [--stop-on-error]
+                             By default it chips away wherever work is needed. Care about
+                             one problem in particular? Narrow it:
+                             [--target <slug>]  only that conjecture's tasks
+                             [--task <id>]      claim exactly that one task, then stop
 
 Dev:
   whoami                     show your handle, verification, and budget
-  tasks                      browse the open task pool [--max <cents>] [--sensitivity <s>] [--limit <n>]
+  tasks                      browse the open task pool [--max <cents>] [--sensitivity <s>]
+                             [--limit <n>] [--target <slug>]
   stats                      your all-time donated total and per-month breakdown
   history [--limit <n>]      your ledger entries, newest first [--before <id>]
   version                    show the control-plane build

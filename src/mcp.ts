@@ -70,6 +70,10 @@ async function main() {
           .describe('Only tasks whose hard cap is <= this many cents.'),
         sensitivity: z.enum(['public', 'internal', 'sensitive']).optional(),
         limit: z.number().int().positive().max(100).optional(),
+        target: z
+          .string()
+          .optional()
+          .describe('Only tasks for the conjecture with this public slug (e.g. "goldbach").'),
       },
     },
     (args) =>
@@ -78,6 +82,7 @@ async function main() {
           maxCostCents: args.max_cost_cents,
           sensitivity: args.sensitivity,
           limit: args.limit,
+          targetSlug: args.target,
           // Show this dev's own onboarding task, never anybody else's.
           devId,
         }),

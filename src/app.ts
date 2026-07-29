@@ -492,12 +492,16 @@ app.get('/tasks/open', requireDev, async (c) => {
   const maxCost = c.req.query('max_cost_cents');
   const sensitivity = c.req.query('sensitivity');
   const limit = c.req.query('limit');
+  const target = c.req.query('target');
   const dev = c.get('principal').dev_id!;
   return handle(async () =>
     listOpenTasks({
       maxCostCents: maxCost !== undefined ? Number(maxCost) : undefined,
       sensitivity: sensitivity ?? undefined,
       limit: limit !== undefined ? Number(limit) : undefined,
+      // ?target=<slug> narrows to one conjecture (see OpenTaskFilter.targetSlug:
+      // unknown slug == empty list, deliberately not a 404).
+      targetSlug: target ?? undefined,
       // Unverified devs are pinned to public tasks; authoritative DB read.
       devVerified: await isDevVerified(dev),
       // …and everyone is pinned away from other people's onboarding tasks.
