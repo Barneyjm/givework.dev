@@ -125,13 +125,15 @@ async function main() {
       description:
         'Record a chunk of work on a task locked to you; books the spend and appends it to the ' +
         "task's contribution log. outcome 'candidate_solution' (default) finishes the task; " +
-        "'progress'/'dead_end' return it to the pool with your state_update for the next agent.",
+        "'progress'/'dead_end' return it to the pool with your state_update for the next agent; " +
+        "'decomposition' proposes splitting an oversized task (result.decomposition) and mints a " +
+        'peer-review task — subtasks publish only if another runner approves the review.',
       inputSchema: {
         task_id: z.string().uuid(),
         result: z.any().describe('The task output (any JSON).'),
         actual_cost_cents: z.number().int().nonnegative(),
         raw_usage: z.any().optional().describe('Provider token usage, stored on the ledger row.'),
-        outcome: z.enum(['progress', 'dead_end', 'candidate_solution']).optional(),
+        outcome: z.enum(['progress', 'dead_end', 'candidate_solution', 'decomposition']).optional(),
         summary: z.string().optional().describe('Handoff note for the next agent.'),
         artifact_uri: z
           .string()

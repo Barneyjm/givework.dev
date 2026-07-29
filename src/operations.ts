@@ -544,12 +544,246 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 // submit
 // ---------------------------------------------------------------------------
 
-export type ContributionOutcome = 'progress' | 'dead_end' | 'candidate_solution';
+export type ContributionOutcome = 'progress' | 'dead_end' | 'candidate_solution' | 'decomposition';
 const CONTRIBUTION_OUTCOMES: readonly ContributionOutcome[] = [
   'progress',
   'dead_end',
   'candidate_solution',
+  'decomposition',
 ];
+
+// ---------------------------------------------------------------------------
+// recursive decomposition — a task too big for its budget splits itself,
+// gated by a peer volunteer's agent (never an admin button)
+// ---------------------------------------------------------------------------
+
+/** Hard ceiling on how many subtasks one proposal may mint. */
+export const MAX_DECOMPOSITION_SUBTASKS = 12;
+/** Each subtask's cap may be at most this multiple of the parent task's cap. */
+export const DECOMPOSITION_CAP_MULTIPLE = 2;
+/** The auto-minted review task: small, deliberately — it's a judgment call, not a computation. */
+export const REVIEW_TASK_MAX_CENTS = 15;
+const REVIEW_TASK_EST_CENTS = 5;
+
+const SUBTASK_TITLE_CHARS = 200;
+const SUBTASK_PROMPT_CHARS = 4000;
+const DECOMPOSITION_REASON_CHARS = 2000;
+
+const TASK_KINDS = [
+  'computational',
+  'counterexample_search',
+  'formalization',
+  'lemma',
+  'exploration',
+];
+const TASK_EFFORTS = ['low', 'medium', 'high'];
+const VERIFY_METHODS = ['auto_rerun', 'proof_checker', 'replication', 'human_review'];
+
+export interface ProposedSubtask {
+  title: string;
+  prompt: string;
+  kind: string;
+  effort: string;
+  verify_via: string;
+  est_cost_cents: number;
+  max_cost_cents: number;
+}
+
+export interface DecompositionProposal {
+  reason: string;
+  subtasks: ProposedSubtask[];
+}
+
+/**
+ * Validate + normalize an agent-submitted decomposition proposal, or throw
+ * OpError('bad_decomposition'). Strict where money and volume are concerned
+ * (integer cents, per-subtask cap <= 2x the parent's, <= 12 subtasks); lenient
+ * on the hint fields (an unknown kind/effort/verify_via falls back to a safe
+ * default rather than losing an otherwise sound plan).
+ */
+export function normalizeDecomposition(
+  raw: unknown,
+  parentMaxCents: number,
+): DecompositionProposal {
+  const bad = (msg: string): never => {
+    throw new OpError(BAD_INPUT, 'bad_decomposition', msg);
+  };
+  const r = raw as { reason?: unknown; subtasks?: unknown } | null | undefined;
+  const list = r?.subtasks;
+  if (!Array.isArray(list) || list.length === 0) {
+    bad('decomposition.subtasks must be a non-empty array');
+  }
+  if ((list as unknown[]).length > MAX_DECOMPOSITION_SUBTASKS) {
+    bad(`a proposal may have at most ${MAX_DECOMPOSITION_SUBTASKS} subtasks`);
+  }
+  const capCeiling = parentMaxCents * DECOMPOSITION_CAP_MULTIPLE;
+  const subtasks = (list as any[]).map((s, i) => {
+    const title = typeof s?.title === 'string' ? s.title.trim().slice(0, SUBTASK_TITLE_CHARS) : '';
+    const prompt =
+      typeof s?.prompt === 'string' ? s.prompt.trim().slice(0, SUBTASK_PROMPT_CHARS) : '';
+    if (!title) bad(`subtask ${i}: title is required`);
+    if (!prompt) bad(`subtask ${i}: prompt is required`);
+    const max = s?.max_cost_cents;
+    if (!Number.isInteger(max) || max <= 0) {
+      bad(`subtask ${i}: max_cost_cents must be a positive integer (money is integer cents)`);
+    }
+    if (max > capCeiling) {
+      bad(
+        `subtask ${i}: max_cost_cents ${max} exceeds ${DECOMPOSITION_CAP_MULTIPLE}x the parent task's cap (${capCeiling})`,
+      );
+    }
+    const est = s?.est_cost_cents === undefined ? max : s.est_cost_cents;
+    if (!Number.isInteger(est) || est <= 0 || est > max) {
+      bad(`subtask ${i}: est_cost_cents must be a positive integer <= max_cost_cents`);
+    }
+    return {
+      title,
+      prompt,
+      kind: TASK_KINDS.includes(s?.kind) ? (s.kind as string) : 'exploration',
+      effort: TASK_EFFORTS.includes(s?.effort) ? (s.effort as string) : 'medium',
+      verify_via: VERIFY_METHODS.includes(s?.verify_via)
+        ? (s.verify_via as string)
+        : 'human_review',
+      est_cost_cents: est as number,
+      max_cost_cents: max as number,
+    };
+  });
+  const reason = typeof r?.reason === 'string' ? r.reason.slice(0, DECOMPOSITION_REASON_CHARS) : '';
+  return { reason, subtasks };
+}
+
+/**
+ * The spec of the auto-minted peer-review task. spec.review_of is the proposal
+ * contribution's id — it is both the pointer the publish step follows and the
+ * marker that makes this task itself non-decomposable (no recursion bombs:
+ * submitResult rejects a 'decomposition' outcome on any task carrying
+ * review_of).
+ */
+function reviewTaskSpec(
+  contributionId: number,
+  parentTitle: string,
+  proposal: DecompositionProposal,
+) {
+  return {
+    review_of: contributionId,
+    deliverable: 'decomposition_review',
+    prompt:
+      `Another volunteer's agent judged the task "${parentTitle}" too big for its budget and ` +
+      `proposed splitting it into ${proposal.subtasks.length} subtask(s). Its stated reason: ` +
+      `${proposal.reason || '(none given)'}\n\nThe full proposal:\n` +
+      `${JSON.stringify(proposal, null, 2)}\n\n` +
+      `Evaluate whether this split is (a) sensible — each subtask is well-posed and independently ` +
+      `workable; (b) economical — the cost caps are proportionate to the work, not inflated; and ` +
+      `(c) faithful — completing the subtasks genuinely advances the parent problem rather than ` +
+      `something adjacent. Approving publishes these subtasks as real, claimable tasks; rejecting ` +
+      `leaves the proposal on the record without publishing anything. Be strict: a vague or padded ` +
+      `plan should be rejected with reasons the proposer can act on.`,
+    output_schema: {
+      approve: 'boolean — true publishes the proposed subtasks; anything else publishes nothing',
+      reasons: 'string — the concrete grounds for your verdict',
+    },
+    acceptance:
+      'approve must be an explicit boolean and reasons must reference the actual proposal.',
+  };
+}
+
+/** The crisp approve contract: publish iff the review's result carries `approve: true` (strict boolean). */
+function reviewApproves(result: unknown): boolean {
+  return (result as { approve?: unknown } | null | undefined)?.approve === true;
+}
+
+/**
+ * Publish an approved decomposition's subtasks — exactly once. Runs inside the
+ * review submit's transaction.
+ *
+ * SPEND SAFETY — why agents may mint tasks at all: publishing a task moves NO
+ * money. An open task costs nothing until some volunteer's runner checks it
+ * out, and checkoutTask charges the CLAIMING volunteer's own budget behind its
+ * row-level gate (reserved + spent + max_cost <= budget), which this feature
+ * leaves byte-identical. Agent-minted tasks are therefore a noise risk, not a
+ * theft risk — and the noise is bounded by the proposal caps (<= 12 subtasks,
+ * each <= 2x the parent's cap) plus the peer-review gate that had to approve
+ * this call.
+ *
+ * Exactly-once: the proposal contribution row is locked FOR UPDATE (the mutex),
+ * then any task already pointing back via decomposed_from means a previous
+ * approve won the race or a replay is in flight — return [] and publish
+ * nothing. A second review, a resubmitted review, or a concurrent duplicate
+ * all take this path.
+ */
+async function publishApprovedDecomposition(
+  client: Client,
+  contributionId: number,
+): Promise<string[]> {
+  const { rows } = await client.query<{
+    id: number;
+    task_id: string;
+    artifact: { decomposition?: unknown } | null;
+    outcome: string;
+  }>(
+    `SELECT id, task_id, artifact, outcome::text AS outcome
+       FROM contributions WHERE id = $1
+       FOR UPDATE`,
+    [contributionId],
+  );
+  const prop = rows[0];
+  // Only a real decomposition contribution can publish; a dangling or
+  // mistyped review_of publishes nothing (and the review is still logged).
+  if (prop?.outcome !== 'decomposition') return [];
+
+  const dup = await client.query(`SELECT 1 FROM tasks WHERE decomposed_from = $1 LIMIT 1`, [
+    contributionId,
+  ]);
+  if ((dup.rowCount ?? 0) > 0) return []; // already published — idempotent no-op
+
+  const parent = await client.query<{
+    target_id: string;
+    max_cost_cents: number;
+    sensitivity: string;
+  }>(
+    `SELECT target_id, max_cost_cents, sensitivity::text AS sensitivity
+       FROM tasks WHERE id = $1`,
+    [prop.task_id],
+  );
+  if (!parent.rows[0]) return [];
+
+  // Re-normalize from the stored artifact: defense in depth — the caps hold at
+  // publish time even if the stored proposal were somehow malformed. An invalid
+  // stored proposal publishes nothing rather than failing the reviewer's submit.
+  let proposal: DecompositionProposal;
+  try {
+    proposal = normalizeDecomposition(prop.artifact?.decomposition, parent.rows[0].max_cost_cents);
+  } catch (err) {
+    console.error(`decomposition ${contributionId} failed re-validation at publish:`, err);
+    return [];
+  }
+
+  const created: string[] = [];
+  for (const st of proposal.subtasks) {
+    const ins = await client.query<{ id: string }>(
+      `INSERT INTO tasks
+         (target_id, title, spec, est_cost_cents, max_cost_cents, effort, kind, verify_via,
+          sensitivity, decomposed_from)
+       VALUES ($1, $2, $3, $4, $5, $6::task_effort, $7::task_kind, $8::verification_method,
+               $9::data_sensitivity, $10)
+       RETURNING id`,
+      [
+        parent.rows[0].target_id,
+        st.title,
+        JSON.stringify({ prompt: st.prompt, decomposed_from: contributionId }),
+        st.est_cost_cents,
+        st.max_cost_cents,
+        st.effort,
+        st.kind,
+        st.verify_via,
+        parent.rows[0].sensitivity, // subtasks inherit the parent's sensitivity
+        contributionId,
+      ],
+    );
+    created.push(ins.rows[0].id);
+  }
+  return created;
+}
 
 export interface ContributeOptions {
   /**
@@ -578,6 +812,14 @@ export interface SubmitResult {
   reserved_released: number;
   spent_applied: number;
   overage_clamped: boolean;
+  /** Set on a 'decomposition' submit: the auto-minted peer-review task. */
+  review_task_id?: string;
+  /**
+   * Set on a terminal submit of a review task: the subtask ids an approving
+   * review published. [] means nothing was published — the review rejected the
+   * proposal, or a previous approve already published it (exactly-once).
+   */
+  published_task_ids?: string[];
 }
 
 /**
@@ -624,6 +866,9 @@ export async function submitResult(
     );
   }
   // A candidate solution finishes the task; progress/dead-end keep it alive.
+  // A decomposition is also non-terminal: the proposal is INERT (it mints a
+  // review task, never subtasks), and the parent returns to the pool so work
+  // can continue even while the review is pending.
   const terminal = outcome === 'candidate_solution';
 
   // Server-side bounds on the free-form fields. summary and target state are
@@ -661,26 +906,35 @@ export async function submitResult(
 
     // 2. Settle the task, guarded on lock+assignment. Terminal writes the final
     //    result; a continuing contribution returns the task to the pool (its
-    //    artifact lives on the contributions row, not the task).
+    //    artifact lives on the contributions row, not the task). RETURNING also
+    //    carries the columns the decomposition/review hooks below need.
+    type SettledRow = {
+      max_cost_cents: number;
+      target_id: string;
+      title: string;
+      spec: Record<string, unknown> | null;
+      sensitivity: string;
+    };
+    const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity`;
     const upd = terminal
-      ? await client.query<{ max_cost_cents: number; target_id: string }>(
+      ? await client.query<SettledRow>(
           `UPDATE tasks
               SET status = 'submitted',
                   actual_cost_cents = $3,
                   result = $4,
                   submitted_at = now()
             WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-            RETURNING max_cost_cents, target_id`,
+            RETURNING ${RETURNING}`,
           [taskId, devId, actualCostCents, result],
         )
-      : await client.query<{ max_cost_cents: number; target_id: string }>(
+      : await client.query<SettledRow>(
           `UPDATE tasks
               SET status = 'open',
                   assigned_dev_id = NULL,
                   lock_expires_at = NULL,
                   reserved_period = NULL
             WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-            RETURNING max_cost_cents, target_id`,
+            RETURNING ${RETURNING}`,
           [taskId, devId],
         );
     if (upd.rowCount === 0) {
@@ -688,6 +942,27 @@ export async function submitResult(
     }
     const reserved = upd.rows[0].max_cost_cents;
     const targetId = upd.rows[0].target_id;
+    const taskSpec = upd.rows[0].spec;
+
+    // A decomposition proposal is validated BEFORE any money moves: an invalid
+    // one (too many subtasks, over-cap, malformed) rolls back this whole
+    // transaction — nothing booked, task still locked to the dev. Review tasks
+    // themselves are never decomposable (spec.review_of marks them), so a
+    // proposal can't spawn a review of a review ad infinitum.
+    let proposal: DecompositionProposal | null = null;
+    if (outcome === 'decomposition') {
+      if (taskSpec?.review_of != null) {
+        throw new OpError(
+          BAD_INPUT,
+          'review_not_decomposable',
+          'A decomposition-review task cannot itself be decomposed',
+        );
+      }
+      proposal = normalizeDecomposition(
+        (result as { decomposition?: unknown } | null | undefined)?.decomposition,
+        reserved,
+      );
+    }
 
     // A modest overshoot is a real donation and gets booked. A wildly impossible
     // number is not a donation, it's a bug or a hostile client — refuse it rather
@@ -730,7 +1005,10 @@ export async function submitResult(
     );
 
     // 5. Append the contribution — the durable, append-only record of this chunk
-    //    (progress or dead end alike). cost_cents is the booked spend.
+    //    (progress or dead end alike). cost_cents is the booked spend. For a
+    //    decomposition, the artifact is the NORMALIZED proposal — the exact
+    //    thing the review gates and the publish step later re-reads.
+    const contributionArtifact = proposal ? { decomposition: proposal } : artifact;
     const contrib = await client.query<{ id: number }>(
       `INSERT INTO contributions
          (task_id, target_id, dev_id, outcome, summary, artifact_uri, artifact, cost_cents, raw_usage)
@@ -743,11 +1021,50 @@ export async function submitResult(
         outcome,
         summary,
         opts.artifactUri ?? null,
-        artifact != null ? JSON.stringify(artifact) : null,
+        contributionArtifact != null ? JSON.stringify(contributionArtifact) : null,
         spendApplied,
         JSON.stringify(usagePayload ?? null),
       ],
     );
+
+    // 5a. A decomposition mints its peer-review gate: ONE small task on the
+    //     same target whose deliverable is an approve/reject with reasons. The
+    //     proposal itself stays inert until that review approves it. "Someone
+    //     else's agent verifies this is a good idea" — any volunteer's runner
+    //     can pick it up; there is deliberately no admin button in this path.
+    let reviewTaskId: string | undefined;
+    if (proposal) {
+      const review = await client.query<{ id: string }>(
+        `INSERT INTO tasks
+           (target_id, title, spec, est_cost_cents, max_cost_cents, effort, kind, verify_via,
+            sensitivity)
+         VALUES ($1, $2, $3, $4, $5, 'medium'::task_effort, 'exploration'::task_kind,
+                 'human_review'::verification_method, $6::data_sensitivity)
+         RETURNING id`,
+        [
+          targetId,
+          `Review a proposed decomposition of: ${upd.rows[0].title}`.slice(0, 200),
+          JSON.stringify(reviewTaskSpec(contrib.rows[0].id, upd.rows[0].title, proposal)),
+          REVIEW_TASK_EST_CENTS,
+          REVIEW_TASK_MAX_CENTS,
+          upd.rows[0].sensitivity, // the review sees the proposal, so it inherits its sensitivity
+        ],
+      );
+      reviewTaskId = review.rows[0].id;
+    }
+
+    // 5b. A terminal submit of a review task settles the proposal's fate.
+    //     approve: true publishes the subtasks (exactly once — see
+    //     publishApprovedDecomposition); anything else publishes nothing, and
+    //     the proposal simply stays on the record as the honest contribution it
+    //     was. Same transaction as the review contribution itself, so a crash
+    //     can't record an approval without its publish (or vice versa).
+    let publishedTaskIds: string[] | undefined;
+    if (terminal && Number.isInteger(taskSpec?.review_of)) {
+      publishedTaskIds = reviewApproves(result)
+        ? await publishApprovedDecomposition(client, taskSpec?.review_of as number)
+        : [];
+    }
 
     // 6. Refresh the target's compacted working set, if the agent supplied one.
     if (opts.stateUpdate !== undefined) {
@@ -771,12 +1088,14 @@ export async function submitResult(
 
     return {
       task_id: taskId,
-      status: terminal ? 'submitted' : 'open',
+      status: terminal ? ('submitted' as const) : ('open' as const),
       outcome,
       contribution_id: contrib.rows[0].id,
       reserved_released: reserved,
       spent_applied: spendApplied,
       overage_clamped: overageClamped,
+      ...(reviewTaskId !== undefined ? { review_task_id: reviewTaskId } : {}),
+      ...(publishedTaskIds !== undefined ? { published_task_ids: publishedTaskIds } : {}),
     };
   });
   return settled;

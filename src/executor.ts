@@ -51,14 +51,23 @@ export interface ExecResult {
   /**
    * Continuation fields (optional). An executor that chips at a long-lived task
    * sets these so the runner records progress and hands off state; omitting them
-   * yields a terminal one-shot submit. Wired up when executors learn the task
-   * kinds (later phase) — the stub executor leaves them unset.
+   * yields a terminal one-shot submit. 'decomposition' is the "this task is too
+   * big for its budget — here is the split" deliverable (see SYSTEM_PROMPT); the
+   * stub executor leaves all of these unset.
    */
-  outcome?: 'progress' | 'dead_end' | 'candidate_solution';
+  outcome?: 'progress' | 'dead_end' | 'candidate_solution' | 'decomposition';
   summary?: string;
   artifact_uri?: string;
   artifact?: unknown;
   state_update?: unknown;
+  /**
+   * True when this result was salvaged from a run the timeout killed: the
+   * volunteer's tokens were genuinely burned, so whatever accumulated is
+   * submitted as a progress contribution instead of vanishing. The run loop
+   * uses this to message honestly and to tune its abort heuristics — a salvaged
+   * timeout is not a config/credential failure.
+   */
+  timed_out?: boolean;
 }
 
 export interface Executor {
@@ -197,24 +206,64 @@ export class StubExecutor implements Executor {
 // System prompt for the executor that calls a model (ClaudeCliExecutor).
 const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI compute to open mathematics.
 You are given one concrete task — an attack on an open problem — with a prompt, an expected output shape, and acceptance criteria.
-Do the task rigorously and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.`;
+Do the task rigorously and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.
+
+BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap and a bounded time window. If, once you understand the task, it plainly cannot fit its budget or window, do NOT grind at it until the clock kills the run — that burns the donation and records nothing. The CORRECT deliverable for an oversized task is a decomposition proposal. Add a "decomposition" key to your JSON object:
+  "decomposition": {
+    "reason": "<why this task exceeds its budget, in one or two sentences>",
+    "subtasks": [
+      {"title": "<short title>", "prompt": "<complete, self-contained prompt for the agent that will work it>",
+       "kind": "computational|counterexample_search|formalization|lemma|exploration",
+       "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
+    ]
+  }
+Rules: at most 12 subtasks; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then N cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 // ---------------------------------------------------------------------------
 // ClaudeCliExecutor — the production path. Runs the task on the volunteer's
 // `claude -p` (Claude Code CLI) subscriber credit. No API key; the CLI uses the
-// machine's logged-in Claude session. `--output-format json` returns the result
-// plus `total_cost_usd` — the honest, already-metered cost of the run.
+// machine's logged-in Claude session.
+//
+// Output format: `--output-format stream-json` (newline-delimited events), NOT
+// the buffered `json` format. The buffered format prints its single JSON object
+// only at process exit, so killing a timed-out run left literally nothing on
+// stdout — the volunteer's tokens burned with zero record. The stream format
+// emits each completed assistant message (and, with --include-partial-messages,
+// the in-flight text deltas) as it happens, so at kill time stdout holds every
+// event that had occurred; a clean run ends with a `result` event carrying the
+// same fields (`result`, `total_cost_usd`, `usage`, …) the old format returned.
 // ---------------------------------------------------------------------------
 
-/** Spawn `claude` with args, feed `input` on stdin, resolve stdout. Throws on non-zero exit / spawn error / timeout. */
+/**
+ * A `claude -p` run the timeout killed. Carries whatever had reached stdout by
+ * kill time so the caller can salvage partial work instead of losing the run.
+ */
+export class ExecTimeoutError extends Error {
+  constructor(
+    public readonly partialOutput: string,
+    public readonly elapsedMs: number,
+  ) {
+    super(`claude -p timed out after ${Math.round(elapsedMs / 1000)}s`);
+    this.name = 'ExecTimeoutError';
+  }
+}
+
+/**
+ * Spawn `claude` with args, feed `input` on stdin, resolve stdout. Throws on
+ * non-zero exit / spawn error; a timeout kills the child and throws
+ * ExecTimeoutError carrying the partial stdout (rejected from the 'close'
+ * handler so anything the dying process flushed is still captured).
+ */
 function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const started = Date.now();
     let out = '';
     let err = '';
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGKILL');
-      reject(new Error('claude -p timed out'));
     }, timeoutMs);
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (err += d));
@@ -226,7 +275,8 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve(out);
+      if (timedOut) reject(new ExecTimeoutError(out, Date.now() - started));
+      else if (code === 0) resolve(out);
       else reject(new Error(`claude -p exited ${code}: ${err.slice(0, 300)}`));
     });
     // If claude fails to spawn or exits before reading stdin, writing here emits
@@ -237,6 +287,98 @@ function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<
     child.stdin.end();
   });
 }
+
+/** What we could reconstruct from a (possibly truncated) stream-json transcript. */
+export interface StreamCapture {
+  /** The final `result` event of a clean run (or a legacy single-object reply). */
+  final: any | null;
+  /** Text of every COMPLETED assistant message, in order. */
+  text: string;
+  /** Summed per-message token usage from assistant events (approximate). */
+  usage: Usage;
+  /** How many events parsed — 0 means nothing usable reached stdout. */
+  events: number;
+}
+
+/**
+ * Parse `claude -p --output-format stream-json` output — tolerantly, because on
+ * a timeout the transcript is truncated mid-stream. Also accepts the legacy
+ * single-JSON-object shape (`--output-format json`) so an older CLI, or a test
+ * fake, still parses: a whole-string parse that yields an object with a
+ * `result`/`is_error` field is treated as the final event directly.
+ */
+export function parseStreamCapture(raw: string): StreamCapture {
+  const cap: StreamCapture = { final: null, text: '', usage: {}, events: 0 };
+  const addUsage = (u: any) => {
+    if (!u || typeof u !== 'object') return;
+    for (const k of [
+      'input_tokens',
+      'output_tokens',
+      'cache_read_input_tokens',
+      'cache_creation_input_tokens',
+    ] as const) {
+      if (typeof u[k] === 'number') cap.usage[k] = (cap.usage[k] ?? 0) + u[k];
+    }
+  };
+  const trimmed = raw.trim();
+  if (!trimmed) return cap;
+
+  // Legacy / whole-object shape first (also covers a pretty-printed test fake).
+  try {
+    const whole = JSON.parse(trimmed);
+    if (whole && typeof whole === 'object' && !Array.isArray(whole) && whole.type !== 'assistant') {
+      if (whole.type === 'result' || 'result' in whole || 'is_error' in whole) {
+        cap.final = whole;
+        cap.events = 1;
+        addUsage(whole.usage);
+        return cap;
+      }
+    }
+  } catch {
+    // not a single object — fall through to line-by-line
+  }
+
+  let deltaText = ''; // in-flight message text, superseded when the message completes
+  for (const line of trimmed.split('\n')) {
+    const l = line.trim();
+    if (!l) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(l);
+    } catch {
+      continue; // a truncated final line is expected on a killed run
+    }
+    cap.events++;
+    if (ev?.type === 'assistant') {
+      const content = ev.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type === 'text' && typeof block.text === 'string') {
+            cap.text += (cap.text ? '\n' : '') + block.text;
+          }
+        }
+      }
+      addUsage(ev.message?.usage);
+      deltaText = ''; // the completed message supersedes its own deltas
+    } else if (
+      ev?.type === 'stream_event' &&
+      ev.event?.type === 'content_block_delta' &&
+      ev.event.delta?.type === 'text_delta' &&
+      typeof ev.event.delta.text === 'string'
+    ) {
+      deltaText += ev.event.delta.text;
+    } else if (ev?.type === 'result') {
+      cap.final = ev;
+    }
+  }
+  // A killed run's last message never completed — its deltas are the freshest
+  // (and often the only) partial findings, so keep them.
+  if (deltaText) cap.text += (cap.text ? '\n' : '') + deltaText;
+  return cap;
+}
+
+/** Rough chars→tokens estimate (≈4 chars/token) for runs that died before any usage event. */
+const estTokens = (chars: number) => Math.ceil(chars / 4);
 
 type CliRunner = (args: string[], input: string, timeoutMs: number) => Promise<string>;
 
@@ -291,15 +433,38 @@ export class ClaudeCliExecutor implements Executor {
     // deliverable and still charge the donation. The system prompt + the output
     // shape in the prompt already steer the model to a JSON object, and
     // coerceResult parses it. STAGE 8: cap usage so a task can't exceed its cap.
-    const args = ['-p', '--output-format', 'json', '--model', model];
+    //
+    // stream-json (with --verbose, which the CLI requires alongside it, and
+    // --include-partial-messages for in-flight text) so a timed-out run leaves
+    // salvageable output on stdout — see the header comment above.
+    const args = [
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--model',
+      model,
+    ];
 
-    const raw = await this.run(args, prompt, this.timeoutFor(task));
-
-    let data: any;
+    const timeoutMs = this.timeoutFor(task);
+    let raw: string;
     try {
-      data = JSON.parse(raw);
-    } catch {
-      throw new Error(`claude -p returned non-JSON output: ${raw.slice(0, 200)}`);
+      raw = await this.run(args, prompt, timeoutMs);
+    } catch (err) {
+      if (err instanceof ExecTimeoutError) {
+        // The timeout killed the run. The tokens are already spent from the
+        // volunteer's subscription — salvage what accumulated into a progress
+        // contribution instead of letting the run vanish without a record.
+        return salvageTimedOutRun(task, model, prompt, err);
+      }
+      throw err;
+    }
+
+    const capture = parseStreamCapture(raw);
+    const data: any = capture.final;
+    if (!data) {
+      throw new Error(`claude -p returned no result event: ${raw.slice(0, 200)}`);
     }
     if (data.is_error) {
       throw new Error(
@@ -331,9 +496,18 @@ export class ClaudeCliExecutor implements Executor {
         ? ((result as { summary: string }).summary.slice(0, 500) as string)
         : undefined;
 
+    // The agent judged the task oversized and delivered a split instead of
+    // grinding (see SYSTEM_PROMPT). Tag the outcome so the runner submits it as
+    // a decomposition contribution; the control plane validates the proposal and
+    // mints the peer-review task. Only the shape is checked here — a bare
+    // `decomposition` key on an ordinary answer must not hijack the submit.
+    const proposal = (result as { decomposition?: { subtasks?: unknown } })?.decomposition;
+    const isDecomposition = Array.isArray(proposal?.subtasks) && proposal.subtasks.length > 0;
+
     return {
       result,
       summary,
+      outcome: isDecomposition ? 'decomposition' : undefined,
       actual_cost_cents: cents,
       raw_usage: {
         model,
@@ -344,6 +518,84 @@ export class ClaudeCliExecutor implements Executor {
       },
     };
   }
+}
+
+/** How much salvaged partial text is kept inline (state stays small by design). */
+const SALVAGE_STATE_CHARS = 4_000;
+const SALVAGE_ARTIFACT_CHARS = 16_000;
+
+/**
+ * Build the progress contribution for a run the timeout killed. Honesty rules:
+ *
+ *  - The COST is an estimate and is labelled as one. A killed run never reports
+ *    `total_cost_usd`, so we meter what we saw: summed usage from the streamed
+ *    assistant events when any arrived, else a chars/4 token estimate over the
+ *    prompt we sent plus whatever text came back (the prompt was certainly
+ *    processed, so the floor is 1 cent — "free" would be a lie).
+ *  - The STATE is merged, not replaced. state_update overwrites the target's
+ *    compacted working set, and a timeout's fragments must never clobber the
+ *    accumulated frontier — so the salvage rides in under a `timeout_salvage`
+ *    key beside the existing state. If there is no partial text, or the current
+ *    state isn't a mergeable object, no state_update is sent at all.
+ *  - Whatever text was captured is preserved in full (bounded) as the
+ *    contribution's inline result/artifact, so the next agent can continue
+ *    rather than restart. If truly nothing was captured, the contribution still
+ *    records the attempt — that a full window produced nothing is itself
+ *    information the next agent (and the platform's estimates) should have.
+ */
+function salvageTimedOutRun(
+  task: ExecTask,
+  model: string,
+  prompt: string,
+  err: ExecTimeoutError,
+): ExecResult {
+  const capture = parseStreamCapture(err.partialOutput);
+  const text = capture.text.trim();
+  const minutes = Math.max(1, Math.round(err.elapsedMs / 60_000));
+
+  const sawUsage = Object.values(capture.usage).some((v) => (v ?? 0) > 0);
+  const usage: Usage = sawUsage
+    ? capture.usage
+    : { input_tokens: estTokens(prompt.length), output_tokens: estTokens(text.length) };
+  const cents = Math.max(1, usageToCents(model, usage));
+
+  const summary =
+    `Attempted "${task.title}" but the run timed out after ${minutes} minute(s). ` +
+    (text
+      ? 'Partial output was captured and is attached for the next agent to continue from.'
+      : 'No partial output could be captured before the kill; a full window produced nothing visible — consider a smaller chunk or a decomposition.');
+
+  // Merge-don't-clobber: only extend a plain-object state, never replace it.
+  const prior = task.target_state;
+  const mergeable = prior == null || (typeof prior === 'object' && !Array.isArray(prior));
+  const state_update =
+    text && mergeable
+      ? {
+          ...(prior as Record<string, unknown> | null | undefined),
+          timeout_salvage: {
+            task_id: task.task_id,
+            elapsed_ms: err.elapsedMs,
+            partial: text.slice(0, SALVAGE_STATE_CHARS),
+          },
+        }
+      : undefined;
+
+  return {
+    result: { timed_out: true, partial_output: text.slice(0, SALVAGE_ARTIFACT_CHARS) },
+    outcome: 'progress',
+    timed_out: true,
+    summary,
+    state_update,
+    actual_cost_cents: cents,
+    raw_usage: {
+      model,
+      timed_out: true,
+      elapsed_ms: err.elapsedMs,
+      estimated: true,
+      estimator: sawUsage ? 'streamed_usage' : 'char_heuristic',
+      usage,
+    },
+  };
 }
 
 /**
