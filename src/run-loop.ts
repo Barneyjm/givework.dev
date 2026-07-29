@@ -51,8 +51,10 @@ export interface SubmitArgs {
   /**
    * Continuation fields (optional). Omitted -> the control plane defaults to a
    * terminal 'candidate_solution' submit, i.e. the original one-shot behaviour.
+   * 'decomposition' proposes a split of an oversized task; the control plane
+   * logs it and mints a peer-review task (see operations.submitResult).
    */
-  outcome?: 'progress' | 'dead_end' | 'candidate_solution';
+  outcome?: 'progress' | 'dead_end' | 'candidate_solution' | 'decomposition';
   summary?: string;
   artifact_uri?: string;
   artifact?: unknown;
@@ -248,6 +250,15 @@ export async function runLoop(
   // Consistent execution failure means a config/auth problem (bad or missing
   // credential), not a transient task issue — bail instead of firehosing.
   const MAX_CONSECUTIVE_FAILURES = 3;
+  // Salvaged timeouts are counted SEPARATELY from hard failures. A timeout is
+  // not a config/credential problem — those fail in seconds, not at the end of
+  // the window — and its salvage submit demonstrably worked, so it must not
+  // trip the abort above. But each one burns the volunteer's full timeout
+  // window at real token cost, so a run of them means the window is mis-sized
+  // for this pool: stop after three in a row and say why, rather than silently
+  // burning a fourth.
+  let consecutiveTimeouts = 0;
+  const MAX_CONSECUTIVE_TIMEOUTS = 3;
 
   try {
     while (done < opts.maxTasks) {
@@ -413,7 +424,56 @@ export async function runLoop(
         failed.add(checkout.task_id);
         continue;
       }
-      console.log(`✔ submitted ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢`);
+      // Tell the volunteer the truth at submit time: an accepted-and-verified
+      // result and a claim that is merely awaiting review are different things,
+      // and printing the same "submitted" for both leaves them wondering
+      // whether their agent actually found something.
+      const short = checkout.task_id.slice(0, 8);
+      if (exec.timed_out) {
+        // Not a clean completion and not a loss either: the partial work is
+        // logged as a progress contribution and the task is back in the pool
+        // with the salvaged state, so the next agent continues rather than
+        // restarts. Don't re-claim it ourselves this run, and don't let an
+        // unbroken run of timeouts keep burning full windows.
+        console.log(
+          `⏱ ${short} timed out — salvaged partial work as a progress contribution (spent ~${submit.spent_applied}¢, estimated); task returned to the pool with state for the next agent`,
+        );
+        failed.add(checkout.task_id);
+        consecutiveTimeouts++;
+        done++;
+        if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+          console.error(
+            `Stopping after ${consecutiveTimeouts} consecutive timeouts. Each one burns your full window — raise EXECUTOR_TIMEOUT_MS, or work smaller (lower-effort) tasks.`,
+          );
+          break;
+        }
+        continue;
+      }
+      consecutiveTimeouts = 0;
+      if (exec.outcome === 'decomposition') {
+        // The deliverable was a plan, not an answer — and that's success, not
+        // a fallback (grinding to timeout is the failure mode). Nothing is
+        // published yet: a peer's agent must approve the split first.
+        console.log(
+          `⑂ submitted a decomposition proposal for ${short} — spent ${submit.spent_applied}¢. ` +
+            `A review task was created; the subtasks publish only if another volunteer's agent approves the split.`,
+        );
+        done++;
+        continue;
+      }
+      if (submit.status === 'accepted') {
+        const flipped = submit.verification?.target_status;
+        console.log(
+          `✔ ${submit.verification ? 'verified & accepted' : 'accepted'} ${short} — spent ${submit.spent_applied}¢` +
+            (flipped ? ` — target is now ${flipped}!` : ''),
+        );
+      } else if (submit.status === 'submitted') {
+        console.log(
+          `✔ submitted ${short} — awaiting verification (not yet a confirmed result) — spent ${submit.spent_applied}¢`,
+        );
+      } else {
+        console.log(`✔ submitted ${short} — spent ${submit.spent_applied}¢`);
+      }
       done++;
     }
   } finally {

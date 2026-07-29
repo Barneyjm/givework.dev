@@ -46,6 +46,8 @@
   .feed .oc--accepted { background:#fff; border-color:#1e7d46; color:#1e7d46; }
   .feed .oc--refuted { background: var(--red); color:#fff; }
   .feed .oc--candidate_solution { background: var(--yellow); }
+  /* A claim nobody has confirmed yet: provisional on purpose — dashed, not green. */
+  .feed .oc--pending { background: var(--yellow); border-style: dashed; }
   .feed .cj { font-weight:600; }
   .feed .cj a { color:inherit; text-decoration:none; border-bottom:2px solid var(--yellow); }
   .feed .sum { flex:1 1 16ch; min-width:0; overflow-wrap:anywhere; opacity:.9; }
@@ -106,13 +108,19 @@
   var handle = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
   if (!handle || handle === 'contributor') { location.replace('/conjectures'); return; }
 
+  // Badge says only what actually happened; a candidate nothing has confirmed
+  // yet reads as pending — never as a result.
   function badge(r) {
     var cls = 'oc--' + r.outcome, label = r.outcome.replace('_', ' ');
-    if (r.outcome === 'candidate_solution' && r.verdict === 'passed') {
-      if (r.verified_via === 'human_review') { cls = 'oc--accepted'; label = 'accepted'; }
-      else { cls = 'oc--verified'; label = 'machine-verified'; }
-    } else if (r.outcome === 'candidate_solution' && r.verdict === 'failed') {
-      cls = 'oc--refuted'; label = 'refuted claim';
+    if (r.outcome === 'candidate_solution') {
+      if (r.status === 'verified' || r.verdict === 'passed') {
+        if (r.verified_via === 'human_review') { cls = 'oc--accepted'; label = 'accepted'; }
+        else { cls = 'oc--verified'; label = 'machine-verified'; }
+      } else if (r.status === 'rejected' || r.verdict === 'failed') {
+        cls = 'oc--refuted'; label = 'refuted claim';
+      } else {
+        cls = 'oc--pending'; label = 'awaiting verification';
+      }
     }
     return '<span class="oc ' + cls + '">' + esc(label) + '</span>';
   }

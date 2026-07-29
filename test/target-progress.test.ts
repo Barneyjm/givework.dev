@@ -2,7 +2,15 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closePool } from '../src/db.js';
 import { checkoutTask, submitResult } from '../src/operations.js';
 import { app } from '../src/server.js';
-import { createDev, createTask, mintAdminToken, resetDb, setBudget } from './helpers.js';
+import { recordHumanReview, submitAndVerify } from '../src/verify.js';
+import {
+  createDev,
+  createTask,
+  mintAdminToken,
+  resetDb,
+  setBudget,
+  setVerified,
+} from './helpers.js';
 
 // The public per-conjecture progress page: admins seed conjectures with a slug,
 // and anyone can read their progress at /conjectures/:slug (no auth, no PII).
@@ -69,6 +77,7 @@ describe('conjecture progress page', () => {
     expect(p.recent_contributions[0]).toMatchObject({
       outcome: 'progress',
       summary: 'verified n up to 10^6, no counterexample',
+      status: 'logged', // a handoff note, not a claim awaiting verification
     });
   });
 
@@ -151,6 +160,66 @@ describe('contributor attribution + profile', () => {
   });
 });
 
+describe('per-contribution status on the public surfaces', () => {
+  it('feed and profile say honestly whether a candidate is pending, verified, or rejected', async () => {
+    const create = await createTargetVia({
+      name: 'Status conjecture',
+      slug: 'status-conj',
+      kind: 'conjecture',
+    });
+    const targetId = ((await create.json()) as { id: string }).id;
+    const dev = await createDev('vera');
+    await setVerified(dev); // even a trusted dev's candidate must read as pending
+    await setBudget(dev, 5000);
+
+    // Pending: the incident scenario — a verified dev's candidate_solution on a
+    // research target goes through the real submit rail and is NOT accepted.
+    const pending = await createTask(targetId, { max: 500 });
+    await checkoutTask(dev, pending);
+    await submitAndVerify(dev, pending, { claim: 'X' }, 100, null, { summary: 'pending claim' });
+
+    // Verified: an admin reviews and passes a second candidate.
+    const passed = await createTask(targetId, { max: 500 });
+    await checkoutTask(dev, passed);
+    await submitResult(dev, passed, { claim: 'Y' }, 100, null, { summary: 'confirmed claim' });
+    await recordHumanReview(passed, 'passed', 'admin');
+
+    // Rejected: an admin reviews and fails a third.
+    const failed = await createTask(targetId, { max: 500 });
+    await checkoutTask(dev, failed);
+    await submitResult(dev, failed, { claim: 'Z' }, 100, null, { summary: 'bogus claim' });
+    await recordHumanReview(failed, 'failed', 'admin');
+
+    type Row = {
+      summary: string;
+      status: string;
+      verdict: string | null;
+      verified_via: string | null;
+    };
+    const expectStatuses = (rows: Row[]) => {
+      const by = Object.fromEntries(rows.map((r) => [r.summary, r]));
+      expect(by['pending claim']).toMatchObject({
+        status: 'awaiting_verification',
+        verdict: null,
+      });
+      expect(by['confirmed claim']).toMatchObject({
+        status: 'verified',
+        verdict: 'passed',
+        verified_via: 'human_review',
+      });
+      expect(by['bogus claim']).toMatchObject({ status: 'rejected', verdict: 'failed' });
+    };
+
+    const prog = (await (await req('/conjectures/status-conj')).json()) as {
+      recent_contributions: Row[];
+    };
+    expectStatuses(prog.recent_contributions);
+
+    const profile = (await (await req('/contributors/vera')).json()) as { contributions: Row[] };
+    expectStatuses(profile.contributions);
+  });
+});
+
 describe('work-unit provenance on the feed', () => {
   it('cites the exact pinned code that produced a contribution, and leaks nothing else', async () => {
     const create = await createTargetVia({
@@ -190,7 +259,16 @@ describe('work-unit provenance on the feed', () => {
     // the raw usage blob itself (token counts etc.) is never exposed
     expect(c.raw_usage).toBeUndefined();
     expect(Object.keys(c).sort()).toEqual(
-      ['code', 'contributor', 'created_at', 'outcome', 'summary', 'verdict', 'verified_via'].sort(),
+      [
+        'code',
+        'contributor',
+        'created_at',
+        'outcome',
+        'status',
+        'summary',
+        'verdict',
+        'verified_via',
+      ].sort(),
     );
   });
 

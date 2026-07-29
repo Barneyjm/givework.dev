@@ -481,15 +481,38 @@ export interface VerifiedSubmitResult extends Omit<SubmitResult, 'status'> {
 }
 
 /**
+ * Whether the verified-dev trust auto-accept may decide this task's fate. Never
+ * for open-mathematics targets (conjecture / research_question): a terminal
+ * candidate_solution there is a *claim about mathematics*, and no amount of
+ * trust in the volunteer makes the claim true — it waits for the objective
+ * machine path or an explicit admin review. org_request work keeps the trust
+ * flow: that world's accept was always a subjective "good enough for the org".
+ * Fails closed — an unknown task/target is never trust-accepted.
+ */
+async function trustAcceptAllowed(taskId: string): Promise<boolean> {
+  const { rows } = await query<{ kind: string }>(
+    `SELECT tg.kind::text AS kind
+       FROM tasks t
+       JOIN targets tg ON tg.id = t.target_id
+      WHERE t.id = $1`,
+    [taskId],
+  );
+  const kind = rows[0]?.kind;
+  return kind !== undefined && !RESOLVABLE_KINDS.includes(kind);
+}
+
+/**
  * The one submit entrypoint both rails share (HTTP /submit and the MCP
  * submit_result tool): book the contribution, then verify a terminal
  * (candidate_solution) submission. A progress/dead-end contribution returned
  * the task to the pool, so there's nothing to verify. Machine verification
  * decides auto_rerun (holding proof_checker/replication for Phase 6);
- * human_review is NOT handled here — fall back to the trust auto-accept, where
- * a verified volunteer's work flows straight through and an unverified one
- * waits for admin review. Verification failures are non-fatal: the submit
- * (and its booked spend) already succeeded.
+ * human_review is NOT handled here — fall back to the verified-dev trust
+ * auto-accept, but ONLY where acceptance is subjective (org_request): on a
+ * conjecture/research_question a candidate_solution stays 'submitted' until a
+ * checker or an admin actually confirms it, however trusted the volunteer.
+ * Verification failures are non-fatal: the submit (and its booked spend)
+ * already succeeded.
  */
 export async function submitAndVerify(
   devId: string,
@@ -510,7 +533,7 @@ export async function submitAndVerify(
         verification = { verdict: v.verdict ?? 'pending', target_status: v.target_status ?? null };
         if (v.verdict === 'failed') status = 'open';
         else if (v.verdict === 'passed') status = 'accepted';
-      } else if (await isDevVerified(devId)) {
+      } else if ((await trustAcceptAllowed(taskId)) && (await isDevVerified(devId))) {
         await acceptTaskAndNotify(taskId, binding);
         status = 'accepted';
       }

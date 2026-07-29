@@ -1,10 +1,15 @@
+import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ClaudeCliExecutor,
   coerceResult,
   type ExecTask,
+  ExecTimeoutError,
   getExecutor,
   modelForEffort,
+  parseStreamCapture,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
@@ -139,21 +144,42 @@ describe('ClaudeCliExecutor', () => {
     expect(seen).toEqual([180_000, 1_500_000, 180_000, 1_800_000, 180_000]);
   });
 
-  it('passes -p/--output-format json/--model, prompt+shape on stdin, and never --json-schema', async () => {
+  it('passes -p/stream-json/--model, prompt+shape on stdin, and never --json-schema', async () => {
     let seenArgs: string[] = [];
     let seenInput = '';
-    const run = async (args: string[], input: string) => {
+    let seenOpts: { cwd?: string } | undefined;
+    const run = async (args: string[], input: string, _t: number, opts?: { cwd?: string }) => {
       seenArgs = args;
       seenInput = input;
+      seenOpts = opts;
       return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
     };
     await new ClaudeCliExecutor({ run }).execute(task);
-    expect(seenArgs).toEqual(['-p', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+    // stream-json (not the buffered json format) so a timed-out run leaves
+    // salvageable events on stdout instead of nothing; --allowedTools grants
+    // Write/Edit on PROGRESS.md ONLY (the progress-file salvage protocol).
+    expect(seenArgs).toEqual([
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--allowedTools',
+      'Write(PROGRESS.md),Edit(PROGRESS.md)',
+      '--model',
+      'claude-sonnet-4-6',
+    ]);
     // --json-schema makes claude -p bill but return an empty result; we steer via
     // the prompt instead, so the flag must never be sent.
     expect(seenArgs).not.toContain('--json-schema');
     expect(seenInput).toContain('summarize this'); // the task prompt reached the CLI
     expect(seenInput).toContain('Output shape'); // the shape is conveyed in-prompt
+    // The progress-file protocol states the REAL deadline (default 180s -> 3 min)
+    // and where to record findings as the run goes.
+    expect(seenInput).toContain('killed after ~3 minute(s)');
+    expect(seenInput).toContain('PROGRESS.md');
+    // …and each run gets its own working directory for that file.
+    expect(seenOpts?.cwd).toBeTruthy();
   });
 
   it('tolerates a markdown ```json fence in the CLI result (the real claude -p wart)', async () => {
@@ -180,9 +206,214 @@ describe('ClaudeCliExecutor', () => {
     );
   });
 
-  it('throws on non-JSON CLI output', async () => {
+  it('throws on unparseable CLI output (no result event)', async () => {
     const run = async () => 'not json at all';
-    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('non-JSON');
+    await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('no result event');
+  });
+
+  it('parses a real stream-json transcript, taking the final result event', async () => {
+    const lines = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'thinking…' }], usage: { output_tokens: 10 } },
+      }),
+      JSON.stringify({
+        type: 'result',
+        result: '{"summary":"done"}',
+        total_cost_usd: 0.02,
+        usage: { output_tokens: 50 },
+        duration_ms: 900,
+      }),
+    ].join('\n');
+    const r = await new ClaudeCliExecutor({ run: async () => lines }).execute(task);
+    expect(r.result).toEqual({ summary: 'done' });
+    expect(r.actual_cost_cents).toBe(2);
+    expect(r.timed_out).toBeUndefined();
+  });
+
+  it('tags a decomposition deliverable so the runner submits it as one', async () => {
+    const body = {
+      summary: 'too big; here is the split',
+      decomposition: {
+        reason: 'cap is 200¢, the sweep needs ~50x that',
+        subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 50 }],
+      },
+    };
+    const run = cliReply({ result: JSON.stringify(body), total_cost_usd: 0.01 });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.outcome).toBe('decomposition');
+    expect((r.result as any).decomposition.subtasks).toHaveLength(1);
+
+    // a stray `decomposition` key with no subtasks must NOT hijack the submit
+    const plain = cliReply({
+      result: JSON.stringify({ summary: 'ok', decomposition: { note: 'n/a' } }),
+      total_cost_usd: 0.01,
+    });
+    const r2 = await new ClaudeCliExecutor({ run: plain }).execute(task);
+    expect(r2.outcome).toBeUndefined();
+  });
+});
+
+describe('ClaudeCliExecutor — timeout salvage', () => {
+  const streamLines = (events: unknown[]) => events.map((e) => JSON.stringify(e)).join('\n');
+
+  it('salvages a killed run into a progress contribution with honest, estimated cost', async () => {
+    const partial = streamLines([
+      { type: 'system', subtype: 'init' },
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Checked n up to 10^6; no counterexample so far.' }],
+          usage: { input_tokens: 2000, output_tokens: 300 },
+        },
+      },
+    ]);
+    const run = async () => {
+      throw new ExecTimeoutError(partial, 240_000);
+    };
+    const r = await new ClaudeCliExecutor({ run }).execute({
+      ...task,
+      target_state: { frontier: 'n < 10^5 done' },
+    });
+
+    expect(r.outcome).toBe('progress');
+    expect(r.timed_out).toBe(true);
+    expect(r.summary).toContain('timed out after 4 minute(s)');
+    // partial findings preserved for the next agent…
+    expect((r.result as any).partial_output).toContain('no counterexample so far');
+    // …and merged BESIDE the existing state, never clobbering it
+    expect((r.state_update as any).frontier).toBe('n < 10^5 done');
+    expect((r.state_update as any).timeout_salvage.partial).toContain('10^6');
+    // cost metered from the streamed usage, flagged as an estimate
+    expect(r.actual_cost_cents).toBe(
+      usageToCents('claude-sonnet-4-6', {
+        input_tokens: 2000,
+        output_tokens: 300,
+      }),
+    );
+    expect(r.raw_usage as any).toMatchObject({
+      timed_out: true,
+      estimated: true,
+      estimator: 'streamed_usage',
+      elapsed_ms: 240_000,
+      model: 'claude-sonnet-4-6',
+    });
+  });
+
+  it('captures in-flight text deltas when the message never completed', async () => {
+    const partial = streamLines([
+      { type: 'system', subtype: 'init' },
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'The key lem' } },
+      },
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ma is…' } },
+      },
+    ]);
+    const run = async () => {
+      throw new ExecTimeoutError(partial, 180_000);
+    };
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect((r.result as any).partial_output).toBe('The key lemma is…');
+    // no usage events arrived — falls back to the chars/4 heuristic, still >= 1¢
+    expect((r.raw_usage as any).estimator).toBe('char_heuristic');
+    expect(r.actual_cost_cents).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still records the attempt honestly when NOTHING reached stdout', async () => {
+    const run = async () => {
+      throw new ExecTimeoutError('', 600_000);
+    };
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.outcome).toBe('progress');
+    expect(r.timed_out).toBe(true);
+    expect(r.summary).toContain('No partial output could be captured');
+    // no findings -> no state_update (never clobber the target's working set)
+    expect(r.state_update).toBeUndefined();
+    // the prompt was certainly processed — a killed run is never "free"
+    expect(r.actual_cost_cents).toBeGreaterThanOrEqual(1);
+  });
+
+  it('prefers the agent-curated PROGRESS.md over the stream capture', async () => {
+    // The run wrote BOTH a progress file and stream text before dying — the
+    // file (written for exactly this moment) must win everywhere it matters.
+    const partial = streamLines([
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'stream noise' }],
+          usage: { input_tokens: 100, output_tokens: 10 },
+        },
+      },
+    ]);
+    const run = async (_a: string[], _i: string, _t: number, opts?: { cwd?: string }) => {
+      await writeFile(
+        join(opts!.cwd!, 'PROGRESS.md'),
+        '# Progress\nFrontier: n < 10^8 done.\nNext: residue 7 mod 9.',
+      );
+      throw new ExecTimeoutError(partial, 240_000);
+    };
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+
+    expect(r.outcome).toBe('progress');
+    expect(r.summary).toContain('PROGRESS.md was salvaged');
+    expect((r.result as any).progress_file).toContain('residue 7 mod 9');
+    expect((r.result as any).partial_output).toBe('stream noise'); // kept too, secondary
+    expect((r.state_update as any).timeout_salvage.partial).toContain('n < 10^8 done');
+    expect((r.state_update as any).timeout_salvage.source).toBe('progress_file');
+    expect((r.raw_usage as any).salvage_source).toBe('progress_file');
+  });
+
+  it('falls back to the stream capture when no PROGRESS.md was written', async () => {
+    const partial = streamLines([
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'got partway' }], usage: { output_tokens: 3 } },
+      },
+    ]);
+    const run = async () => {
+      throw new ExecTimeoutError(partial, 240_000);
+    };
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect((r.result as any).partial_output).toBe('got partway');
+    expect((r.raw_usage as any).salvage_source).toBe('stream');
+    expect((r.result as any).progress_file).toBeUndefined();
+  });
+
+  it('cleans up the per-run working directory on success and on timeout', async () => {
+    let dir1 = '';
+    const ok = async (_a: string[], _i: string, _t: number, opts?: { cwd?: string }) => {
+      dir1 = opts!.cwd!;
+      expect(existsSync(dir1)).toBe(true);
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run: ok }).execute(task);
+    expect(existsSync(dir1)).toBe(false);
+
+    let dir2 = '';
+    const dies = async (_a: string[], _i: string, _t: number, opts?: { cwd?: string }) => {
+      dir2 = opts!.cwd!;
+      await writeFile(join(dir2, 'PROGRESS.md'), 'salvage me');
+      throw new ExecTimeoutError('', 60_000);
+    };
+    const r = await new ClaudeCliExecutor({ run: dies }).execute(task);
+    expect((r.result as any).progress_file).toBe('salvage me'); // read BEFORE cleanup
+    expect(existsSync(dir2)).toBe(false);
+  });
+
+  it('a truncated final line (killed mid-write) does not break parsing', () => {
+    const complete = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'done part 1' }], usage: { output_tokens: 5 } },
+    });
+    const raw = `${complete}\n{"type":"stream_event","event":{"type":"content_block_del`;
+    const cap = parseStreamCapture(raw);
+    expect(cap.text).toBe('done part 1');
+    expect(cap.usage.output_tokens).toBe(5);
+    expect(cap.final).toBeNull();
   });
 });
 
