@@ -64,10 +64,12 @@ export async function setVerified(devId: string, verified = true): Promise<void>
   await pool.query(`UPDATE devs SET verified = $2 WHERE id = $1`, [devId, verified]);
 }
 
-export async function createTarget(name = 'Test NP'): Promise<string> {
+export async function createTarget(name = 'Test NP', kind?: string): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO targets (name, contact_email) VALUES ($1, $2) RETURNING id`,
-    [name, 'np@test.com'],
+    // No explicit kind -> the schema default ('conjecture').
+    `INSERT INTO targets (name, contact_email, kind)
+     VALUES ($1, $2, COALESCE($3::target_kind, 'conjecture')) RETURNING id`,
+    [name, 'np@test.com', kind ?? null],
   );
   return rows[0].id;
 }

@@ -90,6 +90,8 @@
   .feed .oc { font-family:'Space Mono',monospace; font-size:.7rem; text-transform:uppercase;
               padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
   .feed .oc--candidate_solution { background: var(--yellow); }
+  /* A claim nobody has confirmed yet: provisional on purpose — dashed, not green. */
+  .feed .oc--pending { background: var(--yellow); border-style: dashed; }
   .feed .oc--progress { background: #fff; }
   .feed .oc--dead_end { background: var(--red); color:#fff; border-color: var(--ink); }
   .feed .oc--verified { background: #1e7d46; color:#fff; }
@@ -210,20 +212,26 @@
         // The feed is a work ledger, and the badge says only what actually
         // happened. Green "machine-verified" is reserved for a checker-confirmed
         // result; work a human reviewer accepted says just that; a failed check
-        // is an honestly-logged refutation.
+        // is an honestly-logged refutation. A candidate nothing has confirmed
+        // yet reads as pending — never as a result.
         var cls = 'oc--' + r.outcome;
         var label = r.outcome.replace('_', ' ');
-        if (r.outcome === 'candidate_solution' && r.verdict === 'passed') {
-          if (r.verified_via === 'human_review') {
-            cls = 'oc--accepted';
-            label = 'accepted';
+        if (r.outcome === 'candidate_solution') {
+          if (r.status === 'verified' || r.verdict === 'passed') {
+            if (r.verified_via === 'human_review') {
+              cls = 'oc--accepted';
+              label = 'accepted';
+            } else {
+              cls = 'oc--verified';
+              label = 'machine-verified';
+            }
+          } else if (r.status === 'rejected' || r.verdict === 'failed') {
+            cls = 'oc--refuted';
+            label = 'refuted claim';
           } else {
-            cls = 'oc--verified';
-            label = 'machine-verified';
+            cls = 'oc--pending';
+            label = 'awaiting verification';
           }
-        } else if (r.outcome === 'candidate_solution' && r.verdict === 'failed') {
-          cls = 'oc--refuted';
-          label = 'refuted claim';
         }
         var who = r.contributor
           ? '<a class="by" href="/contributors/' + encodeURIComponent(r.contributor) + '">' +

@@ -413,7 +413,24 @@ export async function runLoop(
         failed.add(checkout.task_id);
         continue;
       }
-      console.log(`✔ submitted ${checkout.task_id.slice(0, 8)} — spent ${submit.spent_applied}¢`);
+      // Tell the volunteer the truth at submit time: an accepted-and-verified
+      // result and a claim that is merely awaiting review are different things,
+      // and printing the same "submitted" for both leaves them wondering
+      // whether their agent actually found something.
+      const short = checkout.task_id.slice(0, 8);
+      if (submit.status === 'accepted') {
+        const flipped = submit.verification?.target_status;
+        console.log(
+          `✔ ${submit.verification ? 'verified & accepted' : 'accepted'} ${short} — spent ${submit.spent_applied}¢` +
+            (flipped ? ` — target is now ${flipped}!` : ''),
+        );
+      } else if (submit.status === 'submitted') {
+        console.log(
+          `✔ submitted ${short} — awaiting verification (not yet a confirmed result) — spent ${submit.spent_applied}¢`,
+        );
+      } else {
+        console.log(`✔ submitted ${short} — spent ${submit.spent_applied}¢`);
+      }
       done++;
     }
   } finally {

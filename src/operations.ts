@@ -1413,6 +1413,28 @@ export interface TargetProgressMetrics {
   last_activity_at: string | null;
 }
 
+/**
+ * The honest per-contribution status every public surface shows:
+ *   - 'awaiting_verification' — a candidate_solution nothing has confirmed yet.
+ *     NOT a result; the site must read it as pending, never as a find.
+ *   - 'verified'              — a verification passed (verified_via says how:
+ *     auto_rerun machine check, human_review accept, …).
+ *   - 'rejected'              — a verification failed; the claim did not hold.
+ *   - 'logged'                — progress / dead_end handoff notes; there is no
+ *     claim to verify, the note itself is the contribution.
+ */
+export type ContributionStatus = 'awaiting_verification' | 'verified' | 'rejected' | 'logged';
+
+/** Derive the public status from a contribution's outcome + latest verdict. */
+export function contributionStatus(outcome: string, verdict: string | null): ContributionStatus {
+  if (outcome !== 'candidate_solution') return 'logged';
+  if (verdict === 'passed') return 'verified';
+  if (verdict === 'failed') return 'rejected';
+  // null (never verified — including a pre-fix trust auto-accept), 'pending',
+  // or 'inconclusive': nothing has confirmed the claim, so it is still pending.
+  return 'awaiting_verification';
+}
+
 export interface TargetProgress {
   slug: string;
   name: string;
@@ -1429,6 +1451,8 @@ export interface TargetProgress {
   recent_contributions: {
     outcome: string;
     summary: string;
+    /** Unambiguous state of this contribution — see ContributionStatus. */
+    status: ContributionStatus;
     verdict: string | null;
     /** How the verdict was reached (auto_rerun, human_review, …), if verified. */
     verified_via: string | null;
@@ -1559,6 +1583,7 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     recent_contributions: recent.rows.map((r) => ({
       outcome: r.outcome,
       summary: r.summary,
+      status: contributionStatus(r.outcome, r.verdict),
       verdict: r.verdict,
       verified_via: r.verified_via,
       contributor: r.contributor,
@@ -1743,6 +1768,8 @@ export interface ContributorProfile {
     conjecture_name: string;
     outcome: string;
     summary: string;
+    /** Unambiguous state of this contribution — see ContributionStatus. */
+    status: ContributionStatus;
     verdict: string | null;
     verified_via: string | null;
     cost_cents: number;
@@ -1828,6 +1855,7 @@ export async function getContributorProfile(handle: string): Promise<Contributor
       conjecture_name: r.conjecture_name,
       outcome: r.outcome,
       summary: r.summary,
+      status: contributionStatus(r.outcome, r.verdict),
       verdict: r.verdict,
       verified_via: r.verified_via,
       cost_cents: r.cost_cents,
