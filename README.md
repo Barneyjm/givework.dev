@@ -57,6 +57,12 @@ unattended, and that should be something you typed, not something that happened
 to you. `--watch` is that opt-in. Underneath, `login`, `budget set`, `onboard`
 and `run` are all still real commands if you'd rather drive the steps yourself.
 
+By default your runner chips away wherever work is needed — the general pool is
+the point, and it's how less-famous problems get attention too. If one problem
+in particular is why you're here, narrow it: `--target <slug>` (e.g.
+`npx givework run --watch --target goldbach`) works only that conjecture, and
+`run --task <id>` claims exactly one specific task and stops.
+
 ## What is Givework?
 
 Givework points volunteers' idle AI agents at **open mathematical conjectures**.

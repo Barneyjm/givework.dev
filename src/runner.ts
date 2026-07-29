@@ -65,7 +65,12 @@ class McpBackend implements Backend {
     if (b?.error === 'no_budget') throw new ToolError('no_budget', 'No budget for current period');
     return b;
   }
-  listOpenTasks(args: { max_cost_cents?: number; limit?: number; sensitivity?: string }) {
+  listOpenTasks(args: {
+    max_cost_cents?: number;
+    limit?: number;
+    sensitivity?: string;
+    target?: string;
+  }) {
     return this.call<OpenTask[]>('list_open_tasks', args);
   }
   checkout(taskId: string) {
@@ -114,8 +119,15 @@ async function main() {
     process.exit(1);
   }
 
-  const maxTasks = flag('--max') ? Number(flag('--max')) : hasFlag('--once') ? 1 : Infinity;
-  const watch = hasFlag('--watch');
+  const taskId = flag('--task');
+  const maxTasks = taskId
+    ? 1
+    : flag('--max')
+      ? Number(flag('--max'))
+      : hasFlag('--once')
+        ? 1
+        : Infinity;
+  const watch = !taskId && hasFlag('--watch');
   const intervalMs = (flag('--interval') ? Number(flag('--interval')) : 15) * 1000;
 
   const backend = await createBackend(token);
@@ -125,6 +137,9 @@ async function main() {
       watch,
       intervalMs,
       stopOnError: hasFlag('--stop-on-error'),
+      // Opt-in narrowing: by default the loop chips away wherever work is needed.
+      targetSlug: flag('--target'),
+      taskId,
     });
   } finally {
     await backend.close();

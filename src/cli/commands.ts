@@ -4,7 +4,7 @@ import { getExecutor } from '../executor.js';
 import { ONBOARDING_MAX_CENTS } from '../goldbach.js';
 import { getDecomposer } from '../intake/decompose.js';
 import { HttpBackend, runLoop, withLease } from '../run-loop.js';
-import { apiRequest } from './api.js';
+import { ApiError, apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 import { login } from './login.js';
 
@@ -133,19 +133,26 @@ export async function version(): Promise<void> {
 // Browse the open task pool — what `run` would pick from, without claiming any.
 // The API pins unverified devs to public tasks, so the listing reflects what you
 // can actually check out. Default page is small; use --limit to see more.
+// --target <slug> narrows to one conjecture (what `run --target` would pick from).
 export async function tasks(args: string[]): Promise<void> {
   const token = requireToken();
   const qs = new URLSearchParams();
   const max = arg(args, '--max');
   const sensitivity = arg(args, '--sensitivity');
   const limit = arg(args, '--limit');
+  const target = arg(args, '--target');
   if (max) qs.set('max_cost_cents', max);
   if (sensitivity) qs.set('sensitivity', sensitivity);
   if (limit) qs.set('limit', limit);
+  if (target) qs.set('target', target);
   const q = qs.toString();
   const rows = await apiRequest<any[]>(apiUrl(), { path: `/tasks/open${q ? `?${q}` : ''}`, token });
   if (!rows.length) {
-    console.log('No open tasks right now. Try again later, or run:  givework start --watch');
+    console.log(
+      target
+        ? `No open tasks for ${target} right now. Drop --target to browse the whole pool.`
+        : 'No open tasks right now. Try again later, or run:  givework start --watch',
+    );
     return;
   }
   console.log(`${rows.length} open task${rows.length === 1 ? '' : 's'}:`);
@@ -193,8 +200,41 @@ export async function run(args: string[]): Promise<void> {
   await warnIfStale(args);
   const token = requireToken();
   const base = apiUrl();
+
+  // Where to point the donated credit. The default is deliberately the whole
+  // pool — general chipping away, wherever work is needed — and both flags are
+  // strictly opt-in narrowing. They only change which task gets *selected*;
+  // checkout enforces the budget gate identically either way.
+  const targetSlug = arg(args, '--target');
+  const taskId = arg(args, '--task');
+  if (targetSlug && taskId) {
+    console.error('--task already names one task; it cannot be combined with --target');
+    process.exit(1);
+  }
+  if (taskId && has(args, '--watch')) {
+    console.error('--task claims one specific task and stops; it cannot be combined with --watch');
+    process.exit(1);
+  }
+  if (targetSlug) {
+    // Fail fast on a slug that doesn't exist (or isn't public): the open-task
+    // listing treats an unknown slug as an empty pool by design, so without
+    // this check a typo under --watch would just wait forever, silently.
+    try {
+      await apiRequest(base, { path: `/conjectures/${encodeURIComponent(targetSlug)}` });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        console.error(
+          `No conjecture called '${targetSlug}'. Browse the board at ${siteUrlFor(base)}/conjectures`,
+        );
+        process.exit(1);
+      }
+      throw err;
+    }
+  }
+
   const backend = new HttpBackend(base, token);
   console.log(`Givework runner → ${base}`);
+  if (targetSlug) console.log(`Working on ${targetSlug} only (drop --target for the whole pool)`);
   try {
     const v = await backend.version().catch(() => null);
     if (v) console.log(`Control plane: ${v.commit.slice(0, 8)} (${v.ref})`);
@@ -204,7 +244,8 @@ export async function run(args: string[]): Promise<void> {
   // Validate numeric flags: an unparsed value (e.g. `--interval 5s` → NaN) would
   // make setTimeout default to ~1ms and, with --watch, hammer the API. Fail fast.
   const maxArg = arg(args, '--max');
-  const maxTasks = maxArg ? Number(maxArg) : has(args, '--once') ? 1 : Infinity;
+  // --task is a single attempt by definition.
+  const maxTasks = taskId ? 1 : maxArg ? Number(maxArg) : has(args, '--once') ? 1 : Infinity;
   if (maxArg && (!Number.isInteger(maxTasks) || maxTasks <= 0)) {
     console.error('--max must be a positive integer');
     process.exit(1);
@@ -222,6 +263,8 @@ export async function run(args: string[]): Promise<void> {
       watch: has(args, '--watch'),
       intervalMs,
       stopOnError: has(args, '--stop-on-error'),
+      targetSlug,
+      taskId,
     });
   } finally {
     await backend.close();

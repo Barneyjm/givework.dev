@@ -87,6 +87,8 @@ export interface Backend {
     max_cost_cents?: number;
     limit?: number;
     sensitivity?: string;
+    /** Only tasks for the conjecture with this public slug (`run --target`). */
+    target?: string;
   }): Promise<OpenTask[]>;
   checkout(taskId: string): Promise<CheckoutResult>;
   submit(args: SubmitArgs): Promise<SubmitResult>;
@@ -143,11 +145,17 @@ export class HttpBackend implements Backend {
   getBudget() {
     return this.req<Budget>('GET', '/budget');
   }
-  listOpenTasks(args: { max_cost_cents?: number; limit?: number; sensitivity?: string }) {
+  listOpenTasks(args: {
+    max_cost_cents?: number;
+    limit?: number;
+    sensitivity?: string;
+    target?: string;
+  }) {
     const qs = new URLSearchParams();
     if (args.max_cost_cents != null) qs.set('max_cost_cents', String(args.max_cost_cents));
     if (args.limit != null) qs.set('limit', String(args.limit));
     if (args.sensitivity) qs.set('sensitivity', args.sensitivity);
+    if (args.target) qs.set('target', args.target);
     const q = qs.toString();
     return this.req<OpenTask[]>('GET', `/tasks/open${q ? `?${q}` : ''}`);
   }
@@ -171,6 +179,19 @@ export interface RunLoopOptions {
   watch: boolean;
   intervalMs: number;
   stopOnError: boolean;
+  /**
+   * Only claim tasks for the conjecture with this public slug. Opt-in: the
+   * default is general chipping away — the loop takes whatever the pool offers,
+   * which is how less-famous problems get attention. Narrows selection only;
+   * checkout still enforces the budget gate exactly as before.
+   */
+  targetSlug?: string;
+  /**
+   * Claim exactly this one task (`run --task <id>`) and stop after the attempt.
+   * If it's gone — someone else took it, or it's finished — report that cleanly
+   * and stop; there is nothing to retry when the task was the whole point.
+   */
+  taskId?: string;
 }
 
 /**
@@ -230,6 +251,9 @@ export async function runLoop(
 
   try {
     while (done < opts.maxTasks) {
+      // --task is a single attempt by definition: once it has been done, or has
+      // failed and been released, looping again could only re-claim the same id.
+      if (opts.taskId && (done > 0 || failed.has(opts.taskId))) break;
       let budget: Budget;
       try {
         budget = await backend.getBudget();
@@ -245,32 +269,52 @@ export async function runLoop(
         break;
       }
 
-      const open = await backend.listOpenTasks({
-        max_cost_cents: budget.available_cents,
-        limit: 5,
-      });
+      let pick: { id: string } | undefined;
+      if (opts.taskId) {
+        // A specific task was named — skip the pool entirely and go claim it.
+        // Checkout is the authority on whether it's still open and affordable.
+        pick = { id: opts.taskId };
+      } else {
+        const open = await backend.listOpenTasks({
+          max_cost_cents: budget.available_cents,
+          limit: 5,
+          target: opts.targetSlug,
+        });
+        const pool = opts.targetSlug ? `open tasks for ${opts.targetSlug}` : 'open tasks';
 
-      if (open.length === 0) {
-        if (opts.watch) {
-          console.log(`No affordable open tasks. Waiting ${opts.intervalMs / 1000}s…`);
-          await new Promise((r) => setTimeout(r, opts.intervalMs));
-          continue;
+        if (open.length === 0) {
+          if (opts.watch) {
+            console.log(`No affordable ${pool}. Waiting ${opts.intervalMs / 1000}s…`);
+            await new Promise((r) => setTimeout(r, opts.intervalMs));
+            continue;
+          }
+          console.log(`No affordable ${pool}. Done.`);
+          break;
         }
-        console.log('No affordable open tasks. Done.');
-        break;
-      }
 
-      // Take the oldest affordable task we haven't already failed on this run.
-      const pick = open.find((t) => !failed.has(t.id));
-      if (!pick) {
-        console.log('No new affordable tasks to attempt. Done.');
-        break;
+        // Take the oldest affordable task we haven't already failed on this run.
+        pick = open.find((t) => !failed.has(t.id));
+        if (!pick) {
+          console.log('No new affordable tasks to attempt. Done.');
+          break;
+        }
       }
       let checkout: CheckoutResult;
       try {
         checkout = await backend.checkout(pick.id);
       } catch (err) {
-        if (err instanceof ToolError && err.code === 'task_not_open') {
+        if (
+          err instanceof ToolError &&
+          (err.code === 'task_not_open' || (opts.taskId && err.code === 'task_not_found'))
+        ) {
+          if (opts.taskId) {
+            // The named task is gone — claimed by someone else, finished, or
+            // never existed. Retrying can't change that, so say so and stop.
+            console.log(
+              `Task ${opts.taskId} is not open (${err.code === 'task_not_found' ? 'unknown task id' : 'someone else claimed it, or it is already done'}). Nothing claimed.`,
+            );
+            break;
+          }
           // Lost the race — someone else grabbed it. Refresh and retry.
           console.log(`  ${pick.id.slice(0, 8)} taken by another runner, retrying…`);
           continue;
