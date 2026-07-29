@@ -3,12 +3,15 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  buildContinuationSection,
   ClaudeCliExecutor,
+  CONTINUATION_MAX_CHARS,
   coerceResult,
   type ExecTask,
   ExecTimeoutError,
   getExecutor,
   modelForEffort,
+  type PriorContribution,
   parseStreamCapture,
   StubExecutor,
   usageToCents,
@@ -414,6 +417,145 @@ describe('ClaudeCliExecutor — timeout salvage', () => {
     expect(cap.text).toBe('done part 1');
     expect(cap.usage.output_tokens).toBe(5);
     expect(cap.final).toBeNull();
+  });
+});
+
+// The platform's core promise on the model path: the accumulated frontier a
+// checkout hands back (target_state + prior_contributions) must reach the
+// model, or every attempt restarts from scratch. These tests pin the
+// continuation section into the actual prompt sent to `claude -p`, and into
+// the stub's echo so DB-backed suites can assert the same threading.
+describe('continuation context — checkout state reaches the model prompt', () => {
+  const priors: PriorContribution[] = [
+    {
+      id: 4,
+      outcome: 'progress',
+      summary: 'Attempt 3 timed out; salvaged PROGRESS.md attached.',
+      created_at: '2026-07-22T10:00:00Z',
+    },
+    {
+      id: 3,
+      outcome: 'dead_end',
+      summary: 'Direct induction on n fails at the residue-3 case.',
+      created_at: '2026-07-21T09:00:00Z',
+    },
+  ];
+  const state = {
+    frontier: 'n < 10^7 ruled out',
+    timeout_salvage: { source: 'progress_file', partial: 'Next: attack residue 3 mod 9 directly.' },
+  };
+
+  const capturePrompt = () => {
+    const seen = { input: '' };
+    const run = async (_a: string[], input: string) => {
+      seen.input = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    return { seen, run };
+  };
+
+  it('injects state + prior attempts into the claude -p prompt, clearly framed', async () => {
+    const { seen, run } = capturePrompt();
+    await new ClaudeCliExecutor({ run }).execute({
+      ...task,
+      target_state: state,
+      prior_contributions: priors,
+    });
+    expect(seen.input).toContain('CONTINUATION — you are CONTINUING accumulated work');
+    expect(seen.input).toContain('n < 10^7 ruled out'); // the compacted state
+    expect(seen.input).toContain('Recent attempts on this task (newest first):');
+    expect(seen.input).toContain('Attempt 3 timed out'); // newest prior
+    expect(seen.input).toContain('residue-3 case'); // older prior
+    // the continuation sits between the task spec and the time-budget protocol
+    expect(seen.input.indexOf('CONTINUATION')).toBeGreaterThan(
+      seen.input.indexOf('summarize this'),
+    );
+    expect(seen.input.indexOf('CONTINUATION')).toBeLessThan(seen.input.indexOf('TIME BUDGET'));
+  });
+
+  it('carries a prior timeout salvage (the PROGRESS.md content) into the next attempt', async () => {
+    // What operations.checkoutTask hands back after a salvaged timeout: the
+    // salvage merged into target_state, the attempt in prior_contributions.
+    const { seen, run } = capturePrompt();
+    await new ClaudeCliExecutor({ run }).execute({
+      ...task,
+      target_state: state,
+      prior_contributions: [priors[0]],
+    });
+    expect(seen.input).toContain('attack residue 3 mod 9 directly'); // salvaged progress-file text
+    expect(seen.input).toContain('timeout_salvage');
+  });
+
+  it('keeps a first attempt clean: empty state and no priors → no continuation section', async () => {
+    const { seen, run } = capturePrompt();
+    // checkoutTask defaults target_state to {} and priors to [] on a fresh task
+    await new ClaudeCliExecutor({ run }).execute({
+      ...task,
+      target_state: {},
+      prior_contributions: [],
+    });
+    expect(seen.input).not.toContain('CONTINUATION');
+    expect(seen.input).not.toContain('Recent attempts');
+  });
+
+  it('caps an oversized history newest-first, with an explicit truncation note', () => {
+    const many: PriorContribution[] = Array.from({ length: 20 }, (_, i) => ({
+      id: 20 - i,
+      outcome: 'progress',
+      summary: `attempt ${20 - i}: ${'x'.repeat(600)}`,
+      created_at: `2026-07-${String(20 - i).padStart(2, '0')}T00:00:00Z`,
+    }));
+    const section = buildContinuationSection(null, many);
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+    expect(section).toContain('attempt 20:'); // newest kept…
+    expect(section).not.toContain('attempt 1:'); // …oldest dropped
+    expect(section).toMatch(/history truncated — \d+ older attempt\(s\) omitted/);
+    // newest stays ahead of the ones that follow it
+    expect(section.indexOf('attempt 20:')).toBeLessThan(section.indexOf('attempt 19:'));
+  });
+
+  it('truncates an oversized state with a note — a clipped frontier must say so', () => {
+    const big = { frontier: 'y'.repeat(10_000) };
+    const section = buildContinuationSection(big, []);
+    expect(section).toContain('[state truncated at 6000 chars');
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+  });
+
+  it('builds nothing from genuinely empty inputs', () => {
+    expect(buildContinuationSection(undefined, [])).toBe('');
+    expect(buildContinuationSection(null, undefined)).toBe('');
+    expect(buildContinuationSection({}, [])).toBe('');
+    expect(buildContinuationSection('', [])).toBe('');
+    expect(buildContinuationSection([], [])).toBe('');
+  });
+
+  it('stub executor echoes the continuation so DB suites can assert the threading', async () => {
+    const r = await new StubExecutor().execute({
+      ...task,
+      target_state: state,
+      prior_contributions: priors,
+    });
+    const echoed = (r.result as any).echoed_continuation as string;
+    expect(echoed).toContain('CONTINUATION — you are CONTINUING accumulated work');
+    expect(echoed).toContain('n < 10^7 ruled out');
+    expect(echoed).toContain('Attempt 3 timed out');
+
+    // first attempt: no echo at all, matching the clean prompt
+    const clean = await new StubExecutor().execute({ ...task, target_state: {} });
+    expect((clean.result as any).echoed_continuation).toBeUndefined();
+  });
+
+  it('SYSTEM_PROMPT tells the agent it cannot execute code (decompose instead)', async () => {
+    const { seen, run } = capturePrompt();
+    await new ClaudeCliExecutor({ run }).execute(task);
+    // String-pinned like the other prompt tests: the agent must know its
+    // execution reality — no shell, no interpreter, PROGRESS.md is the only
+    // tool — so "run the simulation" tasks route to decomposition, not
+    // grinding or fabricated output.
+    expect(seen.input).toContain('EXECUTION REALITY — you cannot run code');
+    expect(seen.input).toContain('no shell, no interpreter, and no sandbox');
+    expect(seen.input).toContain('never present imagined program output as computed fact');
+    expect(seen.input).toContain('the correct deliverable is a decomposition');
   });
 });
 
