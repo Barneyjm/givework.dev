@@ -557,8 +557,18 @@ const CONTRIBUTION_OUTCOMES: readonly ContributionOutcome[] = [
 // gated by a peer volunteer's agent (never an admin button)
 // ---------------------------------------------------------------------------
 
-/** Hard ceiling on how many subtasks one proposal may mint. */
+/**
+ * Fan-out caps, differentiated by what a subtask costs to work:
+ *  - a MODEL subtask spends a claiming volunteer's real Claude credit per
+ *    attempt, so a proposal may mint at most 12 of them;
+ *  - a sandbox CHUNK subtask is CPU only — it carries `code` pinning an
+ *    already-merged program (the work-unit shape: repo + 40-hex sha +
+ *    entrypoint), every chunk in the proposal pins the SAME program, and the
+ *    donation is podman time, not tokens — so the sweep shape may fan wider,
+ *    up to 64. Each class is counted against its own cap.
+ */
 export const MAX_DECOMPOSITION_SUBTASKS = 12;
+export const MAX_DECOMPOSITION_CHUNKS = 64;
 /** Each subtask's cap may be at most this multiple of the parent task's cap. */
 export const DECOMPOSITION_CAP_MULTIPLE = 2;
 /** The auto-minted review task: small, deliberately — it's a judgment call, not a computation. */
@@ -579,6 +589,18 @@ const TASK_KINDS = [
 const TASK_EFFORTS = ['low', 'medium', 'high'];
 const VERIFY_METHODS = ['auto_rerun', 'proof_checker', 'replication', 'human_review'];
 
+/** The pinned-program marker that makes a subtask a sandbox CHUNK, not a model call. */
+export interface ChunkCode {
+  /** owner/name of the allowlisted contrib repo. */
+  repo: string;
+  /** Full 40-hex commit SHA — content-addressed, never a branch or tag. */
+  sha: string;
+  /** Repo-relative path of the script to run. */
+  entrypoint: string;
+  /** The slice this chunk covers, handed to the program on stdin. */
+  input?: unknown;
+}
+
 export interface ProposedSubtask {
   title: string;
   prompt: string;
@@ -587,6 +609,8 @@ export interface ProposedSubtask {
   verify_via: string;
   est_cost_cents: number;
   max_cost_cents: number;
+  /** Present iff this subtask is a sandbox chunk (see ChunkCode / the 64 cap). */
+  code?: ChunkCode;
 }
 
 export interface DecompositionProposal {
@@ -594,12 +618,50 @@ export interface DecompositionProposal {
   subtasks: ProposedSubtask[];
 }
 
+/** Validate one subtask's `code` marker into the exact work-unit shape, or throw. */
+function normalizeChunkCode(raw: unknown, i: number, bad: (msg: string) => never): ChunkCode {
+  const c = raw as Record<string, unknown> | null | undefined;
+  const repo = typeof c?.repo === 'string' ? c.repo.trim() : '';
+  const sha = typeof c?.sha === 'string' ? c.sha.trim().toLowerCase() : '';
+  const entrypoint = typeof c?.entrypoint === 'string' ? c.entrypoint.trim() : '';
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    bad(`subtask ${i}: code.repo must be an owner/name repo`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    bad(`subtask ${i}: code.sha must be a full 40-hex commit SHA (a pinned, merged program)`);
+  }
+  if (!entrypoint || entrypoint.length > 300 || entrypoint.startsWith('/')) {
+    bad(`subtask ${i}: code.entrypoint must be a repo-relative path`);
+  }
+  if (entrypoint.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
+    bad(`subtask ${i}: code.entrypoint must not contain empty/dot segments`);
+  }
+  return {
+    repo,
+    sha,
+    entrypoint,
+    ...(c && 'input' in c ? { input: c.input } : {}),
+  };
+}
+
 /**
  * Validate + normalize an agent-submitted decomposition proposal, or throw
  * OpError('bad_decomposition'). Strict where money and volume are concerned
- * (integer cents, per-subtask cap <= 2x the parent's, <= 12 subtasks); lenient
- * on the hint fields (an unknown kind/effort/verify_via falls back to a safe
- * default rather than losing an otherwise sound plan).
+ * (integer cents, per-subtask cap <= 2x the parent's, and the differentiated
+ * fan-out caps: <= 12 model subtasks, <= 64 sandbox chunks — each class
+ * against its own cap); lenient on the hint fields (an unknown kind/effort/
+ * verify_via falls back to a safe default rather than losing an otherwise
+ * sound plan).
+ *
+ * The chunk marker is crisp: a subtask is a CHUNK iff it carries `code` in the
+ * work-unit shape ({repo, 40-hex sha, entrypoint, input?}) — i.e. it names an
+ * ALREADY-pinned program the sandbox can run without any model call — and all
+ * chunks in one proposal must pin the SAME repo+sha+entrypoint (one program,
+ * many slices; only `input` varies). A malformed `code` is an error, never
+ * silently reclassified as a model subtask. If the program doesn't exist yet
+ * (two-phase pattern, phase 1 pending), the proposal can't mint chunks yet —
+ * it proposes the code-writing task now and a later decomposition fans out
+ * the chunks once the SHA exists.
  */
 export function normalizeDecomposition(
   raw: unknown,
@@ -612,9 +674,6 @@ export function normalizeDecomposition(
   const list = r?.subtasks;
   if (!Array.isArray(list) || list.length === 0) {
     bad('decomposition.subtasks must be a non-empty array');
-  }
-  if ((list as unknown[]).length > MAX_DECOMPOSITION_SUBTASKS) {
-    bad(`a proposal may have at most ${MAX_DECOMPOSITION_SUBTASKS} subtasks`);
   }
   const capCeiling = parentMaxCents * DECOMPOSITION_CAP_MULTIPLE;
   const subtasks = (list as any[]).map((s, i) => {
@@ -636,18 +695,52 @@ export function normalizeDecomposition(
     if (!Number.isInteger(est) || est <= 0 || est > max) {
       bad(`subtask ${i}: est_cost_cents must be a positive integer <= max_cost_cents`);
     }
+    const code = s?.code != null ? normalizeChunkCode(s.code, i, bad) : undefined;
     return {
       title,
       prompt,
-      kind: TASK_KINDS.includes(s?.kind) ? (s.kind as string) : 'exploration',
-      effort: TASK_EFFORTS.includes(s?.effort) ? (s.effort as string) : 'medium',
+      // A pinned-program chunk is computational/cheap by nature; valid hints still win.
+      kind: TASK_KINDS.includes(s?.kind)
+        ? (s.kind as string)
+        : code
+          ? 'computational'
+          : 'exploration',
+      effort: TASK_EFFORTS.includes(s?.effort) ? (s.effort as string) : code ? 'low' : 'medium',
       verify_via: VERIFY_METHODS.includes(s?.verify_via)
         ? (s.verify_via as string)
         : 'human_review',
       est_cost_cents: est as number,
       max_cost_cents: max as number,
+      ...(code ? { code } : {}),
     };
   });
+
+  // Differentiated fan-out: each class counted against its own cap.
+  const chunks = subtasks.filter((s) => s.code);
+  const modelCount = subtasks.length - chunks.length;
+  if (modelCount > MAX_DECOMPOSITION_SUBTASKS) {
+    bad(
+      `a proposal may have at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks ` +
+        `(got ${modelCount}; only pinned-code sandbox chunks may fan wider)`,
+    );
+  }
+  if (chunks.length > MAX_DECOMPOSITION_CHUNKS) {
+    bad(`a proposal may have at most ${MAX_DECOMPOSITION_CHUNKS} sandbox chunk subtasks`);
+  }
+  // One program, many slices: every chunk must pin the same repo+sha+entrypoint.
+  if (chunks.length > 0) {
+    const first = chunks[0].code as ChunkCode;
+    const differs = chunks.some(
+      (c) =>
+        c.code!.repo !== first.repo ||
+        c.code!.sha !== first.sha ||
+        c.code!.entrypoint !== first.entrypoint,
+    );
+    if (differs) {
+      bad('all chunk subtasks in a proposal must pin the same repo+sha+entrypoint');
+    }
+  }
+
   const reason = typeof r?.reason === 'string' ? r.reason.slice(0, DECOMPOSITION_REASON_CHARS) : '';
   return { reason, subtasks };
 }
@@ -663,13 +756,21 @@ function reviewTaskSpec(
   contributionId: number,
   parentTitle: string,
   proposal: DecompositionProposal,
+  depth: number,
 ) {
+  const chunkCount = proposal.subtasks.filter((s) => s.code).length;
   return {
     review_of: contributionId,
     deliverable: 'decomposition_review',
     prompt:
       `Another volunteer's agent judged the task "${parentTitle}" too big for its budget and ` +
-      `proposed splitting it into ${proposal.subtasks.length} subtask(s). Its stated reason: ` +
+      `proposed splitting it into ${proposal.subtasks.length} subtask(s)` +
+      (chunkCount > 0 ? ` (${chunkCount} of them pinned-code sandbox chunks)` : '') +
+      `. This is a depth-${depth} proposal` +
+      (depth > 1
+        ? ` — the parent task was itself published by an earlier approved decomposition, so scrutinize whether splitting AGAIN genuinely helps or is just fragmenting the work`
+        : '') +
+      `. Its stated reason: ` +
       `${proposal.reason || '(none given)'}\n\nThe full proposal:\n` +
       `${JSON.stringify(proposal, null, 2)}\n\n` +
       `Evaluate whether this split is (a) sensible — each subtask is well-posed and independently ` +
@@ -740,8 +841,9 @@ async function publishApprovedDecomposition(
     target_id: string;
     max_cost_cents: number;
     sensitivity: string;
+    decomposition_depth: number;
   }>(
-    `SELECT target_id, max_cost_cents, sensitivity::text AS sensitivity
+    `SELECT target_id, max_cost_cents, sensitivity::text AS sensitivity, decomposition_depth
        FROM tasks WHERE id = $1`,
     [prop.task_id],
   );
@@ -758,19 +860,29 @@ async function publishApprovedDecomposition(
     return [];
   }
 
+  // Depth bookkeeping: children carry the parent's depth + 1, so decomposition
+  // towers are visible in the data. No hard depth cap — per-level peer review
+  // is the damper — but each level's review prompt states the depth.
+  const childDepth = parent.rows[0].decomposition_depth + 1;
   const created: string[] = [];
   for (const st of proposal.subtasks) {
     const ins = await client.query<{ id: string }>(
       `INSERT INTO tasks
          (target_id, title, spec, est_cost_cents, max_cost_cents, effort, kind, verify_via,
-          sensitivity, decomposed_from)
+          sensitivity, decomposed_from, decomposition_depth)
        VALUES ($1, $2, $3, $4, $5, $6::task_effort, $7::task_kind, $8::verification_method,
-               $9::data_sensitivity, $10)
+               $9::data_sensitivity, $10, $11)
        RETURNING id`,
       [
         parent.rows[0].target_id,
         st.title,
-        JSON.stringify({ prompt: st.prompt, decomposed_from: contributionId }),
+        JSON.stringify({
+          prompt: st.prompt,
+          decomposed_from: contributionId,
+          // A chunk subtask carries the pinned program — DispatchingExecutor
+          // routes spec.code to the podman work-unit sandbox, never a model.
+          ...(st.code ? { code: st.code } : {}),
+        }),
         st.est_cost_cents,
         st.max_cost_cents,
         st.effort,
@@ -778,6 +890,7 @@ async function publishApprovedDecomposition(
         st.verify_via,
         parent.rows[0].sensitivity, // subtasks inherit the parent's sensitivity
         contributionId,
+        childDepth,
       ],
     );
     created.push(ins.rows[0].id);
@@ -914,8 +1027,9 @@ export async function submitResult(
       title: string;
       spec: Record<string, unknown> | null;
       sensitivity: string;
+      decomposition_depth: number;
     };
-    const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity`;
+    const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity, decomposition_depth`;
     const upd = terminal
       ? await client.query<SettledRow>(
           `UPDATE tasks
@@ -1044,7 +1158,16 @@ export async function submitResult(
         [
           targetId,
           `Review a proposed decomposition of: ${upd.rows[0].title}`.slice(0, 200),
-          JSON.stringify(reviewTaskSpec(contrib.rows[0].id, upd.rows[0].title, proposal)),
+          JSON.stringify(
+            reviewTaskSpec(
+              contrib.rows[0].id,
+              upd.rows[0].title,
+              proposal,
+              // The depth the published subtasks WOULD have — flagged to the
+              // reviewer so towers get extra scrutiny at the judgment point.
+              upd.rows[0].decomposition_depth + 1,
+            ),
+          ),
           REVIEW_TASK_EST_CENTS,
           REVIEW_TASK_MAX_CENTS,
           upd.rows[0].sensitivity, // the review sees the proposal, so it inherits its sensitivity

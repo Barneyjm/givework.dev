@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { extractWorkUnit, WorkUnitExecutor } from './workunit.js';
 
 // Task execution — the actual donated work. The donation is each monthly
@@ -217,7 +220,7 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
        "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
     ]
   }
-Rules: at most 12 subtasks; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then N cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
+Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 // ---------------------------------------------------------------------------
 // ClaudeCliExecutor — the production path. Runs the task on the volunteer's
@@ -254,9 +257,14 @@ export class ExecTimeoutError extends Error {
  * ExecTimeoutError carrying the partial stdout (rejected from the 'close'
  * handler so anything the dying process flushed is still captured).
  */
-function spawnClaude(args: string[], input: string, timeoutMs: number): Promise<string> {
+function spawnClaude(
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  opts: { cwd?: string } = {},
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: opts.cwd });
     const started = Date.now();
     let out = '';
     let err = '';
@@ -380,10 +388,33 @@ export function parseStreamCapture(raw: string): StreamCapture {
 /** Rough chars→tokens estimate (≈4 chars/token) for runs that died before any usage event. */
 const estTokens = (chars: number) => Math.ceil(chars / 4);
 
-type CliRunner = (args: string[], input: string, timeoutMs: number) => Promise<string>;
+type CliRunner = (
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  opts?: { cwd?: string },
+) => Promise<string>;
 
 /** Ceiling on a task-advertised timeout, so a bad spec can't hang a runner. */
 const MAX_TASK_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * The agent-curated salvage file. Each execution gets a fresh working
+ * directory; the prompt tells the agent its real time budget and to append
+ * findings to PROGRESS.md AS IT GOES. On a timeout that file — the agent's own
+ * account of where it got to — is the primary salvage; the stream capture is
+ * the fallback. On success the file is ignored (the JSON contract stands).
+ *
+ * Tool permissions (verified end-to-end against the real CLI): `claude -p`
+ * denies file tools by default (no interactive prompt to approve them), so the
+ * invocation grants exactly `--allowedTools "Write(PROGRESS.md),Edit(PROGRESS.md)"`
+ * — Write/Edit on that one relative path, resolved inside the per-run working
+ * directory the child is spawned in. No Bash, no other paths, nothing else.
+ */
+export const PROGRESS_FILE = 'PROGRESS.md';
+const PROGRESS_ALLOWED_TOOLS = `Write(${PROGRESS_FILE}),Edit(${PROGRESS_FILE})`;
+/** Read cap for a salvaged PROGRESS.md — matches the server's state-size bound. */
+const PROGRESS_FILE_MAX_CHARS = 64_000;
 
 export class ClaudeCliExecutor implements Executor {
   private run: CliRunner;
@@ -394,7 +425,7 @@ export class ClaudeCliExecutor implements Executor {
     // The per-task override is consulted at call time so a long-running task
     // (authoring a whole Manim scene runs ~13 minutes) can widen the window
     // without every task paying for it.
-    this.run = opts.run ?? ((args, input, timeoutMs) => spawnClaude(args, input, timeoutMs));
+    this.run = opts.run ?? ((args, input, timeoutMs, o) => spawnClaude(args, input, timeoutMs, o));
   }
 
   /**
@@ -419,13 +450,25 @@ export class ClaudeCliExecutor implements Executor {
       : task.model && task.model !== 'by-effort'
         ? task.model
         : DEFAULT_MODEL;
+    const timeoutMs = this.timeoutFor(task);
+    const budgetMinutes = Math.max(1, Math.round(timeoutMs / 60_000));
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
       (task.spec?.output_schema
         ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
         : '') +
-      (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '');
+      (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '') +
+      // The progress-file protocol: the agent knows its real deadline and keeps
+      // its own salvage current, so a killed run submits the agent's OWN account
+      // of where it got to — better than anything we can scrape from the stream.
+      `\nTIME BUDGET: this run is killed after ~${budgetMinutes} minute(s). As you work, ` +
+      `append your findings to a file named ${PROGRESS_FILE} in the current working directory ` +
+      `(you have permission to Write/Edit exactly that file): current frontier, partial ` +
+      `results, dead ends ruled out, and the concrete next step. Keep it current — if the ` +
+      `clock kills this run, ${PROGRESS_FILE} is salvaged and submitted as your progress ` +
+      `contribution for the next agent to continue from. If you finish in time, reply with ` +
+      `the JSON object as instructed; ${PROGRESS_FILE} is then ignored.\n`;
 
     // NOTE: we do NOT pass `--json-schema`. With that flag, `claude -p` runs and
     // bills but returns an empty `result` field (the structured output doesn't
@@ -443,22 +486,37 @@ export class ClaudeCliExecutor implements Executor {
       'stream-json',
       '--verbose',
       '--include-partial-messages',
+      // Narrow file grant for the progress-file protocol: Write/Edit on
+      // PROGRESS.md only, inside the per-run working directory (the child's
+      // cwd). Everything else stays denied, as -p denies by default.
+      '--allowedTools',
+      PROGRESS_ALLOWED_TOOLS,
       '--model',
       model,
     ];
 
-    const timeoutMs = this.timeoutFor(task);
+    // Fresh working directory per run — where PROGRESS.md lives, and all the
+    // agent can write. Removed after the run either way (on success the JSON
+    // contract stands and the file is ignored).
+    const workdir = await mkdtemp(join(tmpdir(), 'givework-run-'));
     let raw: string;
     try {
-      raw = await this.run(args, prompt, timeoutMs);
+      raw = await this.run(args, prompt, timeoutMs, { cwd: workdir });
     } catch (err) {
       if (err instanceof ExecTimeoutError) {
         // The timeout killed the run. The tokens are already spent from the
         // volunteer's subscription — salvage what accumulated into a progress
         // contribution instead of letting the run vanish without a record.
-        return salvageTimedOutRun(task, model, prompt, err);
+        // The agent-curated PROGRESS.md is the primary salvage; the stream
+        // capture inside salvageTimedOutRun is the fallback.
+        const progressFile = await readFile(join(workdir, PROGRESS_FILE), 'utf8')
+          .then((s) => s.slice(0, PROGRESS_FILE_MAX_CHARS))
+          .catch(() => null);
+        return salvageTimedOutRun(task, model, prompt, err, progressFile);
       }
       throw err;
+    } finally {
+      await rm(workdir, { recursive: true, force: true }).catch(() => {});
     }
 
     const capture = parseStreamCapture(raw);
@@ -548,40 +606,58 @@ function salvageTimedOutRun(
   model: string,
   prompt: string,
   err: ExecTimeoutError,
+  progressFile: string | null = null,
 ): ExecResult {
   const capture = parseStreamCapture(err.partialOutput);
   const text = capture.text.trim();
+  const progress = progressFile?.trim() ?? '';
+  // The agent's own account of where it got to beats anything scraped from the
+  // stream — it was written for exactly this moment. Fallback order:
+  // PROGRESS.md -> stream capture -> bare attempt record.
+  const salvage = progress || text;
+  const source = progress ? 'progress_file' : text ? 'stream' : 'none';
   const minutes = Math.max(1, Math.round(err.elapsedMs / 60_000));
 
   const sawUsage = Object.values(capture.usage).some((v) => (v ?? 0) > 0);
   const usage: Usage = sawUsage
     ? capture.usage
-    : { input_tokens: estTokens(prompt.length), output_tokens: estTokens(text.length) };
+    : {
+        input_tokens: estTokens(prompt.length),
+        // The file was written by the run too — its chars were paid output.
+        output_tokens: estTokens(text.length + progress.length),
+      };
   const cents = Math.max(1, usageToCents(model, usage));
 
   const summary =
     `Attempted "${task.title}" but the run timed out after ${minutes} minute(s). ` +
-    (text
-      ? 'Partial output was captured and is attached for the next agent to continue from.'
-      : 'No partial output could be captured before the kill; a full window produced nothing visible — consider a smaller chunk or a decomposition.');
+    (source === 'progress_file'
+      ? `The agent's own ${PROGRESS_FILE} was salvaged and is attached for the next agent to continue from.`
+      : source === 'stream'
+        ? 'Partial output was captured and is attached for the next agent to continue from.'
+        : 'No partial output could be captured before the kill; a full window produced nothing visible — consider a smaller chunk or a decomposition.');
 
   // Merge-don't-clobber: only extend a plain-object state, never replace it.
   const prior = task.target_state;
   const mergeable = prior == null || (typeof prior === 'object' && !Array.isArray(prior));
   const state_update =
-    text && mergeable
+    salvage && mergeable
       ? {
           ...(prior as Record<string, unknown> | null | undefined),
           timeout_salvage: {
             task_id: task.task_id,
             elapsed_ms: err.elapsedMs,
-            partial: text.slice(0, SALVAGE_STATE_CHARS),
+            source,
+            partial: salvage.slice(0, SALVAGE_STATE_CHARS),
           },
         }
       : undefined;
 
   return {
-    result: { timed_out: true, partial_output: text.slice(0, SALVAGE_ARTIFACT_CHARS) },
+    result: {
+      timed_out: true,
+      ...(progress ? { progress_file: progress.slice(0, SALVAGE_ARTIFACT_CHARS) } : {}),
+      ...(text ? { partial_output: text.slice(0, SALVAGE_ARTIFACT_CHARS) } : {}),
+    },
     outcome: 'progress',
     timed_out: true,
     summary,
@@ -593,6 +669,7 @@ function salvageTimedOutRun(
       elapsed_ms: err.elapsedMs,
       estimated: true,
       estimator: sawUsage ? 'streamed_usage' : 'char_heuristic',
+      salvage_source: source,
       usage,
     },
   };
