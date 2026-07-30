@@ -159,6 +159,36 @@ describe('timeout → salvaged progress contribution', () => {
     expect(all).not.toContain('✗ execution failed'); // not reported as a failure
   });
 
+  it("threads the salvage into the next attempt's model prompt — the handoff reaches the model", async () => {
+    // Attempt 1 times out and its partial findings are salvaged. Attempt 2 (a
+    // different dev, fresh checkout) must SEE that salvage in the prompt sent
+    // to `claude -p` — this is the platform's core promise, end to end through
+    // the real checkoutTask → runLoop → executor path.
+    const dev = await createDev('first-attempt');
+    const target = await createTarget('Collatz');
+    await createTask(target, { est: 20, max: 100, title: 'Residue classes' });
+    await setBudget(dev, 1000);
+    await runLoop(inProcessBackend(dev), timingOutExecutor(), opts);
+
+    const dev2 = await createDev('second-attempt');
+    await setBudget(dev2, 1000);
+    let promptSeen = '';
+    const capturing = new ClaudeCliExecutor({
+      run: async (_args, input) => {
+        promptSeen = input;
+        return JSON.stringify({ result: '{"summary":"continuing"}', total_cost_usd: 0.01 });
+      },
+    });
+    await runLoop(inProcessBackend(dev2), capturing, opts);
+
+    expect(promptSeen).toContain('CONTINUATION — you are CONTINUING accumulated work');
+    // the salvaged partial from attempt 1's stream, riding in target_state
+    expect(promptSeen).toContain('residue-3 case remains');
+    // and the attempt itself, listed as a prior contribution
+    expect(promptSeen).toContain('Recent attempts on this task (newest first):');
+    expect(promptSeen).toContain('timed out');
+  });
+
   it('does not clobber an existing target state — the salvage merges in beside it', async () => {
     const dev = await createDev('careful');
     const target = await createTarget('Collatz');

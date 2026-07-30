@@ -42,9 +42,27 @@ export interface ExecTask {
    * The target's compacted working set at checkout — the accumulated frontier a
    * resumable task hands to whoever picks it up next. Work units merge it into
    * the driver's stdin so a re-picked task advances from the live cursor rather
-   * than restarting from the static spec input.
+   * than restarting from the static spec input; LLM executors inject it into the
+   * model prompt as the continuation section (buildContinuationSection).
    */
   target_state?: unknown;
+  /**
+   * Recent contributions to this task at checkout, newest first — what has
+   * already been tried (progress, dead ends, salvaged timeouts). Injected into
+   * the model prompt alongside `target_state` so a re-picked task continues the
+   * accumulated work instead of restarting from the static spec.
+   */
+  prior_contributions?: PriorContribution[];
+}
+
+/** The per-contribution summary a checkout hydrates (see operations.checkoutTask). */
+export interface PriorContribution {
+  id?: number;
+  outcome: string;
+  summary: string | null;
+  artifact_uri?: string | null;
+  cost_cents?: number;
+  created_at?: string;
 }
 
 export interface ExecResult {
@@ -186,6 +204,89 @@ export function usageToCents(model: string, usage: Usage): number {
 }
 
 // ---------------------------------------------------------------------------
+// Continuation context — the platform's core promise made real on the model
+// path. checkoutTask hands back the target's compacted state and the recent
+// contributions on this task; if that handoff never reaches the model, every
+// attempt restarts from scratch and "resumable" is a lie. This builder turns
+// the checkout payload into a clearly-framed prompt section, size-capped so a
+// long history can't blow the context window.
+// ---------------------------------------------------------------------------
+
+/** Total cap on the injected continuation section. */
+export const CONTINUATION_MAX_CHARS = 8_000;
+/** Cap on the serialized target state within that budget. */
+const CONTINUATION_STATE_MAX_CHARS = 6_000;
+/** Cap on any single prior-attempt line. */
+const CONTINUATION_PRIOR_MAX_CHARS = 700;
+
+/** True when the compacted state actually says something (checkout defaults to `{}`). */
+function stateHasContent(state: unknown): boolean {
+  if (state == null) return false;
+  if (typeof state === 'string') return state.trim().length > 0;
+  if (Array.isArray(state)) return state.length > 0;
+  if (typeof state === 'object') return Object.keys(state as object).length > 0;
+  return true;
+}
+
+/**
+ * Render the accumulated frontier as a prompt section, or '' when there is
+ * nothing accumulated (a first attempt stays a clean prompt). Priors arrive
+ * newest first from checkout and are kept in that order, so when the size cap
+ * bites it is the OLDEST attempts that fall off — with an explicit note, never
+ * silently. State that itself exceeds its budget is truncated with a note too:
+ * a next agent must never mistake a clipped frontier for the whole frontier.
+ */
+export function buildContinuationSection(state: unknown, priors: PriorContribution[] = []): string {
+  const hasState = stateHasContent(state);
+  const hasPriors = priors.length > 0;
+  if (!hasState && !hasPriors) return '';
+
+  const parts: string[] = [
+    'CONTINUATION — you are CONTINUING accumulated work on this problem, not starting it. ' +
+      'Read the state and prior attempts below FIRST and advance from the frontier they ' +
+      'record; do not redo work they already cover.',
+  ];
+
+  if (hasState) {
+    let json: string;
+    try {
+      json = typeof state === 'string' ? state : JSON.stringify(state);
+    } catch {
+      json = String(state);
+    }
+    if (json.length > CONTINUATION_STATE_MAX_CHARS) {
+      json = `${json.slice(0, CONTINUATION_STATE_MAX_CHARS)}\n[state truncated at ${CONTINUATION_STATE_MAX_CHARS} chars — the full working set is larger than shown]`;
+    }
+    parts.push(`Current state (compacted from prior contributions):\n${json}`);
+  }
+
+  if (hasPriors) {
+    const header = 'Recent attempts on this task (newest first):';
+    let used = parts.join('\n\n').length + header.length + 4;
+    const lines: string[] = [];
+    let kept = 0;
+    for (const p of priors) {
+      const when = p.created_at ? ` at ${p.created_at}` : '';
+      let line = `- [${p.outcome}]${when}: ${p.summary?.trim() || '(no summary recorded)'}`;
+      if (line.length > CONTINUATION_PRIOR_MAX_CHARS) {
+        line = `${line.slice(0, CONTINUATION_PRIOR_MAX_CHARS)}…`;
+      }
+      if (used + line.length + 1 > CONTINUATION_MAX_CHARS) break;
+      lines.push(line);
+      used += line.length + 1;
+      kept++;
+    }
+    const omitted = priors.length - kept;
+    if (omitted > 0) {
+      lines.push(`[history truncated — ${omitted} older attempt(s) omitted to fit the size cap]`);
+    }
+    parts.push([header, ...lines].join('\n'));
+  }
+
+  return parts.join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
 // StubExecutor — no model. Reports ~80% of the cap as "spent".
 // ---------------------------------------------------------------------------
 
@@ -194,11 +295,15 @@ export class StubExecutor implements Executor {
     const prompt = task.spec?.prompt ?? task.title;
     console.log(`     … would call Claude here (model ${task.model}) on: "${prompt}"`);
     const actual = Math.round(task.max_cost_cents * 0.8);
+    // Echo the continuation section exactly as the production executor would
+    // frame it, so tests can assert the checkout handoff reached the executor.
+    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
     return {
       result: {
         stub: true,
         summary: `Stubbed completion for "${task.title}".`,
         echoed_prompt: prompt,
+        ...(continuation ? { echoed_continuation: continuation } : {}),
       },
       actual_cost_cents: actual,
       raw_usage: { stub: true, model: task.model, simulated_cost_cents: actual },
@@ -210,6 +315,8 @@ export class StubExecutor implements Executor {
 const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI compute to open mathematics.
 You are given one concrete task — an attack on an open problem — with a prompt, an expected output shape, and acceptance criteria.
 Do the task rigorously and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.
+
+EXECUTION REALITY — you cannot run code. This run has no shell, no interpreter, and no sandbox; the only tool you have is writing the PROGRESS.md file described below. Reasoning, analysis, proof work, and mathematics you can and should do directly. But if the deliverable requires EXECUTING code (running a search, a simulation, a numerical sweep), do not pretend to run it and never present imagined program output as computed fact — the correct deliverable is a decomposition (below): one subtask that WRITES a small, reviewable program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then sandboxed chunk subtasks that actually execute it on donated CPU.
 
 BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap and a bounded time window. If, once you understand the task, it plainly cannot fit its budget or window, do NOT grind at it until the clock kills the run — that burns the donation and records nothing. The CORRECT deliverable for an oversized task is a decomposition proposal. Add a "decomposition" key to your JSON object:
   "decomposition": {
@@ -452,6 +559,9 @@ export class ClaudeCliExecutor implements Executor {
         : DEFAULT_MODEL;
     const timeoutMs = this.timeoutFor(task);
     const budgetMinutes = Math.max(1, Math.round(timeoutMs / 60_000));
+    // The accumulated frontier from checkout. Without this the handoff dies at
+    // the runner's doorstep and every attempt restarts from the static spec.
+    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
@@ -459,6 +569,7 @@ export class ClaudeCliExecutor implements Executor {
         ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
         : '') +
       (task.spec?.acceptance ? `Acceptance: ${task.spec.acceptance}\n` : '') +
+      (continuation ? `\n${continuation}\n` : '') +
       // The progress-file protocol: the agent knows its real deadline and keeps
       // its own salvage current, so a killed run submits the agent's OWN account
       // of where it got to — better than anything we can scrape from the stream.

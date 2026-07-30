@@ -347,11 +347,15 @@ export async function runLoop(
       // withLease renews the 10-minute lease every 5 minutes while execution
       // runs, so long CPU work units keep their claim; failures are non-fatal
       // (a dead lease just returns the task to the pool, as designed).
+      // The whole checkout payload goes to the executor — including
+      // `target_state` and `prior_contributions`, the accumulated frontier that
+      // makes hard tasks resumable. The LLM executor injects them into the
+      // model prompt as the continuation section; dropping them here would mean
+      // every attempt restarts from the static spec.
+      const execTask: ExecTask = checkout;
       let exec: Awaited<ReturnType<typeof executor.execute>>;
       try {
-        exec = await withLease(backend, checkout.task_id, () =>
-          executor.execute(checkout as ExecTask),
-        );
+        exec = await withLease(backend, checkout.task_id, () => executor.execute(execTask));
       } catch (err) {
         console.error(
           `  ✗ execution failed for ${checkout.task_id.slice(0, 8)}: ${(err as Error).message} — releasing`,
