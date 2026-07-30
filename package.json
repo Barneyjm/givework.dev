@@ -1,6 +1,6 @@
 {
   "name": "givework",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "description": "Volunteer your AI agent's spare capacity to open mathematics",
   "license": "Apache-2.0",
@@ -45,6 +45,8 @@
     "mint-token": "node --env-file-if-exists=.env --import tsx scripts/mint-token.ts",
     "intake-email": "node --import tsx scripts/intake-email.ts",
     "test": "vitest run",
+    "flow:local": "node --import tsx scripts/flow-local.ts",
+    "flow:smoke": "node --import tsx scripts/flow-local.ts --stub",
     "typecheck": "tsc --noEmit",
     "lint": "biome check",
     "lint:fix": "biome check --write",
