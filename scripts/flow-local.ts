@@ -15,7 +15,7 @@
 // that isn't a local Postgres and defaults to the podman test DB on :5433.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -39,6 +39,15 @@ process.env.JWT_SECRET ??= 'flow-rig-local-secret';
 process.env.EXECUTOR = stubMode ? 'stub' : 'claude';
 const promptLogPath = join(tmpdir(), `givework-flow-prompts-${Date.now()}.jsonl`);
 process.env.GIVEWORK_PROMPT_LOG = promptLogPath;
+// Rig isolation, learned the hard way on the rig's own first real run:
+//  - the runner's outbox must NEVER be the volunteer's real ~/.givework/outbox
+//    (a rig failure would archive junk into the owner's real dead-letter spool);
+//  - a real model happily emits a code_contribution, and the runner would open
+//    a REAL PR on the public contrib repo — point it at a black-hole repo so
+//    the publish fails fast and the rig exercises the fallback-to-inline path
+//    instead of touching GitHub.
+process.env.GIVEWORK_OUTBOX_DIR = mkdtempSync(join(tmpdir(), 'givework-flow-outbox-'));
+process.env.GIVEWORK_CONTRIB_REPO ??= 'givework-flow-rig/black-hole-does-not-exist';
 
 const banner = (s: string) => console.log(`\n━━ ${s}`);
 
