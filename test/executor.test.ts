@@ -896,6 +896,31 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect(buildContinuationSection(null, [salvaged])).not.toContain('DECOMPOSITION LIMITS');
   });
 
+  it('a review_rejected artifact renders the address-and-resubmit instruction, with the limits', () => {
+    // The peer-review rejection channel: the reviewer's reasons are appended
+    // to the PARENT task as a zero-cost contribution (see operations.ts
+    // recordReviewRejection), and the continuation must tell the next agent to
+    // address the verdict — not to "fix validation errors" that don't exist.
+    const rejected: PriorContribution = {
+      id: 12,
+      outcome: 'progress',
+      summary: 'Peer review REJECTED the proposed decomposition: caps padded 10x',
+      artifact: {
+        review_rejected: true,
+        reasons: 'caps padded 10x beyond the stated work',
+        reviewed_contribution: 7,
+      },
+      created_at: '2026-07-23T00:00:00Z',
+    };
+    const section = buildContinuationSection(null, [rejected], 80);
+    expect(section).toContain('peer reviewer REJECTED the previous decomposition proposal');
+    expect(section).toContain('address them and resubmit');
+    expect(section).toContain('caps padded 10x beyond the stated work');
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain("at most 160 (2x this task's 80¢ cap)");
+    expect(section).not.toContain('fix exactly those errors'); // that instruction is validation-salvage's
+  });
+
   it('limits + state + artifact-bearing prior still fit the continuation size cap', () => {
     const big = { frontier: 'y'.repeat(10_000) };
     const salvaged: PriorContribution = {

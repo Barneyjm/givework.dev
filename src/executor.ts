@@ -427,13 +427,14 @@ export function buildContinuationSection(
   }
 
   if (hasPriors) {
-    // A preserved artifact means a salvaged proposal awaits correction; put
-    // the computed limits next to the errors so the resubmit can be priced
-    // right without rediscovering the caps. Pushed BEFORE the priors budget
-    // below is computed, so the section's size cap still holds.
+    // A preserved artifact means a prior proposal awaits correction (it failed
+    // validation, or a peer review rejected it); put the computed limits next
+    // to the feedback so the resubmit can be priced right without
+    // rediscovering the caps. Pushed BEFORE the priors budget below is
+    // computed, so the section's size cap still holds.
     if (maxCostCents !== undefined && priors.some((p) => p.artifact != null)) {
       parts.push(
-        `A preserved decomposition proposal below failed validation. When correcting it:\n${decompositionLimitsSection(maxCostCents)}`,
+        `A prior decomposition proposal below was not accepted (validation errors or a peer review's rejection). When correcting and resubmitting it:\n${decompositionLimitsSection(maxCostCents)}`,
       );
     }
     const header = 'Recent attempts on this task (newest first):';
@@ -459,9 +460,15 @@ export function buildContinuationSection(
         if (json.length > CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS) {
           json = `${json.slice(0, CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS)}…[artifact truncated]`;
         }
-        line +=
-          `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
-          `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
+        const reviewRejected =
+          typeof p.artifact === 'object' &&
+          (p.artifact as { review_rejected?: unknown }).review_rejected === true;
+        line += reviewRejected
+          ? `\n  Preserved artifact from this attempt (a peer reviewer REJECTED the previous ` +
+            `decomposition proposal for the reasons recorded here — address them and resubmit ` +
+            `an improved proposal, or take a different approach entirely):\n  ${json}`
+          : `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
+            `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
       }
       // Reserve room for the truncation note so appending it can never push
       // the section past the cap (the pre-note budget must leave it space).
