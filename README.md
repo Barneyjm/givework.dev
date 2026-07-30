@@ -170,6 +170,31 @@ The migration runner records applied files in a `schema_migrations` table and
 only runs what's pending, so re-running is a no-op. The test suite shares one
 database and truncates between tests — point it at a throwaway DB, never prod.
 
+## The local flow rig — the pre-release gate
+
+Unit tests cover the pieces; the flow rig runs the **story**: a real local Hono
+server, the real runner loop, and (in full mode) your own real `claude -p`,
+end to end through checkout → proposal → decomposition validation/salvage →
+review mint → rejection flow-back → corrected resubmit → approve → publish →
+published-subtask checkout, asserting DB state *and the exact prompt the model
+was shown* after every step. Run it before cutting a release — the bugs the
+v0.3.1–v0.3.5 fire-drill fixed one-per-release in production all live on this
+path.
+
+```bash
+podman start givework-pg   # the local test Postgres on :5433 (see above)
+npm run flow:smoke         # deterministic scripted saga — no model, no spend (also in `npm test`)
+npm run flow:local         # the real thing: your `claude -p`, your subscription credit
+```
+
+Full mode spends **your own Claude Code subscription credit** (typically well
+under $1 for a whole saga; hard-capped at 8 model runs, `--max-runs N` to
+change). No API key is used or accepted. The rig refuses non-local databases
+(it TRUNCATEs), boots on a random port, and on any stage failure stops and
+prints the failing stage, the DB evidence, and the path of the prompt/result
+transcript (`GIVEWORK_PROMPT_LOG`, a JSONL of every prompt sent to the model
+and every parsed result with its `parse_mode` and booked cost).
+
 ## Lint & format
 
 [Biome](https://biomejs.dev/) handles both linting and formatting (one fast

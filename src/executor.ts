@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -850,6 +851,45 @@ function isJsonSchemaFlagFailure(stderr: string): boolean {
   );
 }
 
+/**
+ * Debug transcript for the local flow rig (scripts/flow-local.ts): when
+ * GIVEWORK_PROMPT_LOG names a file, every `claude -p` execution appends JSON
+ * lines — the exact prompt sent to the model, and the parsed outcome
+ * (parse_mode, booked cost, salvage flags). The prompt-contract bugs this
+ * repo has shipped (missing continuation, missing computed caps, missing
+ * review flow-back) are only catchable by looking at what the model was
+ * actually shown — this is the tap. Off by default; best-effort by contract:
+ * a debug log must never break a paid run.
+ */
+function logPromptEvent(event: Record<string, unknown>): void {
+  const file = process.env.GIVEWORK_PROMPT_LOG;
+  if (!file) return;
+  try {
+    appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
+  } catch {
+    // best-effort only
+  }
+}
+
+/** Cap on the raw model text mirrored into the prompt log (local debugging only). */
+const PROMPT_LOG_RAW_CHARS = 20_000;
+
+/** Log an execution's outcome to the prompt log (no-op unless enabled) and pass it through. */
+function logExecResult(taskId: string, res: ExecResult, rawText?: string): ExecResult {
+  logPromptEvent({
+    event: 'result',
+    task_id: taskId,
+    outcome: res.outcome,
+    timed_out: res.timed_out,
+    crashed: res.crashed,
+    actual_cost_cents: res.actual_cost_cents,
+    parse_mode: (res.raw_usage as { parse_mode?: unknown } | null)?.parse_mode,
+    result: res.result,
+    ...(rawText !== undefined ? { raw_text: rawText.slice(0, PROMPT_LOG_RAW_CHARS) } : {}),
+  });
+  return res;
+}
+
 /** The schema-validated deliverable from a result event, when --json-schema was honored. */
 function structuredOutputOf(final: any): unknown {
   const s = final?.structured_output;
@@ -1213,6 +1253,14 @@ export class ClaudeCliExecutor implements Executor {
       ...(withSchema ? ['--json-schema', JSON.stringify(jsonSchema)] : []),
     ];
 
+    logPromptEvent({
+      event: 'prompt',
+      task_id: task.task_id,
+      model,
+      json_schema: useJsonSchema,
+      prompt,
+    });
+
     // Fresh working directory per run — where PROGRESS.md lives, and all the
     // agent can write. Removed after the run either way (on success the JSON
     // contract stands and the file is ignored). The whole run + salvage
@@ -1239,7 +1287,10 @@ export class ClaudeCliExecutor implements Executor {
             // capture inside salvageTimedOutRun is the fallback. (Identical in
             // --json-schema mode: partial messages still streamed, only the
             // never-arrived final event would have carried structured_output.)
-            return salvageTimedOutRun(task, model, prompt, err, await readProgress());
+            return logExecResult(
+              task.task_id,
+              salvageTimedOutRun(task, model, prompt, err, await readProgress()),
+            );
           }
           if (err instanceof ExecFailedError) {
             // The CLI died mid-run (nonzero exit). Tokens may already be burned;
@@ -1254,7 +1305,7 @@ export class ClaudeCliExecutor implements Executor {
               stderrTail: err.stderrOutput.slice(-2_000),
               elapsedMs: err.elapsedMs,
             });
-            if (salvaged) return salvaged;
+            if (salvaged) return logExecResult(task.task_id, salvaged);
             if (useJsonSchema && isJsonSchemaFlagFailure(err.stderrOutput)) {
               // The version gate misjudged this CLI (or its validator refused
               // our schema). NOTHING was burned — salvage found no stdout, no
@@ -1297,7 +1348,7 @@ export class ClaudeCliExecutor implements Executor {
           progressFile: await readProgress(),
           final: data ?? null,
         });
-        if (salvaged) return salvaged;
+        if (salvaged) return logExecResult(task.task_id, salvaged);
         throw new Error(`${failure} — nothing recoverable to salvage; releasing the task`);
       }
     } finally {
@@ -1342,23 +1393,27 @@ export class ClaudeCliExecutor implements Executor {
     const proposal = (result as { decomposition?: { subtasks?: unknown } })?.decomposition;
     const isDecomposition = Array.isArray(proposal?.subtasks) && proposal.subtasks.length > 0;
 
-    return {
-      result,
-      summary,
-      outcome: isDecomposition ? 'decomposition' : undefined,
-      actual_cost_cents: cents,
-      raw_usage: {
-        model,
-        // Which rung of the extraction ladder parsed the model's text — so a
-        // mis-routed submit (the prose-buried-JSON incident) is diagnosable
-        // from the recorded contribution.
-        parse_mode,
-        total_cost_usd: data.total_cost_usd,
-        usage: data.usage,
-        duration_ms: data.duration_ms,
-        num_turns: data.num_turns,
+    return logExecResult(
+      task.task_id,
+      {
+        result,
+        summary,
+        outcome: isDecomposition ? 'decomposition' : undefined,
+        actual_cost_cents: cents,
+        raw_usage: {
+          model,
+          // Which rung of the extraction ladder parsed the model's text — so a
+          // mis-routed submit (the prose-buried-JSON incident) is diagnosable
+          // from the recorded contribution.
+          parse_mode,
+          total_cost_usd: data.total_cost_usd,
+          usage: data.usage,
+          duration_ms: data.duration_ms,
+          num_turns: data.num_turns,
+        },
       },
-    };
+      resultText,
+    );
   }
 }
 
