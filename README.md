@@ -496,6 +496,53 @@ predate the log emit no signup event, so `signed_up` can be 0 while later stages
 are not, and a `0%` there would read as "onboarding converts nobody" when it
 converted everybody. `untracked_devs` names that gap explicitly.
 
+### PostHog (optional, and off unless configured)
+
+`funnel_events` above is the source of truth. PostHog sits on top of it as the
+exploratory layer, across three surfaces:
+
+- **The site** loads `site/posthog-init.js`, which also owns *all* CTA click
+  tracking in one delegated listener — pages capture only what the shared
+  handler cannot know (a board's task count, a conjecture's status).
+- **The control plane** mirrors the funnel stages — `dev_created`, `budget_set`,
+  `onboarding_minted`, `checkout`, `submit`, plus `release` — from
+  `src/posthog.ts`, the single server-side capture path. Every capture is
+  fire-and-forget AFTER the operation's transaction commits, parked on the
+  Worker's `waitUntil` — the same rule as `funnel.ts`: analytics is never in
+  front of the money path, and a PostHog outage cannot fail a checkout. The
+  `distinct_id` is the first 16 hex chars of SHA-256(dev id) — never the raw
+  id, an email, or a GitHub handle — and the CLI and the post-sign-in page use
+  the same hash, so all three surfaces resolve to one PostHog person.
+- **The CLI** reports local command outcomes (see below).
+
+Configured by two environment variables on the Worker,
+`POSTHOG_PROJECT_TOKEN` and `POSTHOG_API_HOST` (see `wrangler.toml`). Both are
+optional: with the token unset the site loads no snippet, the server-side
+capture is a no-op and the CLI sends nothing. The token is a **public ingest
+key** — `GET /analytics-config.js` serves it to every browser and
+`GET /analytics-config.json` to every runner — so it is kept out of the repo for
+configurability and to stop a fork reporting into someone else's project, not
+for secrecy.
+
+### CLI usage stats
+
+`givework` reports anonymous local command outcomes, because the control plane
+cannot see the failures that matter most: someone runs `givework start`, has no
+`claude` on `PATH`, and gives up without ever making an HTTP request. That
+volunteer is invisible in every server-side metric.
+
+- **Collected:** command name (matched against the known set, so a typo is
+  reported as `unknown`), success/failure, duration, an error *code*, CLI build
+  sha, Node version, OS, and whether `CI` is set.
+- **Never collected:** arguments, file paths, hostnames, task content, prompts,
+  model output, or error messages.
+- **Disclosed once**, on the first command that would send anything.
+- **Opt out** with `GIVEWORK_TELEMETRY=0`, or the cross-tool `DO_NOT_TRACK=1`.
+  Opting out sends nothing at all — not even the config lookup — and writes
+  nothing to disk. `givework status` shows the current state.
+
+`test/cli-telemetry.test.ts` holds each of those to a test.
+
 ## HTTP surface
 
 `Authorization: Bearer <token>` required on every route below.
@@ -510,6 +557,8 @@ A  POST /admin/intake/:id/decompose
 A  POST /admin/intake/:id/publish   { tasks? }   -- defaults to the AI draft
 A  POST /admin/intake/:id/reject
 
+—  GET  /analytics-config.js                             -- public: PostHog config as window globals (the site)
+—  GET  /analytics-config.json                           -- public: the same config as JSON (the CLI)
 —  GET  /transparency                                   -- public: listed orgs + task counts
 —  GET  /requests/:id                                    -- public: plain-language status (id = the share-link token)
 

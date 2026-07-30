@@ -42,6 +42,22 @@ routes = [
 # Worker. `wrangler deploy` does not set secrets; set them out-of-band the first
 # time (locally or via the dashboard), then deploys reuse them.
 #
+# Analytics (plain vars, NOT secrets — see below):
+#   wrangler secret put POSTHOG_PROJECT_TOKEN   # phc_... PostHog project ingest key
+#   wrangler secret put POSTHOG_API_HOST        # e.g. https://us.i.posthog.com
+#
+# The project token is a PUBLIC ingest key: it is served to every browser by
+# GET /analytics-config.js and to every runner by GET /analytics-config.json, so
+# it is not confidential and `wrangler secret put` is only a convenient way to
+# set it — a plain [vars] entry would be equally safe. It is kept out of the repo
+# for deploy-time configurability (and so a fork does not silently report into
+# someone else's PostHog project), not for secrecy.
+#
+# Both are OPTIONAL. With POSTHOG_PROJECT_TOKEN unset the two config routes still
+# answer with an empty token, the site loads no PostHog snippet, the server-side
+# capture is a no-op, and the CLI sends nothing. Analytics off is a supported
+# state, not a broken deploy.
+
 # Optional tuning (plain var, not a secret):
 #   GITHUB_AUTOVERIFY_MIN_AGE_DAYS  # min GitHub account age (days) to auto-verify a
 #                                   # self-serve dev for sensitive work. Default 30.

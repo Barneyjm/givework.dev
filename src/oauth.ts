@@ -4,7 +4,7 @@ import { signDevToken } from './auth.js';
 import { withTransaction } from './db.js';
 import { recordEvent } from './funnel.js';
 import { OpError } from './operations.js';
-import { captureFunnelEvent } from './posthog.js';
+import { captureFunnelEvent, hashDevId } from './posthog.js';
 
 // Self-serve developer sign-in via GitHub OAuth (web flow). Two public routes:
 //   GET /auth/github/login    -> redirect to GitHub's consent screen
@@ -201,6 +201,9 @@ export async function upsertDev(
     );
     return { id: inserted.rows[0].id, created: inserted.rows[0].created };
   });
+  // Only the durable funnel row is written here. The PostHog mirror is fired by
+  // the callback route instead, where there is a request context to park it on
+  // (see captureFunnelEvent) — sign-in should not wait on a third-party POST.
   if (result.created) await recordEvent(result.id, 'dev_created', { via: 'github_oauth' });
   return result;
 }
@@ -261,11 +264,17 @@ oauthRoutes.get('/github/callback', async (c) => {
     const accessToken = await exchangeCode(code, cfg);
     const user = await fetchGitHubUser(accessToken);
     // GitHub identity IS the verification (gated by a light bar) — no manual step.
-    const { id: devId, created } = await upsertDev(user, shouldAutoVerify(user));
+    const autoVerified = shouldAutoVerify(user);
+    const { id: devId, created } = await upsertDev(user, autoVerified);
     // Analytics mirror of the funnel's dev_created (a genuinely new row only, like
     // recordEvent in upsertDev) — fire-and-forget, no PII: the distinct id is a
     // hash of the dev id, never the GitHub identity. See src/posthog.ts.
-    if (created) captureFunnelEvent(c, 'dev_created', devId, { via: 'github_oauth' });
+    if (created) {
+      captureFunnelEvent(c, 'dev_created', devId, {
+        via: 'github_oauth',
+        auto_verified: autoVerified,
+      });
+    }
     const token = await signDevToken(devId);
 
     // CLI mode: hand the token to the local `givework login` server over loopback.
@@ -279,7 +288,10 @@ oauthRoutes.get('/github/callback', async (c) => {
     }
 
     const apiOrigin = new URL(c.req.url).origin;
-    return c.html(tokenPage(user.login, token, apiOrigin));
+    // The browser identify() uses the same truncated SHA-256 of the dev id as
+    // every server-side and CLI capture, so all three surfaces resolve to one
+    // PostHog person without the raw dev id ever leaving our infrastructure.
+    return c.html(tokenPage(user.login, token, apiOrigin, await hashDevId(devId)));
   } catch (err) {
     // Render the HTML error page for ALL failures (a raw JSON 500 from the global
     // handler is a poor browser experience). OpErrors carry a safe, specific
@@ -336,12 +348,26 @@ function footer(): string {
 
 /** Success page: shows the dev token and copy-paste runner setup, wrapped in the
  * site chrome with clear navigation back into Givework. */
-function tokenPage(handle: string, token: string, apiOrigin: string): string {
+function tokenPage(handle: string, token: string, apiOrigin: string, hashedDevId: string): string {
+  const phToken = process.env.POSTHOG_PROJECT_TOKEN ?? '';
+  // identify() gets the HASHED dev id (see the callback route) — the same
+  // distinct id the server-side mirror uses — and never the GitHub email.
+  const phScript = phToken
+    ? `<script src="${escapeHtml(apiOrigin)}/analytics-config.js"></script>
+<script src="${escapeHtml(apiOrigin)}/posthog-init.js"></script>
+<script>
+(function () {
+  if (!window.posthog) return;
+  posthog.identify(${JSON.stringify(hashedDevId)});
+})();
+</script>`
+    : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Givework — agent connected</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E">
 <style>${CHROME_CSS}</style></head><body>
+${phScript}
 ${header()}
 <main>
 <h1>Welcome, @${escapeHtml(handle)} 👋</h1>

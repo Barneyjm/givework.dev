@@ -166,6 +166,42 @@ app.get('/version', (c) => {
   });
 });
 
+// PostHog client config, served to both client surfaces from the same env vars
+// so the project token never appears in committed code. It is a PUBLIC ingest
+// key (every browser on the site receives it), not a secret — the reason it
+// lives in the environment is deploy-time configurability, not confidentiality.
+//
+// With POSTHOG_PROJECT_TOKEN unset both routes still answer, with an empty
+// token, and every consumer treats that as "analytics off". An unconfigured
+// deploy is a no-op, never a broken page or a failing CLI.
+function analyticsConfig(): { token: string; host: string } {
+  return {
+    token: process.env.POSTHOG_PROJECT_TOKEN ?? '',
+    host: process.env.POSTHOG_API_HOST ?? 'https://us.i.posthog.com',
+  };
+}
+
+// Browser form: sets the two window globals that site/posthog-init.js reads.
+app.get('/analytics-config.js', (_c) => {
+  const { token, host } = analyticsConfig();
+  const body = `window.__POSTHOG_TOKEN__=${JSON.stringify(token)};window.__POSTHOG_HOST__=${JSON.stringify(host)};`;
+  return new Response(body, {
+    headers: {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+    },
+  });
+});
+
+// CLI form: the runner cannot be built with the token baked in (an `npx
+// github:…` install compiles from source on the volunteer's own machine, where
+// no token exists), so it asks the control plane for it and caches the answer.
+// See src/cli/telemetry.ts.
+app.get('/analytics-config.json', (c) => {
+  c.header('cache-control', 'public, max-age=300');
+  return c.json(analyticsConfig());
+});
+
 // Liveness/readiness probe — public, unauthenticated. A nice landing for the API
 // host root (api.givework.dev/health) and what uptime checks / load balancers
 // hit. Pings the database so a 200 means "control plane can actually serve", not

@@ -16,6 +16,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
 
+<!-- Analytics: config (env-provided token) then the shared PostHog init + CTA tracking. -->
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
+
 <link rel="stylesheet" href="/base.css" />
 <link rel="stylesheet" href="/persona.css" />
 <style>
@@ -332,7 +336,10 @@
   // this JSON request (content negotiation shares the URL).
   fetch('/conjectures/' + encodeURIComponent(slug), { headers: { accept: 'application/json' }, cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(render)
+    .then(function (d) {
+      render(d);
+      if (window.posthog) posthog.capture('conjecture_viewed', { slug: slug, name: d.name, status: d.status });
+    })
     .catch(function (e) {
       page.innerHTML = String(e.message) === '404'
         ? '<p class="board-msg">No conjecture called <span class="mono">' + esc(slug) + '</span>. <a href="/conjectures">Back to the board →</a></p>'

@@ -14,6 +14,7 @@ import {
 } from './commands.js';
 import { CONFIG_PATH } from './config.js';
 import { login } from './login.js';
+import { captureCliEvent, errorCode, flushTelemetry } from './telemetry.js';
 
 // The `givework` CLI entrypoint. A flat arg router — argv[2] is the command, the
 // rest is passed to the handler. Kept dependency-light (no commander/yargs) so the
@@ -68,6 +69,8 @@ Admin (needs an admin token — see 'admin login'):
   admin target rm-id <id> <identifierId>     remove an identifier
 
 Config: ${CONFIG_PATH}  (env overrides: GIVEWORK_API_URL, GIVEWORK_TOKEN, GIVEWORK_ADMIN_TOKEN)
+Usage stats: anonymous command name / success / duration only, to find where setup
+breaks. No arguments, paths, or task content. Turn off with GIVEWORK_TELEMETRY=0.
 Tip: 'start --watch' uses your own claude -p by default; set EXECUTOR to override.`;
 
 async function main(argv: string[]): Promise<void> {
@@ -110,11 +113,65 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-main(process.argv.slice(2)).catch((err) => {
-  if (err instanceof ApiError) {
-    console.error(`Error (${err.code}): ${err.message}`);
-  } else {
-    console.error(err?.message ?? err);
-  }
-  process.exit(1);
-});
+// One capture site for the whole CLI: the command that ran, whether it worked,
+// and how long it took. Wrapping main() rather than sprinkling calls through
+// commands.ts keeps the payload auditable in one place — and guarantees the
+// failure path is instrumented too, which is the half the control plane can
+// never see (a volunteer whose `claude -p` is missing never reaches the API).
+//
+// `command` is the bare verb from argv, matched against the known set, so an
+// unrecognised command reports as 'unknown' and never leaks a typo'd argument.
+const KNOWN_COMMANDS = new Set([
+  'start',
+  'onboard',
+  'login',
+  'whoami',
+  'budget',
+  'tasks',
+  'stats',
+  'history',
+  'run',
+  'version',
+  'status',
+  'admin',
+  'help',
+]);
+
+function commandLabel(cmd: string | undefined): string {
+  if (cmd === undefined || cmd === '-h' || cmd === '--help') return 'help';
+  return KNOWN_COMMANDS.has(cmd) ? cmd : 'unknown';
+}
+
+const argv = process.argv.slice(2);
+const label = commandLabel(argv[0]);
+const startedAt = Date.now();
+
+main(argv)
+  .then(async () => {
+    captureCliEvent('cli_command_run', {
+      command: label,
+      ok: true,
+      duration_ms: Date.now() - startedAt,
+    });
+    await flushTelemetry();
+  })
+  .catch(async (err) => {
+    captureCliEvent('cli_command_run', {
+      command: label,
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      // An ApiError's `code` is our own machine-readable OpError code, safe to
+      // send. Anything else degrades to a generic code — never the message,
+      // which can contain a path or a task's contents.
+      error_code: err instanceof ApiError ? err.code : errorCode(err),
+      error_status: err instanceof ApiError ? err.status : undefined,
+    });
+    await flushTelemetry();
+
+    if (err instanceof ApiError) {
+      console.error(`Error (${err.code}): ${err.message}`);
+    } else {
+      console.error(err?.message ?? err);
+    }
+    process.exit(1);
+  });
