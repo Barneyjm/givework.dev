@@ -50,11 +50,12 @@ describe('flow smoke (real HTTP server, scripted results)', () => {
       'S4 flow-back',
       'S5 publish',
       'S6 subtask checkout',
+      'S8 code-to-reviewer',
     ]);
     expect(report.publishedTaskIds).toHaveLength(correctedProposal(2).subtasks.length);
-    // The saga booked real (scripted) cents: 7 + 8 + 9 proposals, 5 + 5 reviews,
-    // 0 for the flow-back record.
-    expect(report.bookedCents).toBe(34);
+    // The saga booked real (scripted) cents: 7 + 8 + 9 + 6 proposals,
+    // 5 + 5 + 5 reviews, 0 for the flow-back record.
+    expect(report.bookedCents).toBe(45);
   });
 
   it('loss-proofing: a dropped submit spools, survives, and replays to exactly one booking', async () => {

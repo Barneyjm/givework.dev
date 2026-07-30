@@ -462,7 +462,11 @@ export async function runLoop(
       // Code contributions ride the volunteer's own git+gh identity to the
       // public contrib repo; the PR URL becomes the contribution's artifact.
       // Publish failure is non-fatal — the code is still inline in `result`,
-      // so the submit below never loses work.
+      // and the server persists that inline copy durably: on a decomposition
+      // submit it lands in the contribution's artifact (and travels into the
+      // minted review task's spec — see reviewTaskSpec in operations.ts); on a
+      // terminal submit the whole result lands on the task row. Either way the
+      // submit below never loses work, GitHub up or down.
       let artifactUri = exec.artifact_uri;
       let summary = exec.summary;
       const code = extractCodeContribution(exec.result);

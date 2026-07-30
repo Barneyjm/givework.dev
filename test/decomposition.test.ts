@@ -584,3 +584,170 @@ describe('decomposition proposals', () => {
     expect(co.max_cost_cents).toBe(100);
   });
 });
+
+// The v0.3.8 incident: a proposer shipped its simulation program as a
+// code_contribution beside the decomposition; the runner published the PR and
+// set artifact_uri on the CONTRIBUTION — but the minted review spec carried
+// only the decomposition JSON, so the reviewer rejected the proposal for
+// "missing" code that actually shipped. And when the PR publish failed, the
+// inline code survived nowhere server-side at all. Code must travel to the
+// reviewer and persist on the contribution row, GitHub up or down.
+describe('code shipped with a decomposition', () => {
+  beforeEach(resetDb);
+
+  const PR_URL = 'https://github.com/Barneyjm/givework-contrib/pull/77';
+  const CODE = {
+    title: 'Goldbach sweep harness',
+    description: 'Sieve + verify over a given range.',
+    files: [
+      { path: 'sweeps/goldbach.py', content: 'def sweep(lo, hi):\n    return "sieve"\n' },
+      { path: 'sweeps/README.md', content: '# harness\n' },
+    ],
+  };
+
+  /** Submit a valid decomposition whose result also carries a code_contribution. */
+  async function proposeWithCode(opts: { artifactUri?: string; code?: unknown } = {}) {
+    const proposer = await createDev('proposer');
+    const target = await createTarget('Erdos problem');
+    const parent = await createTask(target, { est: 50, max: 200, title: 'Sweep the whole range' });
+    await setBudget(proposer, 1000);
+    await checkoutTask(proposer, parent);
+    const res = await submitResult(
+      proposer,
+      parent,
+      { decomposition: proposalOf(2), code_contribution: opts.code ?? CODE },
+      40,
+      { tokens: 1 },
+      {
+        outcome: 'decomposition',
+        summary: 'split + shipped the program',
+        ...(opts.artifactUri !== undefined ? { artifactUri: opts.artifactUri } : {}),
+      },
+    );
+    return { proposer, target, parent, res };
+  }
+
+  async function reviewSpecFor(contributionId: number) {
+    const [review] = await reviewTaskFor(contributionId);
+    return review.spec as Record<string, any>;
+  }
+
+  it('mint-time review spec carries the PR URL and the embedded file listing', async () => {
+    const { res } = await proposeWithCode({ artifactUri: PR_URL });
+    const spec = await reviewSpecFor(res.contribution_id);
+
+    // Structured fields the pg-free executor reads.
+    expect(spec.code_published_at).toBe(PR_URL);
+    expect(spec.code_files).toEqual([
+      { path: 'sweeps/goldbach.py', bytes: Buffer.byteLength(CODE.files[0].content) },
+      { path: 'sweeps/README.md', bytes: Buffer.byteLength(CODE.files[1].content) },
+    ]);
+
+    // The prompt shows the reviewer the code itself, labeled with the PR URL.
+    expect(spec.prompt).toContain('THE PROPOSAL SHIPS CODE');
+    expect(spec.prompt).toContain(`code published at: ${PR_URL}`);
+    expect(spec.prompt).toContain('Code contribution: "Goldbach sweep harness"');
+    expect(spec.prompt).toContain('sweeps/goldbach.py');
+    expect(spec.prompt).toContain('def sweep(lo, hi)');
+    expect(spec.prompt).toContain('# harness');
+    // The decomposition JSON is still there — the code rides along, not instead.
+    expect(spec.prompt).toContain('The full proposal:');
+  });
+
+  it('PR publish failure: the inline code still persists server-side and reaches the review spec', async () => {
+    // No artifactUri — exactly what the runner submits after "code PR failed …
+    // submitting with code inline only".
+    const { res } = await proposeWithCode();
+
+    // Durable on the contribution row, so successors/reviewers survive GitHub being down.
+    const { rows } = await pool.query(`SELECT * FROM contributions WHERE id = $1`, [
+      res.contribution_id,
+    ]);
+    expect(rows[0].artifact.decomposition.subtasks).toHaveLength(2);
+    expect(rows[0].artifact.code_contribution.title).toBe(CODE.title);
+    expect(rows[0].artifact.code_contribution.files).toEqual(CODE.files);
+
+    // The review spec embeds the listing and says the inline copy is authoritative.
+    const spec = await reviewSpecFor(res.contribution_id);
+    expect(spec.code_published_at).toBeUndefined();
+    expect(spec.prompt).toContain('pull-request publish did not complete');
+    expect(spec.prompt).toContain('def sweep(lo, hi)');
+  });
+
+  it('a salvaged (invalid) proposal keeps its code_contribution beside the errors', async () => {
+    const proposer = await createDev('proposer');
+    const target = await createTarget('Erdos problem');
+    const parent = await createTask(target, { est: 50, max: 200 });
+    await setBudget(proposer, 1000);
+    await checkoutTask(proposer, parent);
+    const res = await submitResult(
+      proposer,
+      parent,
+      // max 999 breaks the 2x-parent (400¢) ceiling → salvage, not vaporize.
+      { decomposition: proposalOf(2, 999), code_contribution: CODE },
+      40,
+      null,
+      { outcome: 'decomposition' },
+    );
+    expect(res.salvaged_decomposition).toBeDefined();
+    const { rows } = await pool.query(`SELECT * FROM contributions WHERE id = $1`, [
+      res.contribution_id,
+    ]);
+    expect(rows[0].artifact.validation_errors.length).toBeGreaterThan(0);
+    expect(rows[0].artifact.code_contribution.files).toEqual(CODE.files);
+  });
+
+  it('oversized files truncate per-file and per-spec, with explicit notes', async () => {
+    // f1 breaks the 16KB per-file cap; f1(16K kept) + f2 + f3 exhaust the 48KB
+    // total cap, so f4 embeds as path+size only.
+    const big = (name: string, fill: string, bytes: number) => ({
+      path: `sweeps/${name}`,
+      content: fill.repeat(bytes),
+    });
+    const code = {
+      title: 'Bulk harness',
+      files: [
+        big('f1.py', 'a', 20 * 1024),
+        big('f2.py', 'b', 16 * 1024),
+        big('f3.py', 'c', 16 * 1024),
+        big('f4.py', 'd', 100),
+      ],
+    };
+    const { res } = await proposeWithCode({ code, artifactUri: PR_URL });
+    const spec = await reviewSpecFor(res.contribution_id);
+
+    expect(spec.prompt).toContain(
+      `[file truncated — showing the first ${16 * 1024} of ${20 * 1024} bytes]`,
+    );
+    expect(spec.prompt).toContain(`--- sweeps/f4.py (100 bytes) — content omitted`);
+    expect(spec.prompt).not.toContain('d'.repeat(100));
+    // Every file is still LISTED with its true size, even when content is cut.
+    expect(spec.code_files).toEqual([
+      { path: 'sweeps/f1.py', bytes: 20 * 1024 },
+      { path: 'sweeps/f2.py', bytes: 16 * 1024 },
+      { path: 'sweeps/f3.py', bytes: 16 * 1024 },
+      { path: 'sweeps/f4.py', bytes: 100 },
+    ]);
+  });
+
+  it('legacy proposals (no code) mint byte-identical review specs — no code fields, no code prose', async () => {
+    const { res } = await proposeDecomposition();
+    const spec = await reviewSpecFor(res.contribution_id);
+    expect(spec.code_published_at).toBeUndefined();
+    expect(spec.code_files).toBeUndefined();
+    expect(spec.prompt).not.toContain('THE PROPOSAL SHIPS CODE');
+    const { rows } = await pool.query(`SELECT * FROM contributions WHERE id = $1`, [
+      res.contribution_id,
+    ]);
+    expect(rows[0].artifact.code_contribution).toBeUndefined();
+  });
+
+  it('a malformed code_contribution (no usable files) is ignored, not embedded', async () => {
+    const { res } = await proposeWithCode({
+      code: { title: 'no files', files: [{ path: 42, content: null }] },
+    });
+    const spec = await reviewSpecFor(res.contribution_id);
+    expect(spec.code_files).toBeUndefined();
+    expect(spec.prompt).not.toContain('THE PROPOSAL SHIPS CODE');
+  });
+});

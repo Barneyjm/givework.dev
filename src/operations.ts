@@ -956,12 +956,108 @@ function boundedStateUpdate(proposed: unknown): { state: unknown; truncated: boo
   };
 }
 
+/** Per-file cap on code embedded into a review task's prompt. */
+const REVIEW_CODE_FILE_EMBED_BYTES = 16 * 1024;
+/** Total embedded-code cap per review spec — the spec rides every checkout of the review task. */
+const REVIEW_CODE_TOTAL_EMBED_BYTES = 48 * 1024;
+
+/** The loose shape of a `code_contribution` riding a submitted result. */
+interface SubmittedCode {
+  title: string;
+  description?: string;
+  files: { path: string; content: string }[];
+}
+
+/**
+ * Pull the code_contribution off a submitted result, LENIENTLY: the strict
+ * extractor in src/code-contrib.ts is the PUBLISH gate (it decides what may
+ * become a PR); this one only decides what the reviewer and successors get to
+ * SEE, and a shape the publisher rejected is exactly the kind of thing a
+ * reviewer should still see. Files without both a string path and string
+ * content are dropped; no files at all means no code shipped.
+ */
+function extractSubmittedCode(result: unknown): SubmittedCode | null {
+  const cc = (result as { code_contribution?: unknown } | null | undefined)?.code_contribution;
+  if (!cc || typeof cc !== 'object') return null;
+  const c = cc as { title?: unknown; description?: unknown; files?: unknown };
+  const files = Array.isArray(c.files)
+    ? c.files.filter(
+        (f): f is { path: string; content: string } =>
+          f != null &&
+          typeof f === 'object' &&
+          typeof (f as { path?: unknown }).path === 'string' &&
+          typeof (f as { content?: unknown }).content === 'string',
+      )
+    : [];
+  if (files.length === 0) return null;
+  return {
+    title:
+      typeof c.title === 'string' && c.title.trim().length > 0
+        ? c.title.trim().slice(0, 120)
+        : '(untitled code contribution)',
+    ...(typeof c.description === 'string' ? { description: c.description.slice(0, 4000) } : {}),
+    files,
+  };
+}
+
+/**
+ * Render the code that shipped WITH a decomposition proposal as a section of
+ * the review task's prompt — title, every file's path and true byte size, and
+ * file contents under a per-file cap and a total cap (truncation is explicit,
+ * never silent). Production incident this closes: a proposer shipped its
+ * simulation code as a code_contribution, the runner published the PR and set
+ * artifact_uri on the CONTRIBUTION — but the minted review spec carried only
+ * the decomposition JSON, so the reviewer rejected the proposal because "the
+ * actual proposal contains no code_contribution key — the simulation code is
+ * absent". The code must travel to the one agent whose whole job is judging it.
+ */
+function codeListingSection(code: SubmittedCode, codeArtifactUri: string | null): string {
+  const parts: string[] = [
+    `THE PROPOSAL SHIPS CODE — the same submit that carried this decomposition also delivered ` +
+      `a code contribution` +
+      (codeArtifactUri
+        ? `; code published at: ${codeArtifactUri}`
+        : ` (its pull-request publish did not complete, so the inline copy below is authoritative)`) +
+      `. Judge the decomposition INCLUDING this code — never reject the proposal as "missing" ` +
+      `code that is listed here.\n` +
+      `Code contribution: "${code.title}"` +
+      (code.description ? ` — ${code.description}` : '') +
+      `\nFiles (${code.files.length}):`,
+  ];
+  let budget = REVIEW_CODE_TOTAL_EMBED_BYTES;
+  for (const f of code.files) {
+    const size = Buffer.byteLength(f.content, 'utf8');
+    if (budget <= 0) {
+      parts.push(
+        `--- ${f.path} (${size} bytes) — content omitted: the ${REVIEW_CODE_TOTAL_EMBED_BYTES}-byte ` +
+          `total embed cap is spent; the full file is in the contribution's code_contribution artifact ---`,
+      );
+      continue;
+    }
+    const cap = Math.min(REVIEW_CODE_FILE_EMBED_BYTES, budget);
+    let content = f.content;
+    let note = '';
+    if (size > cap) {
+      content = Buffer.from(f.content, 'utf8').subarray(0, cap).toString('utf8');
+      note = `\n[file truncated — showing the first ${cap} of ${size} bytes]`;
+    }
+    budget -= Math.min(size, cap);
+    parts.push(`--- ${f.path} (${size} bytes) ---\n${content}${note}`);
+  }
+  return parts.join('\n');
+}
+
 /**
  * The spec of the auto-minted peer-review task. spec.review_of is the proposal
  * contribution's id — it is both the pointer the publish step follows and the
  * marker that makes this task itself non-decomposable (no recursion bombs:
  * submitResult rejects a 'decomposition' outcome on any task carrying
  * review_of).
+ *
+ * When the proposing submit ALSO shipped code (a code_contribution in the
+ * result, PR-published or not), the spec carries it to the reviewer:
+ * `code_published_at` (the sibling contribution's artifact_uri) plus a full
+ * listing embedded in the prompt — see codeListingSection for the incident.
  */
 function reviewTaskSpec(
   contributionId: number,
@@ -969,8 +1065,11 @@ function reviewTaskSpec(
   proposal: DecompositionProposal,
   depth: number,
   reviewedMaxCostCents: number,
+  code: SubmittedCode | null = null,
+  codeArtifactUri: string | null = null,
 ) {
   const chunkCount = proposal.subtasks.filter((s) => s.code).length;
+  const codeSection = code ? codeListingSection(code, codeArtifactUri) : null;
   return {
     review_of: contributionId,
     // The REVIEWED task's cap, baked in at mint time so the executor can state
@@ -980,6 +1079,18 @@ function reviewTaskSpec(
     // reviewers rejected perfectly legal subtask prices as violations.
     reviewed_max_cost_cents: reviewedMaxCostCents,
     deliverable: 'decomposition_review',
+    // The sibling contribution's published code, surfaced structurally so the
+    // pg-free executor can tell the reviewer code accompanies the proposal
+    // without re-parsing the prompt.
+    ...(codeArtifactUri ? { code_published_at: codeArtifactUri } : {}),
+    ...(code
+      ? {
+          code_files: code.files.map((f) => ({
+            path: f.path,
+            bytes: Buffer.byteLength(f.content, 'utf8'),
+          })),
+        }
+      : {}),
     prompt:
       `Another volunteer's agent judged the task "${parentTitle}" too big for its budget and ` +
       `proposed splitting it into ${proposal.subtasks.length} subtask(s)` +
@@ -991,6 +1102,7 @@ function reviewTaskSpec(
       `. Its stated reason: ` +
       `${proposal.reason || '(none given)'}\n\nThe full proposal:\n` +
       `${JSON.stringify(proposal, null, 2)}\n\n` +
+      (codeSection ? `${codeSection}\n\n` : '') +
       `The reviewed task is capped at ${reviewedMaxCostCents}¢; validation allows each proposed ` +
       `subtask's max_cost_cents to be at most ${DECOMPOSITION_CAP_MULTIPLE * reviewedMaxCostCents}¢ ` +
       `(${DECOMPOSITION_CAP_MULTIPLE}x that cap). Judge the proposal's pricing against these ` +
@@ -1475,12 +1587,24 @@ export async function submitResult(
     //    a salvaged invalid one, the artifact preserves the FULL proposal as
     //    submitted plus the structured error list — the channel checkoutTask
     //    hydrates into the next agent's continuation context.
+    //
+    //    Code that shipped WITH a decomposition rides along: without this, the
+    //    proposal path replaced the whole result with {decomposition} and the
+    //    code_contribution survived NOWHERE server-side — so when the runner's
+    //    PR publish failed ("code inline only"), the inline copy evaporated,
+    //    and even when it succeeded the reviewer/successors had no copy to
+    //    read. Bounded like any salvaged proposal (explicitly, never silently).
+    const submittedCode = outcome === 'decomposition' ? extractSubmittedCode(result) : null;
     const contributionArtifact = proposal
-      ? { decomposition: proposal }
+      ? {
+          decomposition: proposal,
+          ...(submittedCode ? { code_contribution: boundedProposal(submittedCode) } : {}),
+        }
       : salvage
         ? {
             proposed_decomposition: boundedProposal(salvage.proposed),
             validation_errors: salvage.errors,
+            ...(submittedCode ? { code_contribution: boundedProposal(submittedCode) } : {}),
           }
         : artifact;
     const bookedSummary = salvage
@@ -1536,6 +1660,12 @@ export async function submitResult(
               // per-subtask ceiling is computed from, baked into the review
               // spec so the pg-free executor can state it.
               upd.rows[0].max_cost_cents,
+              // Code that shipped with the proposal travels TO THE REVIEWER:
+              // the listing embeds in the prompt, and the sibling
+              // contribution's artifact_uri (the runner's published PR, when
+              // the publish succeeded) is labeled in it.
+              submittedCode,
+              opts.artifactUri ?? null,
             ),
           ),
           REVIEW_TASK_EST_CENTS,
