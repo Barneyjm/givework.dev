@@ -48,6 +48,11 @@ process.env.GIVEWORK_PROMPT_LOG = promptLogPath;
 //    instead of touching GitHub.
 process.env.GIVEWORK_OUTBOX_DIR = mkdtempSync(join(tmpdir(), 'givework-flow-outbox-'));
 process.env.GIVEWORK_CONTRIB_REPO ??= 'givework-flow-rig/black-hole-does-not-exist';
+// A proposal run that also authors a code contribution flirts with the 180s
+// default window (observed live: run #2 finished at ~3 min, run #3 timed out).
+// The rig's job is to exercise the flow, not the timeout, so default wider —
+// the timeout-salvage path still gets organic coverage whenever a run is slow.
+process.env.EXECUTOR_TIMEOUT_MS ??= '300000';
 
 const banner = (s: string) => console.log(`\n━━ ${s}`);
 
