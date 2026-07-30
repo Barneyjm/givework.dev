@@ -501,11 +501,13 @@ export class StubExecutor implements Executor {
     console.log(`     … would call Claude here (model ${task.model}) on: "${prompt}"`);
     const actual = Math.round(task.max_cost_cents * 0.8);
     // Echo the continuation section exactly as the production executor would
-    // frame it, so tests can assert the checkout handoff reached the executor.
+    // frame it, so tests can assert the checkout handoff reached the executor
+    // — including the review-task guard: a review task's own cap is never a
+    // decomposition limit.
     const continuation = buildContinuationSection(
       task.target_state,
       task.prior_contributions,
-      task.max_cost_cents,
+      isReviewTask(task.spec) ? undefined : task.max_cost_cents,
     );
     return {
       result: {
@@ -556,6 +558,40 @@ export function decompositionLimitsSection(maxCostCents: number): string {
     `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; only pinned-code sandbox chunks may fan wider, up to ${MAX_DECOMPOSITION_CHUNKS} chunks per proposal, and all chunks must pin the same repo+sha+entrypoint;\n` +
     `- a decomposition-review task can never itself be decomposed.\n` +
     `If the work costs more than the cap allows per chunk, split into more, smaller chunks.`
+  );
+}
+
+/** A task minted as a peer review of a decomposition proposal (spec.review_of). */
+export function isReviewTask(spec: ExecTask['spec'] | undefined): boolean {
+  return spec?.review_of != null;
+}
+
+/**
+ * The cap context for a REVIEW task (spec.review_of set). A reviewer judges
+ * someone else's decomposition, so the numbers that matter are the REVIEWED
+ * task's — its cap and the 2x per-subtask ceiling derived from it — never the
+ * review task's own (tiny) cap. Rendering decompositionLimitsSection from the
+ * review task's cap is exactly the production bug this replaces: a 15¢ review
+ * task told its reviewer the ceiling was 30¢ and legal 80¢ subtasks got
+ * rejected as "violations".
+ *
+ * The reviewed cap is baked into the review task's spec at mint time
+ * (spec.reviewed_max_cost_cents — see reviewTaskSpec in operations.ts), so the
+ * executor stays pg-free. Review tasks minted before that field existed get
+ * NO cap figures at all — an empty string here — because a wrong number in a
+ * reviewer's mouth is worse than none.
+ */
+export function reviewContextSection(spec: ExecTask['spec'] | undefined): string {
+  const reviewedCap = Number(
+    (spec as { reviewed_max_cost_cents?: unknown } | undefined)?.reviewed_max_cost_cents,
+  );
+  if (!Number.isInteger(reviewedCap) || reviewedCap <= 0) return '';
+  const perSubtaskCap = DECOMPOSITION_CAP_MULTIPLE * reviewedCap;
+  return (
+    `REVIEW CONTEXT — the caps that govern the proposal under review (NOT this review task's own budget):\n` +
+    `- you are reviewing a decomposition of a task capped at ${reviewedCap}¢; validation allows each proposed subtask's max_cost_cents to be at most ${perSubtaskCap}¢ (${DECOMPOSITION_CAP_MULTIPLE}x that ${reviewedCap}¢ cap); every cost is a positive integer in cents, and est_cost_cents must be <= max_cost_cents;\n` +
+    `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; up to ${MAX_DECOMPOSITION_CHUNKS} pinned-code sandbox chunks.\n` +
+    `Judge the proposal's pricing against THESE numbers. This review task's own cost cap does not constrain the proposal's subtasks in any way.`
   );
 }
 
@@ -1099,19 +1135,29 @@ export class ClaudeCliExecutor implements Executor {
         : DEFAULT_MODEL;
     const timeoutMs = this.timeoutFor(task);
     const budgetMinutes = Math.max(1, Math.round(timeoutMs / 60_000));
+    // A review task judges ANOTHER task's decomposition — its own cap must
+    // never be presented as a decomposition limit (see reviewContextSection).
+    const review = isReviewTask(task.spec);
     // The accumulated frontier from checkout. Without this the handoff dies at
     // the runner's doorstep and every attempt restarts from the static spec.
+    // A review task's cap is withheld: any correction caps in ITS history
+    // belong to the reviewed task, not to it.
     const continuation = buildContinuationSection(
       task.target_state,
       task.prior_contributions,
-      task.max_cost_cents,
+      review ? undefined : task.max_cost_cents,
     );
+    // The concrete numbers for the rules above — computed, never symbolic, so
+    // an agent can't price a subtask over the cap and only find out by wasting
+    // the run on a rejected proposal. For a review task the numbers are the
+    // REVIEWED task's (baked into its spec at mint time); a legacy review task
+    // without them gets no cap figures at all rather than wrong ones.
+    const capsSection = review
+      ? reviewContextSection(task.spec)
+      : decompositionLimitsSection(task.max_cost_cents);
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
-      // The concrete numbers for the rules above — computed, never symbolic,
-      // so an agent can't price a subtask over the cap and only find out by
-      // wasting the run on a rejected proposal.
-      `${decompositionLimitsSection(task.max_cost_cents)}\n\n` +
+      (capsSection ? `${capsSection}\n\n` : '') +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
       (task.spec?.output_schema
         ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`

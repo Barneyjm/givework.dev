@@ -21,6 +21,7 @@ import {
   type ExecTask,
   ExecTimeoutError,
   getExecutor,
+  isReviewTask,
   MAX_DECOMPOSITION_CHUNKS,
   MAX_DECOMPOSITION_SUBTASKS,
   MIN_JSON_SCHEMA_CLI_VERSION,
@@ -29,6 +30,7 @@ import {
   parseStreamCapture,
   RESULT_JSON_SCHEMA,
   resultSchemaFor,
+  reviewContextSection,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
@@ -1164,6 +1166,126 @@ describe('decomposition limits — computed numbers reach the prompt', () => {
     };
     await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 250 });
     expect(seenInput).toContain("at most 500 (2x this task's 250¢ cap)");
+  });
+});
+
+// The production mis-review pattern (observed on v0.3.5): a 15¢ REVIEW task
+// rendered DECOMPOSITION LIMITS from its OWN cap ("at most 30¢") while judging
+// a proposal whose parent was capped at 40¢ (legal per-subtask ceiling 80¢) —
+// so perfectly legal 80¢ subtasks were rejected as "hard structural
+// violations", and the bogus figure then hydrated into the proposer's
+// continuation context, baiting systematic under-pricing. A review task's
+// prompt must carry the REVIEWED task's numbers (baked into its spec at mint
+// time) or, for legacy review tasks minted without them, no cap figures at all.
+describe('review tasks — cap context comes from the reviewed task, never their own', () => {
+  const capture = () => {
+    const box = { input: '' };
+    const run = async (_a: string[], input: string) => {
+      box.input = input;
+      return JSON.stringify({ result: '{"approve":true,"reasons":"ok"}', total_cost_usd: 0 });
+    };
+    return { box, run };
+  };
+  const reviewTask: ExecTask = {
+    ...task,
+    max_cost_cents: 15, // the incident's review-task cap — 2x would claim a 30¢ ceiling
+    spec: {
+      prompt: 'review this proposal',
+      review_of: 41,
+      deliverable: 'decomposition_review',
+      reviewed_max_cost_cents: 40, // the incident's parent cap — real ceiling is 80¢
+    },
+  };
+
+  it("the prompt states the REVIEWED task's numbers, not the review task's own", async () => {
+    const { box, run } = capture();
+    await new ClaudeCliExecutor({ run }).execute(reviewTask);
+    expect(box.input).toContain('REVIEW CONTEXT');
+    expect(box.input).toContain('reviewing a decomposition of a task capped at 40¢');
+    expect(box.input).toContain('at most 80¢ (2x that 40¢ cap)');
+    // the own-cap section and its wrong arithmetic must be absent
+    expect(box.input).not.toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(box.input).not.toContain('at most 30');
+    expect(box.input).not.toContain('15¢ cap');
+  });
+
+  it('legacy review task (minted before the cap was baked) renders NO cap figures at all', async () => {
+    const { box, run } = capture();
+    await new ClaudeCliExecutor({ run }).execute({
+      ...reviewTask,
+      spec: { prompt: 'review this proposal', review_of: 41 },
+    });
+    expect(box.input).not.toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(box.input).not.toContain('REVIEW CONTEXT');
+    expect(box.input).not.toContain('max_cost_cents must be at most');
+  });
+
+  it("a review task's continuation never renders correction caps from its own budget", async () => {
+    // The review-of-a-review salvage path books a prior WITH an artifact onto
+    // the review task itself — the artifact-hydration channel that triggers
+    // the correction-caps block in buildContinuationSection.
+    const { box, run } = capture();
+    await new ClaudeCliExecutor({ run }).execute({
+      ...reviewTask,
+      spec: { prompt: 'review this proposal', review_of: 41 },
+      prior_contributions: [
+        {
+          outcome: 'progress',
+          summary: 'salvaged',
+          artifact: { proposed_decomposition: { subtasks: [] }, validation_errors: ['nope'] },
+        },
+      ],
+    });
+    expect(box.input).toContain('CONTINUATION');
+    expect(box.input).not.toContain('DECOMPOSITION LIMITS for THIS task');
+  });
+
+  it('the StubExecutor echo honors the same guard', async () => {
+    const r = await new StubExecutor().execute({
+      ...reviewTask,
+      spec: { prompt: 'review this proposal', review_of: 41 },
+      prior_contributions: [
+        {
+          outcome: 'progress',
+          summary: 'salvaged',
+          artifact: { proposed_decomposition: { subtasks: [] }, validation_errors: ['nope'] },
+        },
+      ],
+    });
+    const echoed = (r.result as { echoed_continuation?: string }).echoed_continuation ?? '';
+    expect(echoed).toContain('CONTINUATION');
+    expect(echoed).not.toContain('DECOMPOSITION LIMITS for THIS task');
+  });
+
+  it('reviewContextSection: computed from the baked cap; anything unusable renders nothing', () => {
+    const s = reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 40 });
+    expect(s).toContain('capped at 40¢');
+    expect(s).toContain('at most 80¢ (2x that 40¢ cap)');
+    expect(s).toContain('est_cost_cents must be <= max_cost_cents');
+    expect(s).toContain('at most 12 model-executed subtasks');
+    expect(s).toContain('up to 64 pinned-code sandbox chunks');
+    // wrong-number-proofing: absent, zero, negative, fractional, or junk → ''
+    expect(reviewContextSection({ review_of: 41 })).toBe('');
+    expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 0 })).toBe('');
+    expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: -5 })).toBe('');
+    expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 12.5 })).toBe('');
+    expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 'forty' })).toBe('');
+    expect(reviewContextSection(undefined)).toBe('');
+  });
+
+  it('isReviewTask keys on spec.review_of presence alone', () => {
+    expect(isReviewTask({ review_of: 41 })).toBe(true);
+    expect(isReviewTask({ review_of: 0 })).toBe(true); // any non-null id counts
+    expect(isReviewTask({ prompt: 'p' })).toBe(false);
+    expect(isReviewTask(undefined)).toBe(false);
+  });
+
+  it('non-review tasks still get their own computed DECOMPOSITION LIMITS (unchanged)', async () => {
+    const { box, run } = capture();
+    await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 80 });
+    expect(box.input).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(box.input).toContain("at most 160 (2x this task's 80¢ cap)");
+    expect(box.input).not.toContain('REVIEW CONTEXT');
   });
 });
 
