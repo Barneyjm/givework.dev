@@ -3,6 +3,11 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_FILE_BYTES as CC_MAX_FILE_BYTES,
+  MAX_FILES as CC_MAX_FILES,
+  extractCodeContribution,
+} from '../src/code-contrib.js';
+import {
   buildContinuationSection,
   ClaudeCliExecutor,
   CONTINUATION_MAX_CHARS,
@@ -949,6 +954,59 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect(seen.input).toContain('no shell, no interpreter, and no sandbox');
     expect(seen.input).toContain('never present imagined program output as computed fact');
     expect(seen.input).toContain('the correct deliverable is a decomposition');
+  });
+});
+
+// code_contribution existed in code (code-contrib.ts → PR to the contrib repo)
+// but the prompt never mentioned it — no agent could use the path, and the
+// two-phase decomposition story had no phase 1. The prompt must document the
+// field with the REAL extraction limits, and the envelope must permit it.
+describe('code_contribution — documented in the prompt, permitted by the envelope', () => {
+  it('the claude -p prompt documents code_contribution with the real extraction limits', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute(task);
+    expect(seenInput).toContain('CODE CONTRIBUTIONS');
+    expect(seenInput).toContain('"code_contribution"');
+    // the numbers are the ones extractCodeContribution actually enforces
+    expect(seenInput).toContain(
+      `at most ${CC_MAX_FILES} files, each at most ${CC_MAX_FILE_BYTES} bytes`,
+    );
+    expect(seenInput).toContain('no ".git" or ".github" segments');
+    // the two-phase decomposition guidance wires phase 1 to the field…
+    expect(seenInput).toContain('emit the program as a "code_contribution"');
+    // …and pins execution to the sandbox, never a model subtask
+    expect(seenInput).toContain('ONLY via code-pinned CHUNK subtasks');
+  });
+
+  it('a code_contribution result passes schema mode and round-trips to the extractor', async () => {
+    const body = {
+      summary: 'wrote the sweep program',
+      code_contribution: {
+        title: 'Goldbach sweep program',
+        description: 'sieve + verify per slice',
+        files: [{ path: 'sweeps/goldbach.py', content: 'print("hi")\n' }],
+      },
+    };
+    const run = async () =>
+      JSON.stringify({ result: '', structured_output: body, total_cost_usd: 0.01 });
+    const r = await new ClaudeCliExecutor({
+      run,
+      probeVersion: async () => '2.1.210 (Claude Code)',
+    }).execute(task);
+    expect(r.result).toEqual(body);
+    // the runner-side extractor accepts exactly what the schema shaped
+    expect(extractCodeContribution(r.result)).toEqual(body.code_contribution);
+
+    // the envelope names the field explicitly, with the file shape…
+    const cc = (RESULT_JSON_SCHEMA.properties as any).code_contribution;
+    expect(cc.required).toEqual(['title', 'files']);
+    expect(cc.properties.files.items.required).toEqual(['path', 'content']);
+    // …while the top level stays permissive (partial results must validate)
+    expect((RESULT_JSON_SCHEMA as any).required).toBeUndefined();
   });
 });
 

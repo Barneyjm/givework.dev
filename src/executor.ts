@@ -2,6 +2,10 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  MAX_FILE_BYTES as MAX_CODE_FILE_BYTES,
+  MAX_FILES as MAX_CODE_FILES,
+} from './code-contrib.js';
 import { extractWorkUnit, WorkUnitExecutor } from './workunit.js';
 
 // Task execution — the actual donated work. The donation is each monthly
@@ -562,6 +566,11 @@ Do the task rigorously and respond with ONLY a single JSON object matching the r
 
 EXECUTION REALITY — you cannot run code. This run has no shell, no interpreter, and no sandbox; the only tool you have is writing the PROGRESS.md file described below. Reasoning, analysis, proof work, and mathematics you can and should do directly. But if the deliverable requires EXECUTING code (running a search, a simulation, a numerical sweep), do not pretend to run it and never present imagined program output as computed fact — the correct deliverable is a decomposition (below): one subtask that WRITES a small, reviewable program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then sandboxed chunk subtasks that actually execute it on donated CPU.
 
+CODE CONTRIBUTIONS — when the task's deliverable is code (a search program, a verifier, a tool), add a "code_contribution" key to your JSON object:
+  "code_contribution": {"title": "<short title>", "description": "<what it does and how to check it>",
+    "files": [{"path": "<repo-relative path>", "content": "<full file content>"}]}
+The platform opens a pull request with exactly these files to the public contrib repo; the PR URL becomes your contribution's artifact, and the code also stays inline in your result so nothing is lost. Hard limits: at most ${MAX_CODE_FILES} files, each at most ${MAX_CODE_FILE_BYTES} bytes (~${Math.round(MAX_CODE_FILE_BYTES / 1000)} KB); every path must be a safe repo-relative path (no leading "/", no "..", no ".git" or ".github" segments) — a contribution breaking any of these is dropped. You cannot run this code (see EXECUTION REALITY): say what it should do, never what it "did".
+
 BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap and a bounded time window. If, once you understand the task, it plainly cannot fit its budget or window, do NOT grind at it until the clock kills the run — that burns the donation and records nothing. The CORRECT deliverable for an oversized task is a decomposition proposal. Add a "decomposition" key to your JSON object:
   "decomposition": {
     "reason": "<why this task exceeds its budget, in one or two sentences>",
@@ -571,7 +580,7 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
        "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
     ]
   }
-Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
+Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: phase 1 is ONE subtask that WRITES a small, reviewable search program — and its prompt MUST instruct that agent to emit the program as a "code_contribution" (see CODE CONTRIBUTIONS above; that is how the code lands in the contrib repo, gets human-reviewed, merged, and gains the commit SHA); phase 2 — a later decomposition, once that SHA exists — fans out the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. Never ask a model-path subtask to EXECUTE code: model runs have no shell and no interpreter, so execution happens ONLY via code-pinned CHUNK subtasks on donated CPU. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 /**
  * JSON Schema for the contribution envelope — the contract SYSTEM_PROMPT asks
@@ -604,6 +613,24 @@ export const RESULT_JSON_SCHEMA = {
       description: "Replacement for the target's compacted working set",
     },
     artifact_uri: { type: 'string' },
+    code_contribution: {
+      type: 'object',
+      description:
+        'Deliverable code — the runner opens a PR with these files to the public contrib repo (see CODE CONTRIBUTIONS in the system prompt)',
+      properties: {
+        title: { type: 'string' },
+        description: { type: 'string' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, content: { type: 'string' } },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      required: ['title', 'files'],
+    },
     decomposition: {
       type: 'object',
       description: 'The task-exceeds-budget deliverable (see BUDGET HONESTY in the system prompt)',
