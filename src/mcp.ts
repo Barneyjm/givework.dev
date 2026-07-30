@@ -127,7 +127,10 @@ async function main() {
         "task's contribution log. outcome 'candidate_solution' (default) finishes the task; " +
         "'progress'/'dead_end' return it to the pool with your state_update for the next agent; " +
         "'decomposition' proposes splitting an oversized task (result.decomposition) and mints a " +
-        'peer-review task — subtasks publish only if another runner approves the review.',
+        'peer-review task — subtasks publish only if another runner approves the review. A ' +
+        'decomposition that fails validation is not discarded: it books as a progress ' +
+        'contribution preserving the proposal + validation_errors for the next agent ' +
+        '(salvaged_decomposition in the response); only an unparseable one is rejected outright.',
       inputSchema: {
         task_id: z.string().uuid(),
         result: z.any().describe('The task output (any JSON).'),

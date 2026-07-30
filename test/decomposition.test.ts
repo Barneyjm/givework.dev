@@ -254,43 +254,16 @@ describe('decomposition proposals', () => {
     expect(Number(b.reserved_cents)).toBe(REVIEW_TASK_MAX_CENTS);
   });
 
-  it('rejects oversized / over-cap proposals at submit, before any money is booked', async () => {
+  it('hard-rejects only an UNPARSEABLE proposal (no subtasks to preserve), rolled back whole', async () => {
+    // Near-miss proposals (parseable subtasks that broke a rule — cap breach,
+    // fan-out over the limit, bad cents) are SALVAGED as progress instead of
+    // rejected; see decomposition-salvage.test.ts. The hard-reject line is
+    // crisp: no parseable subtasks at all means nothing worth preserving.
     const dev = await createDev('dev');
     const target = await createTarget();
     const parent = await createTask(target, { est: 50, max: 200 });
     await setBudget(dev, 1000);
     await checkoutTask(dev, parent);
-
-    // 13 subtasks > the hard ceiling of 12
-    await expect(
-      submitResult(
-        dev,
-        parent,
-        { decomposition: proposalOf(MAX_DECOMPOSITION_SUBTASKS + 1) },
-        40,
-        null,
-        { outcome: 'decomposition' },
-      ),
-    ).rejects.toMatchObject({ code: 'bad_decomposition' });
-
-    // per-subtask cap over 2x the parent's 200¢
-    await expect(
-      submitResult(dev, parent, { decomposition: proposalOf(2, 401) }, 40, null, {
-        outcome: 'decomposition',
-      }),
-    ).rejects.toMatchObject({ code: 'bad_decomposition' });
-
-    // non-integer cents are never money
-    await expect(
-      submitResult(
-        dev,
-        parent,
-        { decomposition: { subtasks: [{ ...subtask(0), max_cost_cents: 10.5 }] } },
-        40,
-        null,
-        { outcome: 'decomposition' },
-      ),
-    ).rejects.toMatchObject({ code: 'bad_decomposition' });
 
     // missing proposal entirely
     await expect(
@@ -299,8 +272,28 @@ describe('decomposition proposals', () => {
       }),
     ).rejects.toMatchObject({ code: 'bad_decomposition' });
 
+    // subtasks present but empty
+    await expect(
+      submitResult(dev, parent, { decomposition: { subtasks: [] } }, 40, null, {
+        outcome: 'decomposition',
+      }),
+    ).rejects.toMatchObject({ code: 'bad_decomposition' });
+
+    // subtasks that aren't even objects
+    await expect(
+      submitResult(
+        dev,
+        parent,
+        { decomposition: { subtasks: ['sweep the range', 'then stop'] } },
+        40,
+        null,
+        { outcome: 'decomposition' },
+      ),
+    ).rejects.toMatchObject({ code: 'bad_decomposition' });
+
     // Every rejection rolled back whole: nothing booked, no review task minted,
-    // the task still locked to the dev (who can submit a valid outcome next).
+    // the task still locked to the dev (the RUNNER then releases it — see
+    // run-loop's submit-rejection path).
     expect((await getTaskRow(parent)).status).toBe('locked');
     const b = await getBudgetRow(dev);
     expect(Number(b.spent_cents)).toBe(0);

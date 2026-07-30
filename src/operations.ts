@@ -32,6 +32,8 @@ const CONFLICT = 409;
 const ABSURD_COST_MULTIPLE = 10;
 const MAX_SUMMARY_CHARS = 2000;
 const MAX_STATE_BYTES = 64 * 1024;
+/** Cap on a salvaged-proposal artifact hydrated into a checkout payload. */
+const SALVAGED_ARTIFACT_HYDRATE_MAX_BYTES = 16 * 1024;
 
 /** SQL expression for the current accounting period (first day of this month). */
 const CURRENT_PERIOD = `date_trunc('month', now())::date`;
@@ -366,6 +368,14 @@ export interface ContributionSummary {
   outcome: string;
   summary: string;
   artifact_uri: string | null;
+  /**
+   * Inline artifact, hydrated by checkoutTask ONLY for a salvaged invalid
+   * decomposition (artifact carries `validation_errors`) — the full proposal +
+   * exact errors the next agent needs to resubmit it corrected. Other
+   * contributions' artifacts stay out of the checkout payload: they default to
+   * the whole executor result and would bloat every prompt.
+   */
+  artifact?: unknown;
   cost_cents: number;
   created_at: string;
 }
@@ -504,8 +514,16 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
       `SELECT state FROM targets WHERE id = $1`,
       [claimed.target_id],
     );
+    //    A salvaged invalid decomposition additionally hydrates its inline
+    //    artifact (the full proposal + validation_errors) so the next agent can
+    //    resubmit it corrected; other artifacts stay out of the payload (they
+    //    default to the whole executor result), and a pathologically large one
+    //    is skipped rather than shipped.
     const prior = await client.query<ContributionSummary>(
-      `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at
+      `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at,
+              CASE WHEN artifact ? 'validation_errors'
+                    AND octet_length(artifact::text) <= ${SALVAGED_ARTIFACT_HYDRATE_MAX_BYTES}
+                   THEN artifact END AS artifact
          FROM contributions
         WHERE task_id = $1
         ORDER BY id DESC
@@ -645,13 +663,37 @@ function normalizeChunkCode(raw: unknown, i: number, bad: (msg: string) => never
 }
 
 /**
- * Validate + normalize an agent-submitted decomposition proposal, or throw
- * OpError('bad_decomposition'). Strict where money and volume are concerned
- * (integer cents, per-subtask cap <= 2x the parent's, and the differentiated
- * fan-out caps: <= 12 model subtasks, <= 64 sandbox chunks — each class
- * against its own cap); lenient on the hint fields (an unknown kind/effort/
- * verify_via falls back to a safe default rather than losing an otherwise
- * sound plan).
+ * What checking an agent-submitted decomposition proposal found.
+ *
+ * `parseable` draws the salvage line, crisply: TRUE when `subtasks` is a
+ * non-empty array of objects — there IS a proposal a next agent could correct
+ * and resubmit, even if it broke a rule (cap breach, fan-out over the limit,
+ * malformed chunk code, missing fields). FALSE when there are no parseable
+ * subtasks at all (missing/empty/non-array `subtasks`, or entries that aren't
+ * objects) — nothing worth preserving, and the submit hard-rejects as before.
+ */
+export interface DecompositionValidation {
+  /** The fully-normalized proposal — set iff `errors` is empty. */
+  proposal: DecompositionProposal | null;
+  /**
+   * Every rule the proposal broke (one per failing subtask, plus any fan-out /
+   * same-program violations). Empty iff `proposal` is set.
+   */
+  errors: string[];
+  /** See above: false means hard-reject, true + errors means salvageable. */
+  parseable: boolean;
+}
+
+/**
+ * Validate + normalize an agent-submitted decomposition proposal, collecting
+ * every violation instead of stopping at the first — the errors are preserved
+ * for the NEXT agent when an invalid-but-parseable proposal is salvaged as a
+ * progress contribution (see submitResult). Strict where money and volume are
+ * concerned (integer cents, per-subtask cap <= 2x the parent's, and the
+ * differentiated fan-out caps: <= 12 model subtasks, <= 64 sandbox chunks —
+ * each class against its own cap); lenient on the hint fields (an unknown
+ * kind/effort/verify_via falls back to a safe default rather than losing an
+ * otherwise sound plan).
  *
  * The chunk marker is crisp: a subtask is a CHUNK iff it carries `code` in the
  * work-unit shape ({repo, 40-hex sha, entrypoint, input?}) — i.e. it names an
@@ -663,69 +705,97 @@ function normalizeChunkCode(raw: unknown, i: number, bad: (msg: string) => never
  * it proposes the code-writing task now and a later decomposition fans out
  * the chunks once the SHA exists.
  */
-export function normalizeDecomposition(
+export function validateDecomposition(
   raw: unknown,
   parentMaxCents: number,
-): DecompositionProposal {
-  const bad = (msg: string): never => {
-    throw new OpError(BAD_INPUT, 'bad_decomposition', msg);
-  };
+): DecompositionValidation {
   const r = raw as { reason?: unknown; subtasks?: unknown } | null | undefined;
   const list = r?.subtasks;
   if (!Array.isArray(list) || list.length === 0) {
-    bad('decomposition.subtasks must be a non-empty array');
-  }
-  const capCeiling = parentMaxCents * DECOMPOSITION_CAP_MULTIPLE;
-  const subtasks = (list as any[]).map((s, i) => {
-    const title = typeof s?.title === 'string' ? s.title.trim().slice(0, SUBTASK_TITLE_CHARS) : '';
-    const prompt =
-      typeof s?.prompt === 'string' ? s.prompt.trim().slice(0, SUBTASK_PROMPT_CHARS) : '';
-    if (!title) bad(`subtask ${i}: title is required`);
-    if (!prompt) bad(`subtask ${i}: prompt is required`);
-    const max = s?.max_cost_cents;
-    if (!Number.isInteger(max) || max <= 0) {
-      bad(`subtask ${i}: max_cost_cents must be a positive integer (money is integer cents)`);
-    }
-    if (max > capCeiling) {
-      bad(
-        `subtask ${i}: max_cost_cents ${max} exceeds ${DECOMPOSITION_CAP_MULTIPLE}x the parent task's cap (${capCeiling})`,
-      );
-    }
-    const est = s?.est_cost_cents === undefined ? max : s.est_cost_cents;
-    if (!Number.isInteger(est) || est <= 0 || est > max) {
-      bad(`subtask ${i}: est_cost_cents must be a positive integer <= max_cost_cents`);
-    }
-    const code = s?.code != null ? normalizeChunkCode(s.code, i, bad) : undefined;
     return {
-      title,
-      prompt,
-      // A pinned-program chunk is computational/cheap by nature; valid hints still win.
-      kind: TASK_KINDS.includes(s?.kind)
-        ? (s.kind as string)
-        : code
-          ? 'computational'
-          : 'exploration',
-      effort: TASK_EFFORTS.includes(s?.effort) ? (s.effort as string) : code ? 'low' : 'medium',
-      verify_via: VERIFY_METHODS.includes(s?.verify_via)
-        ? (s.verify_via as string)
-        : 'human_review',
-      est_cost_cents: est as number,
-      max_cost_cents: max as number,
-      ...(code ? { code } : {}),
+      proposal: null,
+      parseable: false,
+      errors: ['decomposition.subtasks must be a non-empty array'],
     };
+  }
+  const nonObject = list.findIndex((s) => s == null || typeof s !== 'object' || Array.isArray(s));
+  if (nonObject !== -1) {
+    return {
+      proposal: null,
+      parseable: false,
+      errors: [`subtask ${nonObject}: must be an object`],
+    };
+  }
+
+  const errors: string[] = [];
+  const bad = (msg: string): never => {
+    throw new OpError(BAD_INPUT, 'bad_decomposition', msg);
+  };
+  const capCeiling = parentMaxCents * DECOMPOSITION_CAP_MULTIPLE;
+  // Per-subtask: the first broken rule is recorded and validation moves on to
+  // the next subtask, so one bad slice doesn't hide the others' problems.
+  const subtasks: ProposedSubtask[] = [];
+  (list as any[]).forEach((s, i) => {
+    try {
+      const title =
+        typeof s?.title === 'string' ? s.title.trim().slice(0, SUBTASK_TITLE_CHARS) : '';
+      const prompt =
+        typeof s?.prompt === 'string' ? s.prompt.trim().slice(0, SUBTASK_PROMPT_CHARS) : '';
+      if (!title) bad(`subtask ${i}: title is required`);
+      if (!prompt) bad(`subtask ${i}: prompt is required`);
+      const max = s?.max_cost_cents;
+      if (!Number.isInteger(max) || max <= 0) {
+        bad(`subtask ${i}: max_cost_cents must be a positive integer (money is integer cents)`);
+      }
+      if (max > capCeiling) {
+        bad(
+          `subtask ${i}: max_cost_cents ${max} exceeds ${DECOMPOSITION_CAP_MULTIPLE}x the parent task's cap (${capCeiling})`,
+        );
+      }
+      const est = s?.est_cost_cents === undefined ? max : s.est_cost_cents;
+      if (!Number.isInteger(est) || est <= 0 || est > max) {
+        bad(`subtask ${i}: est_cost_cents must be a positive integer <= max_cost_cents`);
+      }
+      const code = s?.code != null ? normalizeChunkCode(s.code, i, bad) : undefined;
+      subtasks.push({
+        title,
+        prompt,
+        // A pinned-program chunk is computational/cheap by nature; valid hints still win.
+        kind: TASK_KINDS.includes(s?.kind)
+          ? (s.kind as string)
+          : code
+            ? 'computational'
+            : 'exploration',
+        effort: TASK_EFFORTS.includes(s?.effort) ? (s.effort as string) : code ? 'low' : 'medium',
+        verify_via: VERIFY_METHODS.includes(s?.verify_via)
+          ? (s.verify_via as string)
+          : 'human_review',
+        est_cost_cents: est as number,
+        max_cost_cents: max as number,
+        ...(code ? { code } : {}),
+      });
+    } catch (err) {
+      if (err instanceof OpError && err.code === 'bad_decomposition') {
+        errors.push(err.message);
+      } else {
+        throw err;
+      }
+    }
   });
 
-  // Differentiated fan-out: each class counted against its own cap.
+  // Differentiated fan-out: each class counted against its own cap. Counted
+  // over the subtasks that normalized cleanly — when some already failed, the
+  // per-subtask errors above dominate anyway.
   const chunks = subtasks.filter((s) => s.code);
   const modelCount = subtasks.length - chunks.length;
   if (modelCount > MAX_DECOMPOSITION_SUBTASKS) {
-    bad(
+    errors.push(
       `a proposal may have at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks ` +
         `(got ${modelCount}; only pinned-code sandbox chunks may fan wider)`,
     );
   }
   if (chunks.length > MAX_DECOMPOSITION_CHUNKS) {
-    bad(`a proposal may have at most ${MAX_DECOMPOSITION_CHUNKS} sandbox chunk subtasks`);
+    errors.push(`a proposal may have at most ${MAX_DECOMPOSITION_CHUNKS} sandbox chunk subtasks`);
   }
   // One program, many slices: every chunk must pin the same repo+sha+entrypoint.
   if (chunks.length > 0) {
@@ -737,12 +807,53 @@ export function normalizeDecomposition(
         c.code!.entrypoint !== first.entrypoint,
     );
     if (differs) {
-      bad('all chunk subtasks in a proposal must pin the same repo+sha+entrypoint');
+      errors.push('all chunk subtasks in a proposal must pin the same repo+sha+entrypoint');
     }
   }
 
+  if (errors.length > 0) {
+    return { proposal: null, parseable: true, errors };
+  }
   const reason = typeof r?.reason === 'string' ? r.reason.slice(0, DECOMPOSITION_REASON_CHARS) : '';
-  return { reason, subtasks };
+  return { proposal: { reason, subtasks }, parseable: true, errors: [] };
+}
+
+/**
+ * Strict form of validateDecomposition: the normalized proposal, or throw
+ * OpError('bad_decomposition') on the first violation. Used where an invalid
+ * proposal has no salvage path (the publish step's defense-in-depth re-check).
+ */
+export function normalizeDecomposition(
+  raw: unknown,
+  parentMaxCents: number,
+): DecompositionProposal {
+  const v = validateDecomposition(raw, parentMaxCents);
+  if (!v.proposal) {
+    throw new OpError(BAD_INPUT, 'bad_decomposition', v.errors[0]);
+  }
+  return v.proposal;
+}
+
+/**
+ * Bound a salvaged raw proposal before storing it on the contribution row: an
+ * invalid proposal never went through normalization's per-field caps, so a
+ * pathological payload is clipped — with an explicit marker, never silently —
+ * rather than bloating the contributions table and every later checkout that
+ * hydrates it.
+ */
+function boundedProposal(proposed: unknown): unknown {
+  let json: string;
+  try {
+    json = JSON.stringify(proposed) ?? 'null';
+  } catch {
+    return { truncated: true, note: 'proposal was not JSON-serializable' };
+  }
+  if (Buffer.byteLength(json) <= MAX_STATE_BYTES) return proposed;
+  return {
+    truncated: true,
+    note: `proposal JSON exceeded ${MAX_STATE_BYTES} bytes; prefix preserved`,
+    prefix: json.slice(0, MAX_STATE_BYTES),
+  };
 }
 
 /**
@@ -928,6 +1039,15 @@ export interface SubmitResult {
   /** Set on a 'decomposition' submit: the auto-minted peer-review task. */
   review_task_id?: string;
   /**
+   * Set when a submitted decomposition proposal failed validation but was
+   * SALVAGED as a 'progress' contribution instead of being discarded: the
+   * volunteer's tokens were genuinely spent producing it, so the full proposal
+   * plus these errors is preserved for the next agent to correct and resubmit.
+   * When set, `outcome` is 'progress' (what was actually booked) and no review
+   * task was minted.
+   */
+  salvaged_decomposition?: { validation_errors: string[] };
+  /**
    * Set on a terminal submit of a review task: the subtask ids an approving
    * review published. [] means nothing was published — the review rejected the
    * proposal, or a previous approve already published it (exactly-once).
@@ -1058,12 +1178,23 @@ export async function submitResult(
     const targetId = upd.rows[0].target_id;
     const taskSpec = upd.rows[0].spec;
 
-    // A decomposition proposal is validated BEFORE any money moves: an invalid
-    // one (too many subtasks, over-cap, malformed) rolls back this whole
-    // transaction — nothing booked, task still locked to the dev. Review tasks
-    // themselves are never decomposable (spec.review_of marks them), so a
-    // proposal can't spawn a review of a review ad infinitum.
+    // A decomposition proposal is validated BEFORE any money moves — but the
+    // volunteer's tokens are ALREADY burned by the time we hear about it, so a
+    // near-miss proposal (parseable subtasks that broke a rule: cap breach,
+    // fan-out over the limit, malformed chunk shape) is SALVAGED, not vaporized:
+    // it books as a 'progress' contribution carrying the full proposal + the
+    // structured error list, the reservation is released, and the task returns
+    // to the pool exactly like any other progress outcome — so the next agent
+    // sees the proposal and the exact errors in its continuation context and
+    // can resubmit it corrected. Only a proposal with no parseable subtasks at
+    // all still hard-rejects (rollback; nothing booked; task still locked —
+    // the runner releases it, see run-loop's submit-rejection path). Review
+    // tasks themselves are never decomposable (spec.review_of marks them), so
+    // a proposal can't spawn a review of a review ad infinitum — that's a
+    // policy violation, not a near-miss, and stays a hard reject too.
     let proposal: DecompositionProposal | null = null;
+    let salvage: { proposed: unknown; errors: string[] } | null = null;
+    let bookedOutcome: ContributionOutcome = outcome;
     if (outcome === 'decomposition') {
       if (taskSpec?.review_of != null) {
         throw new OpError(
@@ -1072,10 +1203,16 @@ export async function submitResult(
           'A decomposition-review task cannot itself be decomposed',
         );
       }
-      proposal = normalizeDecomposition(
-        (result as { decomposition?: unknown } | null | undefined)?.decomposition,
-        reserved,
-      );
+      const rawProposal = (result as { decomposition?: unknown } | null | undefined)?.decomposition;
+      const checked = validateDecomposition(rawProposal, reserved);
+      if (checked.proposal) {
+        proposal = checked.proposal;
+      } else if (!checked.parseable) {
+        throw new OpError(BAD_INPUT, 'bad_decomposition', checked.errors[0]);
+      } else {
+        salvage = { proposed: rawProposal, errors: checked.errors };
+        bookedOutcome = 'progress';
+      }
     }
 
     // A modest overshoot is a real donation and gets booked. A wildly impossible
@@ -1120,9 +1257,25 @@ export async function submitResult(
 
     // 5. Append the contribution — the durable, append-only record of this chunk
     //    (progress or dead end alike). cost_cents is the booked spend. For a
-    //    decomposition, the artifact is the NORMALIZED proposal — the exact
-    //    thing the review gates and the publish step later re-reads.
-    const contributionArtifact = proposal ? { decomposition: proposal } : artifact;
+    //    valid decomposition, the artifact is the NORMALIZED proposal — the
+    //    exact thing the review gates and the publish step later re-reads. For
+    //    a salvaged invalid one, the artifact preserves the FULL proposal as
+    //    submitted plus the structured error list — the channel checkoutTask
+    //    hydrates into the next agent's continuation context.
+    const contributionArtifact = proposal
+      ? { decomposition: proposal }
+      : salvage
+        ? {
+            proposed_decomposition: boundedProposal(salvage.proposed),
+            validation_errors: salvage.errors,
+          }
+        : artifact;
+    const bookedSummary = salvage
+      ? `Proposed a decomposition that failed validation: ${salvage.errors.join('; ')}`.slice(
+          0,
+          MAX_SUMMARY_CHARS,
+        )
+      : summary;
     const contrib = await client.query<{ id: number }>(
       `INSERT INTO contributions
          (task_id, target_id, dev_id, outcome, summary, artifact_uri, artifact, cost_cents, raw_usage)
@@ -1132,8 +1285,8 @@ export async function submitResult(
         taskId,
         targetId,
         devId,
-        outcome,
-        summary,
+        bookedOutcome,
+        bookedSummary,
         opts.artifactUri ?? null,
         contributionArtifact != null ? JSON.stringify(contributionArtifact) : null,
         spendApplied,
@@ -1205,18 +1358,19 @@ export async function submitResult(
     await recordEvent(
       devId,
       'submit',
-      { task_id: taskId, outcome, spent_cents: spendApplied },
+      { task_id: taskId, outcome: bookedOutcome, spent_cents: spendApplied },
       client,
     );
 
     return {
       task_id: taskId,
       status: terminal ? ('submitted' as const) : ('open' as const),
-      outcome,
+      outcome: bookedOutcome,
       contribution_id: contrib.rows[0].id,
       reserved_released: reserved,
       spent_applied: spendApplied,
       overage_clamped: overageClamped,
+      ...(salvage ? { salvaged_decomposition: { validation_errors: salvage.errors } } : {}),
       ...(reviewTaskId !== undefined ? { review_task_id: reviewTaskId } : {}),
       ...(publishedTaskIds !== undefined ? { published_task_ids: publishedTaskIds } : {}),
     };
