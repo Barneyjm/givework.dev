@@ -159,36 +159,168 @@ function stripCodeFence(s: string): string {
 }
 
 /**
- * Parse a model's text into structured output: tolerate a markdown code fence,
- * and if it still isn't JSON, keep the raw text under `output` rather than fail.
+ * How the model's deliverable was obtained. Recorded in the contribution's raw
+ * metadata (raw_usage.parse_mode) so a mis-parse — the production incident
+ * where a decomposition got submitted as a terminal candidate_solution because
+ * the real JSON was buried in prose — is diagnosable from the ledger
+ * afterwards, not just from a lost stdout.
+ *
+ *   'structured_output' — the CLI enforced RESULT_JSON_SCHEMA natively and
+ *                         handed back a pre-parsed object (the primary layer).
+ *   the rest            — rungs of the text-extraction ladder (the fallback
+ *                         layer for older CLIs); see coerceResultDetailed.
  */
-export function coerceResult(text: string): unknown {
+export type ParseMode = 'structured_output' | 'strict' | 'last_object' | 'fenced' | 'raw_text';
+
+export interface CoercedResult {
+  value: unknown;
+  parse_mode: ParseMode;
+}
+
+/**
+ * Keys that mark an object as a plausible result envelope (the shape the
+ * SYSTEM_PROMPT asks for). Used to rank brace-scan candidates: a model often
+ * narrates an earlier placeholder object ("the final answer will look like
+ * {...}") before emitting the real one, and the real one is the LAST object
+ * that both parses and carries envelope keys.
+ */
+const ENVELOPE_KEYS = ['output', 'outcome', 'summary', 'decomposition', 'state_update'] as const;
+
+function looksLikeEnvelope(v: unknown): boolean {
+  return (
+    v !== null &&
+    typeof v === 'object' &&
+    !Array.isArray(v) &&
+    ENVELOPE_KEYS.some((k) => k in (v as Record<string, unknown>))
+  );
+}
+
+/**
+ * From the `{` at `start`, return the index of its matching `}` — tracking
+ * nesting depth and ignoring braces inside JSON strings (with escape handling),
+ * so `{"note": "a } in a string"}` scans correctly. No regex: a regex cannot
+ * balance braces. Returns -1 if unterminated.
+ */
+function matchingBrace(s: string, start: number): number {
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Cap on brace candidates examined, so pathological output can't stall a runner. */
+const MAX_BRACE_CANDIDATES = 512;
+
+/**
+ * Every top-level balanced-brace span in `s` that parses as JSON, in order of
+ * appearance. A span that balances but does not parse (a narrated placeholder
+ * with literal `...` values) is stepped INTO rather than skipped, so a real
+ * object nested after it is still found.
+ */
+function collectObjectCandidates(s: string): { value: unknown; envelope: boolean }[] {
+  const out: { value: unknown; envelope: boolean }[] = [];
+  let attempts = 0;
+  let i = s.indexOf('{');
+  while (i !== -1 && attempts++ < MAX_BRACE_CANDIDATES) {
+    const end = matchingBrace(s, i);
+    if (end !== -1) {
+      try {
+        const value = JSON.parse(s.slice(i, end + 1));
+        out.push({ value, envelope: looksLikeEnvelope(value) });
+        i = s.indexOf('{', end + 1); // parsed whole — later objects only, not its innards
+        continue;
+      } catch {
+        // balanced but not JSON — look inside and beyond it
+      }
+    }
+    i = s.indexOf('{', i + 1);
+  }
+  return out;
+}
+
+/**
+ * The candidate that wins: the LAST envelope-looking object (later beats
+ * earlier, and a real result envelope beats a stray non-envelope object that
+ * happens to follow it — e.g. a trailing `{"note": …}`); if nothing looks like
+ * an envelope, the last object that parsed at all. `undefined` when there are
+ * no candidates — JSON.parse can never yield undefined, so it is unambiguous.
+ */
+function pickCandidate(cands: { value: unknown; envelope: boolean }[]): unknown {
+  for (let i = cands.length - 1; i >= 0; i--) {
+    if (cands[i].envelope) return cands[i].value;
+  }
+  return cands.length > 0 ? cands[cands.length - 1].value : undefined;
+}
+
+/**
+ * Parse a model's text into structured output, recording WHICH rung of the
+ * ladder matched. Models wrap the final JSON in explanatory prose, narrate
+ * placeholder objects before the real one, and fence things at random — a
+ * production run's correct decomposition was mis-routed as a terminal
+ * candidate_solution because the old parser gave up on exactly that shape.
+ *
+ * The ladder:
+ *   1. strict      — the whole trimmed output is JSON (or is one fenced JSON
+ *                    block, the historical tolerance → 'fenced').
+ *   2. last_object — the last complete top-level JSON object in the output,
+ *                    scanned with a string-aware brace matcher; envelope-looking
+ *                    candidates (output/outcome/summary/decomposition/
+ *                    state_update keys) beat non-envelope ones, later beats
+ *                    earlier.
+ *   3. fenced      — the same search inside ```json fenced blocks, last first.
+ *   4. raw_text    — keep the prose under `output`. NEVER throws: unparseable
+ *                    output is still real burned donation and is kept + charged.
+ */
+export function coerceResultDetailed(text: string): CoercedResult {
   const t = text.trim();
   try {
-    return JSON.parse(stripCodeFence(t));
+    return { value: JSON.parse(t), parse_mode: 'strict' };
   } catch {
-    // fall through to the prose-tolerant paths
+    // fall through
   }
-  // Models sometimes wrap the JSON in explanatory prose ("here is the
-  // contribution: ```json ...```"). Try every fenced block, then the widest
-  // brace-delimited span, before falling back to raw text under `output`.
-  for (const m of t.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/g)) {
+  const stripped = stripCodeFence(t);
+  if (stripped !== t) {
     try {
-      return JSON.parse(m[1].trim());
+      return { value: JSON.parse(stripped), parse_mode: 'fenced' };
     } catch {
-      // not this block — keep looking
+      // fall through
     }
   }
-  const first = t.indexOf('{');
-  const last = t.lastIndexOf('}');
-  if (first !== -1 && last > first) {
+  const whole = pickCandidate(collectObjectCandidates(t));
+  if (whole !== undefined) return { value: whole, parse_mode: 'last_object' };
+  const fences = [...t.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/g)];
+  for (let i = fences.length - 1; i >= 0; i--) {
+    const body = fences[i][1].trim();
     try {
-      return JSON.parse(t.slice(first, last + 1));
+      return { value: JSON.parse(body), parse_mode: 'fenced' };
     } catch {
-      // not parseable either — fall back to raw text
+      // not directly JSON — scan inside the fence too
     }
+    const inner = pickCandidate(collectObjectCandidates(body));
+    if (inner !== undefined) return { value: inner, parse_mode: 'fenced' };
   }
-  return { output: t };
+  return { value: { output: t }, parse_mode: 'raw_text' };
+}
+
+/**
+ * Parse a model's text into structured output: tolerate prose and markdown
+ * fences, and if nothing parses, keep the raw text under `output` rather than
+ * fail. Value-only convenience over coerceResultDetailed.
+ */
+export function coerceResult(text: string): unknown {
+  return coerceResultDetailed(text).value;
 }
 
 /** cents per token for a $/1M-token rate. */
@@ -372,6 +504,157 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
   }
 Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
+/**
+ * JSON Schema for the contribution envelope — the contract SYSTEM_PROMPT asks
+ * for, expressed formally. Passed to `claude -p --json-schema` on CLIs new
+ * enough to honor it, so the final output is schema-constrained at the source
+ * and arrives pre-parsed in the result event's `structured_output` field:
+ * prose wrappers, markdown fences, and narrated placeholder objects (the
+ * production mis-route) become structurally impossible.
+ *
+ * Deliberately permissive: NOTHING is required at the top level (a
+ * partial-but-honest result — just a summary, say — must still validate) and
+ * additionalProperties stays true so each task's own spec.output_schema keys
+ * ride alongside the envelope. No `format:` annotations — the CLI treats them
+ * as advisory-only, so they'd add noise without enforcement.
+ */
+export const RESULT_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    output: {
+      type: 'string',
+      description: 'The main result, when the task gave no output shape of its own',
+    },
+    summary: { type: 'string', description: 'Short handoff note shown on the public feed' },
+    outcome: {
+      type: 'string',
+      enum: ['progress', 'dead_end', 'candidate_solution', 'decomposition'],
+    },
+    state_update: {
+      type: 'object',
+      description: "Replacement for the target's compacted working set",
+    },
+    artifact_uri: { type: 'string' },
+    decomposition: {
+      type: 'object',
+      description: 'The task-exceeds-budget deliverable (see BUDGET HONESTY in the system prompt)',
+      properties: {
+        reason: { type: 'string' },
+        subtasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              prompt: { type: 'string' },
+              kind: {
+                type: 'string',
+                enum: [
+                  'computational',
+                  'counterexample_search',
+                  'formalization',
+                  'lemma',
+                  'exploration',
+                ],
+              },
+              effort: { type: 'string', enum: ['low', 'medium', 'high'] },
+              est_cost_cents: { type: 'integer' },
+              max_cost_cents: { type: 'integer' },
+              code: {
+                type: 'object',
+                properties: {
+                  repo: { type: 'string' },
+                  sha: { type: 'string' },
+                  entrypoint: { type: 'string' },
+                  input: {},
+                },
+                required: ['repo', 'sha', 'entrypoint'],
+              },
+            },
+            required: ['title', 'prompt'],
+          },
+        },
+      },
+      required: ['reason', 'subtasks'],
+    },
+  },
+  additionalProperties: true,
+} as const;
+
+/**
+ * Earliest CLI version --json-schema is trusted on. Chosen deliberately: the
+ * headless docs pin v2.1.205 as the release where an invalid schema fails
+ * LOUDLY (`Error: --json-schema is not a valid JSON Schema` + diagnostic);
+ * before it, invalid schemas were SILENTLY ignored and the run returned
+ * unstructured text — i.e. below this version the flag's behavior is exactly
+ * the kind of quiet misfire this system cannot afford on donated spend. This
+ * repo's earlier attempt at the flag (see the NOTE in execute()) hit that era.
+ */
+export const MIN_JSON_SCHEMA_CLI_VERSION = '2.1.205';
+
+/** True when `versionText` (e.g. "2.1.210 (Claude Code)") is at least `min` ("x.y.z"). */
+export function cliVersionAtLeast(versionText: string, min: string): boolean {
+  const m = versionText.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return false;
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const b = min.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (v[i] !== b[i]) return v[i] > b[i];
+  }
+  return true;
+}
+
+/**
+ * Read `claude --version` — a spawn that costs no tokens and bills nothing, so
+ * gating on it can never double-spend a donation (unlike probing with a real
+ * run). Returns null on any failure (CLI missing, hang, nonzero exit); null
+ * means "assume no --json-schema support" and the extraction ladder carries.
+ */
+function probeClaudeCliVersion(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('claude', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let out = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(null);
+    }, 10_000);
+    child.stdout?.on('data', (d) => (out += d));
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 && out.trim() ? out.trim() : null);
+    });
+  });
+}
+
+/**
+ * Does this ExecFailedError stderr look like the CLI rejecting the
+ * --json-schema invocation itself (unknown flag on an old build, or a schema
+ * the validator refused) rather than a mid-run crash? Used to decide the one
+ * free retry without the flag.
+ */
+function isJsonSchemaFlagFailure(stderr: string): boolean {
+  return (
+    /json-schema/i.test(stderr) ||
+    /unknown option|unknown argument|unrecognized option/i.test(stderr)
+  );
+}
+
+/** The schema-validated deliverable from a result event, when --json-schema was honored. */
+function structuredOutputOf(final: any): unknown {
+  const s = final?.structured_output;
+  return s !== null && typeof s === 'object' ? s : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // ClaudeCliExecutor — the production path. Runs the task on the volunteer's
 // `claude -p` (Claude Code CLI) subscriber credit. No API key; the CLI uses the
@@ -505,7 +788,12 @@ export function parseStreamCapture(raw: string): StreamCapture {
   try {
     const whole = JSON.parse(trimmed);
     if (whole && typeof whole === 'object' && !Array.isArray(whole) && whole.type !== 'assistant') {
-      if (whole.type === 'result' || 'result' in whole || 'is_error' in whole) {
+      if (
+        whole.type === 'result' ||
+        'result' in whole ||
+        'structured_output' in whole ||
+        'is_error' in whole
+      ) {
         cap.final = whole;
         cap.events = 1;
         addUsage(whole.usage);
@@ -589,13 +877,37 @@ const PROGRESS_FILE_MAX_CHARS = 64_000;
 export class ClaudeCliExecutor implements Executor {
   private run: CliRunner;
   private timeoutMs: number;
+  private probeVersion: () => Promise<string | null>;
+  /** Cached once per executor: whether this volunteer's CLI gets --json-schema. */
+  private schemaSupport?: Promise<boolean>;
 
-  constructor(opts: { run?: CliRunner; timeoutMs?: number } = {}) {
+  constructor(
+    opts: { run?: CliRunner; timeoutMs?: number; probeVersion?: () => Promise<string | null> } = {},
+  ) {
     this.timeoutMs = opts.timeoutMs ?? 180_000;
     // The per-task override is consulted at call time so a long-running task
     // (authoring a whole Manim scene runs ~13 minutes) can widen the window
     // without every task paying for it.
     this.run = opts.run ?? ((args, input, timeoutMs, o) => spawnClaude(args, input, timeoutMs, o));
+    // Deliberate default asymmetry: with the real spawn runner, probe the real
+    // CLI's version (free — no tokens); with an injected fake runner (tests),
+    // default to "unknown → unsupported" so unit tests behave identically on
+    // every machine. A test that wants the structured path injects probeVersion.
+    this.probeVersion = opts.probeVersion ?? (opts.run ? async () => null : probeClaudeCliVersion);
+  }
+
+  /**
+   * Whether to pass --json-schema, decided ONCE per executor from a cheap
+   * `claude --version` read — never from a paid trial run, so the gate itself
+   * can never double-spend. Gated at MIN_JSON_SCHEMA_CLI_VERSION (see its
+   * comment for why that version and not "whenever the flag exists").
+   */
+  private supportsJsonSchema(): Promise<boolean> {
+    this.schemaSupport ??= this.probeVersion().then(
+      (v) => (v ? cliVersionAtLeast(v, MIN_JSON_SCHEMA_CLI_VERSION) : false),
+      () => false,
+    );
+    return this.schemaSupport;
   }
 
   /**
@@ -644,17 +956,25 @@ export class ClaudeCliExecutor implements Executor {
       `contribution for the next agent to continue from. If you finish in time, reply with ` +
       `the JSON object as instructed; ${PROGRESS_FILE} is then ignored.\n`;
 
-    // NOTE: we do NOT pass `--json-schema`. With that flag, `claude -p` runs and
-    // bills but returns an empty `result` field (the structured output doesn't
-    // come back where --output-format json puts the text), so we'd submit a blank
-    // deliverable and still charge the donation. The system prompt + the output
-    // shape in the prompt already steer the model to a JSON object, and
-    // coerceResult parses it. STAGE 8: cap usage so a task can't exceed its cap.
+    // NOTE on --json-schema: an earlier integration observed the flag "bills
+    // but returns an empty result" — that era predates v2.1.205 (when invalid
+    // schemas were silently ignored) AND read the deliverable from `result`,
+    // which IS empty under the flag: the schema-constrained object arrives in
+    // the result event's `structured_output` field instead. So the flag is now
+    // the PRIMARY layer — native enforcement makes prose-wrapped JSON (the
+    // production mis-route) structurally impossible — but only on CLIs at
+    // MIN_JSON_SCHEMA_CLI_VERSION or newer, decided by a free version probe.
+    // Older CLIs get the same prompt-steered run as before, parsed by the
+    // coerceResultDetailed extraction ladder. STAGE 8: cap usage so a task
+    // can't exceed its cap.
     //
     // stream-json (with --verbose, which the CLI requires alongside it, and
     // --include-partial-messages for in-flight text) so a timed-out run leaves
-    // salvageable output on stdout — see the header comment above.
-    const args = [
+    // salvageable output on stdout — see the header comment above. The flag
+    // composes with stream-json; a killed run simply never gets its final
+    // result event, and the salvage paths work identically in both modes.
+    let useJsonSchema = await this.supportsJsonSchema();
+    const argsFor = (withSchema: boolean) => [
       '-p',
       '--output-format',
       'stream-json',
@@ -667,6 +987,7 @@ export class ClaudeCliExecutor implements Executor {
       PROGRESS_ALLOWED_TOOLS,
       '--model',
       model,
+      ...(withSchema ? ['--json-schema', JSON.stringify(RESULT_JSON_SCHEMA)] : []),
     ];
 
     // Fresh working directory per run — where PROGRESS.md lives, and all the
@@ -675,7 +996,7 @@ export class ClaudeCliExecutor implements Executor {
     // decision happens inside this try so PROGRESS.md is still readable on
     // every failure path, not just the timeout.
     const workdir = await mkdtemp(join(tmpdir(), 'givework-run-'));
-    let raw: string;
+    let raw: string | undefined;
     let resultText: string;
     let data: any;
     try {
@@ -683,38 +1004,52 @@ export class ClaudeCliExecutor implements Executor {
         readFile(join(workdir, PROGRESS_FILE), 'utf8')
           .then((s) => s.slice(0, PROGRESS_FILE_MAX_CHARS))
           .catch(() => null);
-      try {
-        raw = await this.run(args, prompt, timeoutMs, { cwd: workdir });
-      } catch (err) {
-        if (err instanceof ExecTimeoutError) {
-          // The timeout killed the run. The tokens are already spent from the
-          // volunteer's subscription — salvage what accumulated into a progress
-          // contribution instead of letting the run vanish without a record.
-          // The agent-curated PROGRESS.md is the primary salvage; the stream
-          // capture inside salvageTimedOutRun is the fallback.
-          return salvageTimedOutRun(task, model, prompt, err, await readProgress());
+      while (raw === undefined) {
+        try {
+          raw = await this.run(argsFor(useJsonSchema), prompt, timeoutMs, { cwd: workdir });
+        } catch (err) {
+          if (err instanceof ExecTimeoutError) {
+            // The timeout killed the run. The tokens are already spent from the
+            // volunteer's subscription — salvage what accumulated into a progress
+            // contribution instead of letting the run vanish without a record.
+            // The agent-curated PROGRESS.md is the primary salvage; the stream
+            // capture inside salvageTimedOutRun is the fallback. (Identical in
+            // --json-schema mode: partial messages still streamed, only the
+            // never-arrived final event would have carried structured_output.)
+            return salvageTimedOutRun(task, model, prompt, err, await readProgress());
+          }
+          if (err instanceof ExecFailedError) {
+            // The CLI died mid-run (nonzero exit). Tokens may already be burned;
+            // salvage whatever reached stdout / PROGRESS.md exactly like a
+            // timeout. Only a run that left truly nothing (the fast-fail shape of
+            // a config/auth problem) still throws for a clean release.
+            const salvaged = salvageCrashedRun(task, model, prompt, {
+              reason: `claude -p exited ${err.exitCode}`,
+              partialOutput: err.partialOutput,
+              progressFile: await readProgress(),
+              exitCode: err.exitCode,
+              stderrTail: err.stderrOutput.slice(-2_000),
+              elapsedMs: err.elapsedMs,
+            });
+            if (salvaged) return salvaged;
+            if (useJsonSchema && isJsonSchemaFlagFailure(err.stderrOutput)) {
+              // The version gate misjudged this CLI (or its validator refused
+              // our schema). NOTHING was burned — salvage found no stdout, no
+              // usage, no billed event — so ONE retry without the flag cannot
+              // double-spend a donation. Pin support off for this executor so
+              // later tasks skip the failing flag outright.
+              this.schemaSupport = Promise.resolve(false);
+              useJsonSchema = false;
+              continue;
+            }
+            throw new Error(
+              `claude -p exited ${err.exitCode} with nothing recoverable ` +
+                `(no stdout, no ${PROGRESS_FILE} — no tokens appear to have been metered): ` +
+                err.stderrOutput.slice(0, 300),
+            );
+          }
+          throw err;
         }
-        if (err instanceof ExecFailedError) {
-          // The CLI died mid-run (nonzero exit). Tokens may already be burned;
-          // salvage whatever reached stdout / PROGRESS.md exactly like a
-          // timeout. Only a run that left truly nothing (the fast-fail shape of
-          // a config/auth problem) still throws for a clean release.
-          const salvaged = salvageCrashedRun(task, model, prompt, {
-            reason: `claude -p exited ${err.exitCode}`,
-            partialOutput: err.partialOutput,
-            progressFile: await readProgress(),
-            exitCode: err.exitCode,
-            stderrTail: err.stderrOutput.slice(-2_000),
-            elapsedMs: err.elapsedMs,
-          });
-          if (salvaged) return salvaged;
-          throw new Error(
-            `claude -p exited ${err.exitCode} with nothing recoverable ` +
-              `(no stdout, no ${PROGRESS_FILE} — no tokens appear to have been metered): ` +
-              err.stderrOutput.slice(0, 300),
-          );
-        }
-        throw err;
       }
 
       const capture = parseStreamCapture(raw);
@@ -724,7 +1059,7 @@ export class ClaudeCliExecutor implements Executor {
         ? `claude -p returned no result event: ${raw.slice(0, 200)}`
         : data.is_error
           ? `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`
-          : !resultText
+          : !resultText && structuredOutputOf(data) === undefined
             ? 'claude -p returned an empty result'
             : null;
       if (failure) {
@@ -745,7 +1080,15 @@ export class ClaudeCliExecutor implements Executor {
     } finally {
       await rm(workdir, { recursive: true, force: true }).catch(() => {});
     }
-    const result = coerceResult(resultText);
+    // Primary layer: the CLI enforced RESULT_JSON_SCHEMA and handed back a
+    // pre-parsed object. Fallback layer: a supported CLI whose final event
+    // nonetheless lacks structured_output — or an older CLI that never got the
+    // flag — goes through the text-extraction ladder.
+    const structured = structuredOutputOf(data);
+    const { value: result, parse_mode }: CoercedResult =
+      structured !== undefined
+        ? { value: structured, parse_mode: 'structured_output' }
+        : coerceResultDetailed(resultText);
 
     // Prefer the CLI's own cost figure; fall back to token metering if absent.
     const cents =
@@ -776,6 +1119,10 @@ export class ClaudeCliExecutor implements Executor {
       actual_cost_cents: cents,
       raw_usage: {
         model,
+        // Which rung of the extraction ladder parsed the model's text — so a
+        // mis-routed submit (the prose-buried-JSON incident) is diagnosable
+        // from the recorded contribution.
+        parse_mode,
         total_cost_usd: data.total_cost_usd,
         usage: data.usage,
         duration_ms: data.duration_ms,

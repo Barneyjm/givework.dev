@@ -6,13 +6,18 @@ import {
   buildContinuationSection,
   ClaudeCliExecutor,
   CONTINUATION_MAX_CHARS,
+  cliVersionAtLeast,
   coerceResult,
+  coerceResultDetailed,
+  ExecFailedError,
   type ExecTask,
   ExecTimeoutError,
   getExecutor,
+  MIN_JSON_SCHEMA_CLI_VERSION,
   modelForEffort,
   type PriorContribution,
   parseStreamCapture,
+  RESULT_JSON_SCHEMA,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
@@ -46,6 +51,89 @@ describe('coerceResult', () => {
   it('falls back to a brace span, then to raw output', () => {
     expect(coerceResult('the answer is {"n": 7} indeed')).toEqual({ n: 7 });
     expect(coerceResult('no json here')).toEqual({ output: 'no json here' });
+  });
+
+  it('records the extraction rung: strict / fenced / last_object / raw_text', () => {
+    expect(coerceResultDetailed('{"a": 1}')).toEqual({ value: { a: 1 }, parse_mode: 'strict' });
+    expect(coerceResultDetailed('```json\n{"a": 1}\n```')).toEqual({
+      value: { a: 1 },
+      parse_mode: 'fenced',
+    });
+    expect(coerceResultDetailed('the answer is {"n": 7} indeed')).toEqual({
+      value: { n: 7 },
+      parse_mode: 'last_object',
+    });
+    expect(coerceResultDetailed('no json here')).toEqual({
+      value: { output: 'no json here' },
+      parse_mode: 'raw_text',
+    });
+    // a fence whose body is a top-level ARRAY: invisible to the object scanner,
+    // so the fenced rung is what catches it
+    expect(coerceResultDetailed('results below:\n```json\n[1, 2, 3]\n```\ndone')).toEqual({
+      value: [1, 2, 3],
+      parse_mode: 'fenced',
+    });
+  });
+
+  it('extracts the real final object from the production incident shape (prose + placeholder fence + final JSON + trailing notes)', () => {
+    // The exact failure observed live: paragraphs of prose, then a fenced
+    // PLACEHOLDER the model narrated (literal `...` values — does not parse),
+    // then the REAL final envelope object, then trailing notes. The old parser
+    // took first `{` → last `}` across all of it, failed, and submitted the
+    // whole stdout as raw text — mis-routing a decomposition as a terminal
+    // candidate_solution.
+    const real = {
+      output: 'This is a decomposition contribution — the task exceeds its budget.',
+      summary: 'split into 3 subtasks',
+      decomposition: {
+        reason: 'needs ~50x the cap',
+        subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 50 }],
+      },
+    };
+    const stdout =
+      'I analyzed the task carefully.\n\nThe budget plainly cannot cover the sweep, ' +
+      'so the correct deliverable is a decomposition.\n\n' +
+      'The final JSON will follow this shape:\n\n' +
+      '```json\n{"output": ..., "summary": ..., "decomposition": {"reason": ..., "subtasks": [...]}}\n```\n\n' +
+      'Here is the actual contribution:\n\n' +
+      `${JSON.stringify(real)}\n\n` +
+      'Note: subtask costs are integer cents as required.  \n';
+    expect(coerceResultDetailed(stdout)).toEqual({ value: real, parse_mode: 'last_object' });
+  });
+
+  it('with multiple parseable objects, the last envelope-looking one wins', () => {
+    // An earlier PARSEABLE placeholder (quoted "..." values) is still an
+    // envelope — later beats earlier, so the real one wins…
+    const s =
+      'shape: {"output": "...", "summary": "..."}\n' +
+      'real: {"output": "done", "summary": "the actual result"}\n' +
+      'aside: {"note": "not an envelope"}';
+    expect(coerceResultDetailed(s)).toEqual({
+      value: { output: 'done', summary: 'the actual result' },
+      parse_mode: 'last_object',
+    });
+    // …and with no envelope anywhere, the last parseable object wins
+    expect(coerceResultDetailed('first {"a": 1} then {"b": 2}')).toEqual({
+      value: { b: 2 },
+      parse_mode: 'last_object',
+    });
+  });
+
+  it('pathological braces inside strings do not break the scanner', () => {
+    // braces and escaped quotes inside JSON strings must not derail matching
+    const tricky = { summary: 'a } stray { brace', output: 'quote " and \\ and }{ done' };
+    const s = `prose with an { unbalanced brace\n${JSON.stringify(tricky)}\ntrailing } brace`;
+    expect(coerceResultDetailed(s)).toEqual({ value: tricky, parse_mode: 'last_object' });
+    // a balanced-but-unparseable span is stepped INTO, not skipped: the real
+    // object nested after junk inside the same braces is still found
+    expect(coerceResult('{ junk before {"output": "inner"} junk after }')).toEqual({
+      output: 'inner',
+    });
+    // brace soup with no JSON at all stays raw text and never throws
+    expect(coerceResultDetailed('{{{{ not json }}}}')).toEqual({
+      value: { output: '{{{{ not json }}}}' },
+      parse_mode: 'raw_text',
+    });
   });
 });
 
@@ -147,7 +235,7 @@ describe('ClaudeCliExecutor', () => {
     expect(seen).toEqual([180_000, 1_500_000, 180_000, 1_800_000, 180_000]);
   });
 
-  it('passes -p/stream-json/--model, prompt+shape on stdin, and never --json-schema', async () => {
+  it('passes -p/stream-json/--model, prompt+shape on stdin; no --json-schema on an unprobed CLI', async () => {
     let seenArgs: string[] = [];
     let seenInput = '';
     let seenOpts: { cwd?: string } | undefined;
@@ -172,8 +260,9 @@ describe('ClaudeCliExecutor', () => {
       '--model',
       'claude-sonnet-4-6',
     ]);
-    // --json-schema makes claude -p bill but return an empty result; we steer via
-    // the prompt instead, so the flag must never be sent.
+    // With an injected fake runner and no injected version probe, schema
+    // support is unknown → the flag must NOT be sent (the fallback-ladder
+    // path, and what every volunteer on an older CLI gets).
     expect(seenArgs).not.toContain('--json-schema');
     expect(seenInput).toContain('summarize this'); // the task prompt reached the CLI
     expect(seenInput).toContain('Output shape'); // the shape is conveyed in-prompt
@@ -273,6 +362,208 @@ describe('ClaudeCliExecutor', () => {
     });
     const r2 = await new ClaudeCliExecutor({ run: plain }).execute(task);
     expect(r2.outcome).toBeUndefined();
+  });
+
+  it('routes a decomposition buried in prose (the production mis-route) and records parse_mode', async () => {
+    // The live incident: a correct decomposition wrapped in prose + a narrated
+    // placeholder fence was submitted as a terminal candidate_solution because
+    // the parser fell back to raw text. It must route as a decomposition, and
+    // raw_usage must say which extraction rung fired so mis-parses are
+    // diagnosable from the recorded contribution.
+    const body = {
+      output: 'This is a decomposition contribution — the sweep exceeds the budget.',
+      summary: 'split the sweep',
+      decomposition: {
+        reason: 'cap is 200¢, the sweep needs ~50x that',
+        subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 50 }],
+      },
+    };
+    const stdout =
+      'Let me explain my reasoning first.\n\n' +
+      'The final object will look like:\n```json\n{"output": ..., "decomposition": ...}\n```\n\n' +
+      `${JSON.stringify(body)}\n\ntrailing note\n`;
+    const run = cliReply({ result: stdout, total_cost_usd: 0.01 });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.outcome).toBe('decomposition');
+    expect(r.result).toEqual(body);
+    expect(r.summary).toBe('split the sweep');
+    expect((r.raw_usage as any).parse_mode).toBe('last_object');
+
+    // clean strict output records 'strict'; pure prose records 'raw_text' and
+    // is still kept + charged (never thrown away)
+    const strict = await new ClaudeCliExecutor({
+      run: cliReply({ result: '{"summary":"ok"}', total_cost_usd: 0.01 }),
+    }).execute(task);
+    expect((strict.raw_usage as any).parse_mode).toBe('strict');
+    const prose = await new ClaudeCliExecutor({
+      run: cliReply({ result: 'I could not produce JSON, sorry.', total_cost_usd: 0.01 }),
+    }).execute(task);
+    expect((prose.raw_usage as any).parse_mode).toBe('raw_text');
+    expect(prose.result).toEqual({ output: 'I could not produce JSON, sorry.' });
+    expect(prose.actual_cost_cents).toBe(1);
+  });
+});
+
+// PRIMARY layer for the prose-wrapped-JSON incident: on CLIs new enough to
+// honor --json-schema, the deliverable is schema-constrained at the source and
+// arrives pre-parsed in the result event's structured_output field. These
+// tests pin the version gate (a FREE probe — never a paid trial run), the
+// flag wiring, the structured happy path, and the graceful degradation to the
+// extraction ladder.
+describe('ClaudeCliExecutor — native --json-schema structured output', () => {
+  const supported = async () => '2.1.210 (Claude Code)';
+  const decompositionBody = {
+    output: 'This is a decomposition contribution — the sweep exceeds the budget.',
+    summary: 'split the sweep',
+    decomposition: {
+      reason: 'needs ~50x the cap',
+      subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 50 }],
+    },
+  };
+
+  it('gates on the CLI version: >= 2.1.205 sends the flag, older/unknown does not', async () => {
+    // docs: before v2.1.205 an invalid schema was SILENTLY ignored — the flag
+    // is only trustworthy from the version where it fails loudly
+    expect(cliVersionAtLeast('2.1.205 (Claude Code)', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(true);
+    expect(cliVersionAtLeast('2.1.204 (Claude Code)', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(false);
+    expect(cliVersionAtLeast('2.2.0', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(true);
+    expect(cliVersionAtLeast('3.0.0', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(true);
+    expect(cliVersionAtLeast('1.9.999', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(false);
+    expect(cliVersionAtLeast('not a version', MIN_JSON_SCHEMA_CLI_VERSION)).toBe(false);
+
+    const argsSeen: string[][] = [];
+    const run = async (args: string[]) => {
+      argsSeen.push(args);
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0.01 });
+    };
+    await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(task);
+    await new ClaudeCliExecutor({ run, probeVersion: async () => '2.1.204' }).execute(task);
+    await new ClaudeCliExecutor({ run, probeVersion: async () => null }).execute(task);
+    expect(argsSeen[0]).toContain('--json-schema');
+    expect(argsSeen[1]).not.toContain('--json-schema');
+    expect(argsSeen[2]).not.toContain('--json-schema'); // probe failed → assume unsupported
+    // the schema sent is the contribution envelope, as parseable JSON
+    const schema = JSON.parse(argsSeen[0][argsSeen[0].indexOf('--json-schema') + 1]);
+    expect(schema).toEqual(RESULT_JSON_SCHEMA);
+    expect(schema.properties.outcome.enum).toContain('decomposition');
+    expect(schema.required).toBeUndefined(); // partial-but-honest results must validate
+    expect(schema.additionalProperties).toBe(true); // task-specific output_schema keys ride along
+  });
+
+  it('probes the version ONCE per executor — a free version read, never a paid trial run', async () => {
+    let probes = 0;
+    const probeVersion = async () => {
+      probes++;
+      return '2.1.210 (Claude Code)';
+    };
+    let runs = 0;
+    const run = async () => {
+      runs++;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0.01 });
+    };
+    const exec = new ClaudeCliExecutor({ run, probeVersion });
+    await exec.execute(task);
+    await exec.execute(task);
+    await exec.execute(task);
+    expect(probes).toBe(1); // cached — and it cost zero tokens to begin with
+    expect(runs).toBe(3); // exactly one PAID run per task, never a probe-run
+  });
+
+  it('reads the deliverable from structured_output and routes a decomposition (result field empty)', async () => {
+    // Under --json-schema the CLI's `result` field is empty — the historical
+    // trap that got the flag removed. structured_output is the deliverable,
+    // an empty `result` beside it must NOT trip the empty-result salvage.
+    const run = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: decompositionBody,
+        total_cost_usd: 0.02,
+        usage: { output_tokens: 40 },
+      });
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(task);
+    expect(r.crashed).toBeUndefined();
+    expect(r.result).toEqual(decompositionBody);
+    expect(r.outcome).toBe('decomposition');
+    expect(r.summary).toBe('split the sweep');
+    expect(r.actual_cost_cents).toBe(2);
+    expect((r.raw_usage as any).parse_mode).toBe('structured_output');
+  });
+
+  it('falls back to the extraction ladder when a supported CLI returns no structured_output', async () => {
+    const stdout = `prose first\n${JSON.stringify({ summary: 'embedded', output: 'ok' })}\nprose after`;
+    const run = async () => JSON.stringify({ result: stdout, total_cost_usd: 0.01 });
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(task);
+    expect(r.result).toEqual({ summary: 'embedded', output: 'ok' });
+    expect((r.raw_usage as any).parse_mode).toBe('last_object');
+  });
+
+  it('retries ONCE without the flag when the CLI rejects it — only because nothing was burned', async () => {
+    const argsSeen: string[][] = [];
+    const run = async (args: string[]) => {
+      argsSeen.push(args);
+      if (args.includes('--json-schema')) {
+        // old CLI: instant usage error — empty stdout, nothing metered, nothing billed
+        throw new ExecFailedError('', "error: unknown option '--json-schema'", 2, 40);
+      }
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0.01 });
+    };
+    const exec = new ClaudeCliExecutor({ run, probeVersion: supported });
+    const r = await exec.execute(task);
+    expect(r.result).toEqual({ summary: 'ok' });
+    expect(r.crashed).toBeUndefined();
+    expect(argsSeen).toHaveLength(2);
+    expect(argsSeen[0]).toContain('--json-schema');
+    expect(argsSeen[1]).not.toContain('--json-schema');
+    // support is pinned OFF for this executor: the next task skips the failing
+    // flag outright — one paid run, no retry dance
+    await exec.execute(task);
+    expect(argsSeen).toHaveLength(3);
+    expect(argsSeen[2]).not.toContain('--json-schema');
+  });
+
+  it('does NOT retry when the failed schema run burned real tokens — that spend is salvaged instead', async () => {
+    // If the run got far enough to stream usage, a retry would DOUBLE-SPEND:
+    // the crash-salvage path books the burned donation and stops.
+    const partial = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'partway through' }],
+          usage: { input_tokens: 500, output_tokens: 60 },
+        },
+      }),
+    ].join('\n');
+    let runs = 0;
+    const run = async () => {
+      runs++;
+      throw new ExecFailedError(partial, "error: unknown option '--json-schema'", 2, 900);
+    };
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(task);
+    expect(runs).toBe(1); // no second paid run
+    expect(r.crashed).toBe(true);
+    expect(r.outcome).toBe('progress');
+    expect((r.result as any).partial_output).toContain('partway through');
+  });
+
+  it('salvages a timeout identically in schema mode — partials stream, the final event never came', async () => {
+    const partial = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'checked n up to 10^6' }],
+        usage: { input_tokens: 1000, output_tokens: 100 },
+      },
+    });
+    let sawSchemaFlag = false;
+    const run = async (args: string[]) => {
+      sawSchemaFlag = args.includes('--json-schema');
+      throw new ExecTimeoutError(partial, 240_000);
+    };
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(task);
+    expect(sawSchemaFlag).toBe(true); // the killed run WAS a schema-mode run
+    expect(r.timed_out).toBe(true);
+    expect(r.outcome).toBe('progress');
+    expect((r.result as any).partial_output).toContain('10^6');
+    expect((r.raw_usage as any).estimator).toBe('streamed_usage');
   });
 });
 
