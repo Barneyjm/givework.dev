@@ -968,10 +968,17 @@ function reviewTaskSpec(
   parentTitle: string,
   proposal: DecompositionProposal,
   depth: number,
+  reviewedMaxCostCents: number,
 ) {
   const chunkCount = proposal.subtasks.filter((s) => s.code).length;
   return {
     review_of: contributionId,
+    // The REVIEWED task's cap, baked in at mint time so the executor can state
+    // the caps that actually govern the proposal (2x THIS number per subtask)
+    // without touching the database — the execution plane is pg-free. Without
+    // it, executors computed limits from the review task's own tiny cap and
+    // reviewers rejected perfectly legal subtask prices as violations.
+    reviewed_max_cost_cents: reviewedMaxCostCents,
     deliverable: 'decomposition_review',
     prompt:
       `Another volunteer's agent judged the task "${parentTitle}" too big for its budget and ` +
@@ -984,6 +991,10 @@ function reviewTaskSpec(
       `. Its stated reason: ` +
       `${proposal.reason || '(none given)'}\n\nThe full proposal:\n` +
       `${JSON.stringify(proposal, null, 2)}\n\n` +
+      `The reviewed task is capped at ${reviewedMaxCostCents}¢; validation allows each proposed ` +
+      `subtask's max_cost_cents to be at most ${DECOMPOSITION_CAP_MULTIPLE * reviewedMaxCostCents}¢ ` +
+      `(${DECOMPOSITION_CAP_MULTIPLE}x that cap). Judge the proposal's pricing against these ` +
+      `numbers — never against this review task's own budget.\n\n` +
       `Evaluate whether this split is (a) sensible — each subtask is well-posed and independently ` +
       `workable; (b) economical — the cost caps are proportionate to the work, not inflated; and ` +
       `(c) faithful — completing the subtasks genuinely advances the parent problem rather than ` +
@@ -1521,6 +1532,10 @@ export async function submitResult(
               // The depth the published subtasks WOULD have — flagged to the
               // reviewer so towers get extra scrutiny at the judgment point.
               upd.rows[0].decomposition_depth + 1,
+              // The proposing (reviewed) task's own cap — the number the 2x
+              // per-subtask ceiling is computed from, baked into the review
+              // spec so the pg-free executor can state it.
+              upd.rows[0].max_cost_cents,
             ),
           ),
           REVIEW_TASK_EST_CENTS,

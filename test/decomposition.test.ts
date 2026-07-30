@@ -114,6 +114,12 @@ describe('decomposition proposals', () => {
     expect(reviews[0].title).toBe('Review a proposed decomposition of: Sweep the whole range');
     expect(reviews[0].spec.review_of).toBe(res.contribution_id);
     expect(reviews[0].spec.prompt).toContain('sensible');
+    // The REVIEWED task's cap is baked in at mint time so the pg-free executor
+    // can state the caps that govern the proposal — never the review task's own
+    // (the v0.3.5 mis-review incident). Parent cap here is 200¢ → ceiling 400¢.
+    expect(Number(reviews[0].spec.reviewed_max_cost_cents)).toBe(200);
+    expect(reviews[0].spec.prompt).toContain('capped at 200¢');
+    expect(reviews[0].spec.prompt).toContain('at most 400¢');
     expect(Number(reviews[0].max_cost_cents)).toBe(REVIEW_TASK_MAX_CENTS);
     expect(reviews[0].effort).toBe('medium');
     expect(reviews[0].status).toBe('open');
