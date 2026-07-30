@@ -5,6 +5,10 @@ import { join } from 'node:path';
 // Persisted CLI config at ~/.givework/config.json. Holds the API base URL plus
 // the dev and (optionally) admin tokens. Env vars override the file so CI / ad-hoc
 // use needs no login: GIVEWORK_API_URL, GIVEWORK_TOKEN, GIVEWORK_ADMIN_TOKEN.
+//
+// It also carries the CLI telemetry bookkeeping (anonymous install id, the
+// first-run disclosure flag, and the cached ingest config). Those are NOT
+// env-overridable — see src/cli/telemetry.ts for the opt-out switches.
 
 export const DEFAULT_API_URL = 'https://api.givework.dev';
 
@@ -12,6 +16,14 @@ export interface Config {
   apiUrl?: string;
   token?: string;
   adminToken?: string;
+  /** Anonymous, randomly-minted install id for CLI telemetry (src/cli/telemetry.ts). */
+  telemetryId?: string;
+  /** Set once the first-run telemetry disclosure has been printed. */
+  telemetryNoticeShown?: boolean;
+  /** Cached /analytics-config.json response, so telemetry costs ~one fetch a day. */
+  telemetryConfig?: { token: string; host: string };
+  /** Epoch ms the cached telemetryConfig was fetched. */
+  telemetryConfigAt?: number;
 }
 
 function configDir(): string {
@@ -33,6 +45,10 @@ function readFile(): Config {
 export function loadConfig(): Config {
   const file = readFile();
   return {
+    // Spread first so fields with no env override (the telemetry bookkeeping)
+    // survive the round-trip. Listing only the three overridable keys silently
+    // dropped everything else from the returned object.
+    ...file,
     apiUrl: process.env.GIVEWORK_API_URL ?? file.apiUrl ?? DEFAULT_API_URL,
     token: process.env.GIVEWORK_TOKEN ?? file.token,
     adminToken: process.env.GIVEWORK_ADMIN_TOKEN ?? file.adminToken,
