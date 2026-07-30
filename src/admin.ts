@@ -4,6 +4,7 @@ import { query } from './db.js';
 import { getFunnel, recordEvent } from './funnel.js';
 import type { SendEmailBinding } from './mailer.js';
 import { OpError } from './operations.js';
+import { captureFunnelEvent } from './posthog.js';
 import { adminVerify, recordHumanReview } from './verify.js';
 
 // Seed/admin helpers. All require an admin token. STAGE 3: nonprofit-scoped
@@ -43,6 +44,8 @@ adminRoutes.post('/devs', async (c) => {
       throw err;
     }
     await recordEvent(rows[0].id, 'dev_created', { via: 'admin' });
+    // Analytics mirror — fire-and-forget; the funnel row above is the record.
+    captureFunnelEvent(c, 'dev_created', rows[0].id, { via: 'admin' });
     // Hand back a dev token so the new dev (or their runner) can authenticate.
     const token = await signDevToken(rows[0].id);
     return { ...rows[0], token };

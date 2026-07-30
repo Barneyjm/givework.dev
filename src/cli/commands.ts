@@ -7,6 +7,7 @@ import { HttpBackend, runLoop, withLease } from '../run-loop.js';
 import { ApiError, apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 import { login } from './login.js';
+import { captureCliEvent, telemetryEnabled } from './telemetry.js';
 
 // getExecutor() dispatches: a code work-unit task (spec.code) goes to the
 // sandboxed WorkUnitExecutor; everything else to the LLM path — the deterministic
@@ -265,6 +266,14 @@ export async function run(args: string[]): Promise<void> {
       stopOnError: has(args, '--stop-on-error'),
       targetSlug,
       taskId,
+      // A local execution failure never reaches the control plane as anything
+      // more informative than a release. The code is one of our own ToolError
+      // codes or the generic 'execution_error' — never the message.
+      onExecutionFailure: ({ code, consecutiveFailures }) =>
+        captureCliEvent('cli_execution_failed', {
+          code,
+          consecutive_failures: consecutiveFailures,
+        }),
     });
   } finally {
     await backend.close();
@@ -1176,4 +1185,5 @@ export function status(): void {
   console.log(`api:   ${c.apiUrl}`);
   console.log(`dev:   ${c.token ? 'logged in' : 'not logged in'}`);
   console.log(`admin: ${c.adminToken ? 'token set' : 'none'}`);
+  console.log(`usage stats: ${telemetryEnabled() ? 'on  (opt out: GIVEWORK_TELEMETRY=0)' : 'off'}`);
 }

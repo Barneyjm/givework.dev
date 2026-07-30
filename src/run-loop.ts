@@ -233,6 +233,18 @@ export interface RunLoopOptions {
    * and stop; there is nothing to retry when the task was the whole point.
    */
   taskId?: string;
+  /**
+   * Called when a task was checked out but execution failed locally, so the
+   * task is being released instead of submitted.
+   *
+   * This is the one failure the control plane cannot diagnose for itself: it
+   * sees a checkout followed by a release and cannot tell "volunteer changed
+   * their mind" from "`claude -p` is not installed". The CLI uses this to
+   * report a content-free reason (see src/cli/telemetry.ts); `src/runner.ts`
+   * and the tests leave it unset. Kept as a callback rather than an import so
+   * the shared loop stays free of CLI config and filesystem access.
+   */
+  onExecutionFailure?: (info: { code: string; consecutiveFailures: number }) => void;
 }
 
 /**
@@ -449,6 +461,10 @@ export async function runLoop(
         await backend.release(checkout.task_id).catch(() => {});
         failed.add(checkout.task_id);
         consecutiveFailures++;
+        opts.onExecutionFailure?.({
+          code: err instanceof ToolError ? err.code : 'execution_error',
+          consecutiveFailures,
+        });
         if (opts.stopOnError || consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           console.error(
             `Aborting after ${consecutiveFailures} consecutive execution failure(s) — likely a config/credential problem, not a task issue.`,

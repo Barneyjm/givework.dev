@@ -17,6 +17,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
 
+<!-- Analytics: config (env-provided token) then the shared PostHog init + CTA tracking. -->
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
+
 <link rel="stylesheet" href="/base.css" />
 <link rel="stylesheet" href="/persona.css" />
 <style>
@@ -168,6 +172,7 @@
     var b = e.target.closest('.chip');
     if (!b) return;
     filter = b.getAttribute('data-f');
+    if (window.posthog) posthog.capture('task_filter_changed', { filter: filter });
     Array.prototype.forEach.call(this.querySelectorAll('.chip'), function (c) {
       c.setAttribute('aria-pressed', String(c === b));
     });
@@ -176,7 +181,11 @@
 
   fetch('/tasks/available?limit=200', { headers: { accept: 'application/json' }, cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (d) { all = d || []; render(); })
+    .then(function (d) {
+      all = d || [];
+      render();
+      if (window.posthog) posthog.capture('open_work_viewed', { task_count: all.length });
+    })
     .catch(function () {
       document.getElementById('board').innerHTML = '<p class="board-msg">Couldn’t load the work pool just now.</p>';
     });

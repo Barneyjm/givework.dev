@@ -22,6 +22,7 @@ import {
   OpError,
   releaseTask,
 } from './operations.js';
+import { captureFunnelEvent } from './posthog.js';
 import { resultsToCsv, resultsToJson } from './results.js';
 import { submitAndVerify } from './verify.js';
 
@@ -163,6 +164,42 @@ app.get('/version', (c) => {
     ref: process.env.GIT_REF ?? 'local',
     deployed_at: deployedAtIso,
   });
+});
+
+// PostHog client config, served to both client surfaces from the same env vars
+// so the project token never appears in committed code. It is a PUBLIC ingest
+// key (every browser on the site receives it), not a secret — the reason it
+// lives in the environment is deploy-time configurability, not confidentiality.
+//
+// With POSTHOG_PROJECT_TOKEN unset both routes still answer, with an empty
+// token, and every consumer treats that as "analytics off". An unconfigured
+// deploy is a no-op, never a broken page or a failing CLI.
+function analyticsConfig(): { token: string; host: string } {
+  return {
+    token: process.env.POSTHOG_PROJECT_TOKEN ?? '',
+    host: process.env.POSTHOG_API_HOST ?? 'https://us.i.posthog.com',
+  };
+}
+
+// Browser form: sets the two window globals that site/posthog-init.js reads.
+app.get('/analytics-config.js', (_c) => {
+  const { token, host } = analyticsConfig();
+  const body = `window.__POSTHOG_TOKEN__=${JSON.stringify(token)};window.__POSTHOG_HOST__=${JSON.stringify(host)};`;
+  return new Response(body, {
+    headers: {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+    },
+  });
+});
+
+// CLI form: the runner cannot be built with the token baked in (an `npx
+// github:…` install compiles from source on the volunteer's own machine, where
+// no token exists), so it asks the control plane for it and caches the answer.
+// See src/cli/telemetry.ts.
+app.get('/analytics-config.json', (c) => {
+  c.header('cache-control', 'public, max-age=300');
+  return c.json(analyticsConfig());
 });
 
 // Liveness/readiness probe — public, unauthenticated. A nice landing for the API
@@ -431,9 +468,18 @@ app.get('/requests/:id/results', async (c) => {
 app.post('/checkout', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id']);
-    return checkoutTask(dev, body.task_id);
+    const r = await checkoutTask(dev, body.task_id);
+    // Analytics mirror — fire-and-forget AFTER the transaction committed, never
+    // inside it, and never awaited: adds zero latency and can never fail the
+    // checkout. The Postgres funnel row (src/funnel.ts) is the system of record.
+    captureFunnelEvent(c, 'checkout', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      max_cost_cents: r.max_cost_cents,
+    });
+    return r;
   })(c);
 });
 
@@ -443,7 +489,7 @@ app.post('/submit', requireDev, async (c) => {
   return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
     const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-    return submitAndVerify(
+    const r = await submitAndVerify(
       dev,
       body.task_id,
       body.result ?? null,
@@ -458,6 +504,16 @@ app.post('/submit', requireDev, async (c) => {
       },
       binding,
     );
+    // Analytics mirror — see /checkout. Booked figures only; never the result,
+    // summary or artifact content.
+    captureFunnelEvent(c, 'submit', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      outcome: r.outcome,
+      status: r.status,
+      spent_cents: r.spent_applied,
+    });
+    return r;
   })(c);
 });
 
@@ -473,9 +529,16 @@ app.post('/heartbeat', requireDev, async (c) => {
 app.post('/release', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id']);
-    return releaseTask(dev, body.task_id);
+    const r = await releaseTask(dev, body.task_id);
+    // Analytics mirror — see /checkout.
+    captureFunnelEvent(c, 'release', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      reserved_released_cents: r.reserved_released,
+    });
+    return r;
   })(c);
 });
 

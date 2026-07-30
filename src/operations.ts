@@ -395,6 +395,10 @@ export interface CheckoutResult {
   target_state: unknown;
   /** The most recent contributions to this task, newest first — what's been tried. */
   prior_contributions: ContributionSummary[];
+  /** The target's public slug (null for unslugged targets) — display/analytics context. */
+  target_slug: string | null;
+  /** The task's kind ('computational' | 'exploration' | ...) — display/analytics context. */
+  task_kind: string;
 }
 
 /** How many recent contributions to hydrate into a checkout's context. */
@@ -538,14 +542,15 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
 
     // 3. Claim the task. Guard on status='open' so a concurrent winner causes
     //    0 rows affected -> 409.
-    const claim = await client.query<TaskRow>(
+    const claim = await client.query<TaskRow & { kind: string }>(
       `UPDATE tasks
           SET status = 'locked',
               assigned_dev_id = $2,
               lock_expires_at = now() + interval '10 minutes',
               reserved_period = ${CURRENT_PERIOD}
         WHERE id = $1 AND status = 'open'
-        RETURNING id, target_id, title, spec, model, effort::text AS effort, max_cost_cents, lock_expires_at`,
+        RETURNING id, target_id, title, spec, model, effort::text AS effort, max_cost_cents,
+                  lock_expires_at, kind::text AS kind`,
       [taskId, devId],
     );
     if (claim.rowCount === 0) {
@@ -571,8 +576,8 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
     // 6. Hydrate the incoming agent's context: the target's compacted working
     //    set plus the most recent chunks tried on this task (progress and dead
     //    ends), so a bounded budget continues the work instead of restarting it.
-    const stateRes = await client.query<{ state: unknown }>(
-      `SELECT state FROM targets WHERE id = $1`,
+    const stateRes = await client.query<{ state: unknown; slug: string | null }>(
+      `SELECT state, slug FROM targets WHERE id = $1`,
       [claimed.target_id],
     );
     //    A salvaged invalid decomposition additionally hydrates its inline
@@ -617,6 +622,8 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
       lock_expires_at: claimed.lock_expires_at as string,
       target_state: stateRes.rows[0]?.state ?? {},
       prior_contributions: prior.rows,
+      target_slug: stateRes.rows[0]?.slug ?? null,
+      task_kind: claimed.kind,
     };
   });
   return result;
@@ -1352,6 +1359,10 @@ export interface SubmitResult {
    * instead of failing the submit (see boundedStateUpdate).
    */
   state_truncated?: boolean;
+  /** The target's public slug (null for unslugged targets) — display/analytics context. */
+  target_slug: string | null;
+  /** The task's kind ('computational' | 'exploration' | ...) — display/analytics context. */
+  task_kind: string;
 }
 
 /**
@@ -1450,8 +1461,14 @@ export async function submitResult(
       spec: Record<string, unknown> | null;
       sensitivity: string;
       decomposition_depth: number;
+      kind: string;
+      target_slug: string | null;
     };
-    const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity, decomposition_depth`;
+    // target_slug rides the settle's own RETURNING (a scalar subselect) so the
+    // analytics context costs no extra query on the submit path.
+    const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity,
+                       decomposition_depth, kind::text AS kind,
+                       (SELECT slug FROM targets WHERE targets.id = tasks.target_id) AS target_slug`;
     const upd = terminal
       ? await client.query<SettledRow>(
           // actual_cost_cents mirrors the BOOKED spend, which is clamped at the
@@ -1729,6 +1746,8 @@ export async function submitResult(
       ...(publishedTaskIds !== undefined ? { published_task_ids: publishedTaskIds } : {}),
       ...(costClamped ? { cost_clamped: true } : {}),
       ...(stateTruncated ? { state_truncated: true } : {}),
+      target_slug: upd.rows[0].target_slug,
+      task_kind: upd.rows[0].kind,
     };
   });
   return settled;
@@ -1786,6 +1805,10 @@ export interface ReleaseResult {
   task_id: string;
   status: 'open';
   reserved_released: number;
+  /** The target's public slug (null for unslugged targets) — display/analytics context. */
+  target_slug: string | null;
+  /** The task's kind ('computational' | 'exploration' | ...) — display/analytics context. */
+  task_kind: string;
 }
 
 /** Voluntarily abandon a locked task, returning it to the pool and freeing the reservation. */
@@ -1797,11 +1820,17 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
       throw new OpError(CONFLICT, 'not_locked', 'Task not locked to you');
     }
 
-    const upd = await client.query<{ max_cost_cents: number; target_id: string }>(
+    const upd = await client.query<{
+      max_cost_cents: number;
+      target_id: string;
+      kind: string;
+      target_slug: string | null;
+    }>(
       `UPDATE tasks
           SET status = 'open', assigned_dev_id = NULL, lock_expires_at = NULL, reserved_period = NULL
         WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
-        RETURNING max_cost_cents, target_id`,
+        RETURNING max_cost_cents, target_id, kind::text AS kind,
+                  (SELECT slug FROM targets WHERE targets.id = tasks.target_id) AS target_slug`,
       [taskId, devId],
     );
     if (upd.rowCount === 0) {
@@ -1822,7 +1851,13 @@ export async function releaseTask(devId: string, taskId: string): Promise<Releas
       [taskId, devId, upd.rows[0].target_id, -reserved],
     );
 
-    return { task_id: taskId, status: 'open', reserved_released: reserved };
+    return {
+      task_id: taskId,
+      status: 'open',
+      reserved_released: reserved,
+      target_slug: upd.rows[0].target_slug,
+      task_kind: upd.rows[0].kind,
+    };
   });
 }
 
