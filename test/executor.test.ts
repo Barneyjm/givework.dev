@@ -191,8 +191,26 @@ describe('ClaudeCliExecutor', () => {
     expect(r.result).toEqual({ response: 'pong' });
   });
 
-  it('throws on an empty result (release, do not submit a blank deliverable)', async () => {
+  it('salvages an empty result that still BILLED — the spend is booked, flagged, never vanishes', async () => {
+    // The CLI ran and charged 12¢ but handed back a blank deliverable (the
+    // --json-schema failure shape). Throwing here would release the task with
+    // the 12¢ recorded nowhere; instead it becomes a flagged crash-salvage
+    // progress contribution carrying the CLI's own (real, not estimated) cost.
     const run = cliReply({ result: '', total_cost_usd: 0.12 });
+    const r = await new ClaudeCliExecutor({ run }).execute(task);
+    expect(r.crashed).toBe(true);
+    expect(r.outcome).toBe('progress');
+    expect(r.actual_cost_cents).toBe(12);
+    expect(r.raw_usage).toMatchObject({
+      crashed: true,
+      estimated: false,
+      estimator: 'cli_total_cost_usd',
+    });
+    expect((r.result as any).reason).toContain('empty result');
+  });
+
+  it('throws on an empty result that burned nothing — clean release, no fabricated record', async () => {
+    const run = cliReply({ result: '' });
     await expect(new ClaudeCliExecutor({ run }).execute(task)).rejects.toThrow('empty result');
   });
 

@@ -96,6 +96,14 @@ export interface ExecResult {
    * timeout is not a config/credential failure.
    */
   timed_out?: boolean;
+  /**
+   * True when this result was salvaged from a run that crashed (nonzero exit),
+   * reported is_error, or returned an empty result — but had burned real tokens
+   * and left recoverable output (PROGRESS.md, streamed partials, or metered
+   * usage). Same honesty contract as timed_out: flagged, estimated where the
+   * CLI never reported a cost, and messaged truthfully by the run loop.
+   */
+  crashed?: boolean;
 }
 
 export interface Executor {
@@ -394,10 +402,30 @@ export class ExecTimeoutError extends Error {
 }
 
 /**
- * Spawn `claude` with args, feed `input` on stdin, resolve stdout. Throws on
- * non-zero exit / spawn error; a timeout kills the child and throws
- * ExecTimeoutError carrying the partial stdout (rejected from the 'close'
- * handler so anything the dying process flushed is still captured).
+ * A `claude -p` run that exited nonzero. Carries everything that reached stdout
+ * before the crash — the CLI streams events as they happen, so a run that died
+ * mid-way (OOM, CLI bug, network loss to Anthropic) may have burned real tokens
+ * whose partial output is salvageable exactly like a timeout's.
+ */
+export class ExecFailedError extends Error {
+  constructor(
+    public readonly partialOutput: string,
+    public readonly stderrOutput: string,
+    public readonly exitCode: number | null,
+    public readonly elapsedMs: number,
+  ) {
+    super(`claude -p exited ${exitCode}: ${stderrOutput.slice(0, 300)}`);
+    this.name = 'ExecFailedError';
+  }
+}
+
+/**
+ * Spawn `claude` with args, feed `input` on stdin, resolve stdout. A spawn
+ * failure (CLI missing) throws a plain Error — nothing burned, clean release. A
+ * nonzero exit throws ExecFailedError and a timeout ExecTimeoutError, BOTH
+ * carrying the accumulated stdout (rejected from the 'close' handler so
+ * anything the dying process flushed is still captured): by then tokens may be
+ * spent, and discarding stdout would discard the only record of that work.
  */
 function spawnClaude(
   args: string[],
@@ -427,7 +455,7 @@ function spawnClaude(
       clearTimeout(timer);
       if (timedOut) reject(new ExecTimeoutError(out, Date.now() - started));
       else if (code === 0) resolve(out);
-      else reject(new Error(`claude -p exited ${code}: ${err.slice(0, 300)}`));
+      else reject(new ExecFailedError(out, err, code, Date.now() - started));
     });
     // If claude fails to spawn or exits before reading stdin, writing here emits
     // EPIPE on the stream; without a listener Node crashes the whole runner. The
@@ -643,46 +671,79 @@ export class ClaudeCliExecutor implements Executor {
 
     // Fresh working directory per run — where PROGRESS.md lives, and all the
     // agent can write. Removed after the run either way (on success the JSON
-    // contract stands and the file is ignored).
+    // contract stands and the file is ignored). The whole run + salvage
+    // decision happens inside this try so PROGRESS.md is still readable on
+    // every failure path, not just the timeout.
     const workdir = await mkdtemp(join(tmpdir(), 'givework-run-'));
     let raw: string;
+    let resultText: string;
+    let data: any;
     try {
-      raw = await this.run(args, prompt, timeoutMs, { cwd: workdir });
-    } catch (err) {
-      if (err instanceof ExecTimeoutError) {
-        // The timeout killed the run. The tokens are already spent from the
-        // volunteer's subscription — salvage what accumulated into a progress
-        // contribution instead of letting the run vanish without a record.
-        // The agent-curated PROGRESS.md is the primary salvage; the stream
-        // capture inside salvageTimedOutRun is the fallback.
-        const progressFile = await readFile(join(workdir, PROGRESS_FILE), 'utf8')
+      const readProgress = () =>
+        readFile(join(workdir, PROGRESS_FILE), 'utf8')
           .then((s) => s.slice(0, PROGRESS_FILE_MAX_CHARS))
           .catch(() => null);
-        return salvageTimedOutRun(task, model, prompt, err, progressFile);
+      try {
+        raw = await this.run(args, prompt, timeoutMs, { cwd: workdir });
+      } catch (err) {
+        if (err instanceof ExecTimeoutError) {
+          // The timeout killed the run. The tokens are already spent from the
+          // volunteer's subscription — salvage what accumulated into a progress
+          // contribution instead of letting the run vanish without a record.
+          // The agent-curated PROGRESS.md is the primary salvage; the stream
+          // capture inside salvageTimedOutRun is the fallback.
+          return salvageTimedOutRun(task, model, prompt, err, await readProgress());
+        }
+        if (err instanceof ExecFailedError) {
+          // The CLI died mid-run (nonzero exit). Tokens may already be burned;
+          // salvage whatever reached stdout / PROGRESS.md exactly like a
+          // timeout. Only a run that left truly nothing (the fast-fail shape of
+          // a config/auth problem) still throws for a clean release.
+          const salvaged = salvageCrashedRun(task, model, prompt, {
+            reason: `claude -p exited ${err.exitCode}`,
+            partialOutput: err.partialOutput,
+            progressFile: await readProgress(),
+            exitCode: err.exitCode,
+            stderrTail: err.stderrOutput.slice(-2_000),
+            elapsedMs: err.elapsedMs,
+          });
+          if (salvaged) return salvaged;
+          throw new Error(
+            `claude -p exited ${err.exitCode} with nothing recoverable ` +
+              `(no stdout, no ${PROGRESS_FILE} — no tokens appear to have been metered): ` +
+              err.stderrOutput.slice(0, 300),
+          );
+        }
+        throw err;
       }
-      throw err;
+
+      const capture = parseStreamCapture(raw);
+      data = capture.final;
+      resultText = String(data?.result ?? '').trim();
+      const failure = !data
+        ? `claude -p returned no result event: ${raw.slice(0, 200)}`
+        : data.is_error
+          ? `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`
+          : !resultText
+            ? 'claude -p returned an empty result'
+            : null;
+      if (failure) {
+        // The run completed by the CLI's lights but delivered no usable work —
+        // yet it BILLED (is_error/empty runs still carry total_cost_usd). The
+        // burned spend and any partial output must not vanish: salvage them as
+        // a flagged progress contribution. Only a truly empty run (no output,
+        // no progress file, no metered usage) throws for a clean release.
+        const salvaged = salvageCrashedRun(task, model, prompt, {
+          reason: failure,
+          partialOutput: raw,
+          progressFile: await readProgress(),
+          final: data ?? null,
+        });
+        if (salvaged) return salvaged;
+        throw new Error(`${failure} — nothing recoverable to salvage; releasing the task`);
+      }
     } finally {
       await rm(workdir, { recursive: true, force: true }).catch(() => {});
-    }
-
-    const capture = parseStreamCapture(raw);
-    const data: any = capture.final;
-    if (!data) {
-      throw new Error(`claude -p returned no result event: ${raw.slice(0, 200)}`);
-    }
-    if (data.is_error) {
-      throw new Error(
-        `claude -p reported an error: ${String(data.result ?? data.error ?? 'unknown')}`,
-      );
-    }
-
-    // An empty result means the run produced no work. Throw so the runner RELEASES
-    // the task instead of submitting a blank deliverable (and charging for it).
-    const resultText = String(data.result ?? '').trim();
-    if (!resultText) {
-      throw new Error(
-        'claude -p returned an empty result — releasing rather than submitting blank output',
-      );
     }
     const result = coerceResult(resultText);
 
@@ -817,6 +878,115 @@ function salvageTimedOutRun(
       estimator: sawUsage ? 'streamed_usage' : 'char_heuristic',
       salvage_source: source,
       usage,
+    },
+  };
+}
+
+/** What a crashed / errored / empty run left behind to salvage from. */
+interface CrashedRunInfo {
+  /** Human-readable cause: exit code, is_error text, or "empty result". */
+  reason: string;
+  /** Everything that reached stdout (stream-json, possibly truncated). */
+  partialOutput: string;
+  /** PROGRESS.md contents, if the agent wrote one. */
+  progressFile: string | null;
+  exitCode?: number | null;
+  /** Tail of stderr — the crash's own account of itself. */
+  stderrTail?: string;
+  elapsedMs?: number;
+  /** A final result event that WAS parsed (is_error / empty runs) — it carries the CLI's real cost. */
+  final?: any | null;
+}
+
+/**
+ * Build the progress contribution for a run that crashed (nonzero exit),
+ * reported is_error, or returned an empty result — the F2 mirror of
+ * salvageTimedOutRun, with the same honesty rules: flagged `crashed`, cost
+ * taken from the CLI's own figure when a result event carried one (is_error
+ * runs still bill) and estimated-and-labelled otherwise, state merged under
+ * `crash_salvage` (never clobbering the accumulated frontier), and the exit
+ * code + stderr tail preserved verbatim in the artifact so the next agent and
+ * the platform can see exactly how the run died.
+ *
+ * Returns null when there is truly NOTHING recoverable — no salvage text, no
+ * metered usage, no billed result event. That is the fast-fail shape of a
+ * config/auth problem (spawn ok, immediate error, nothing burned), and the
+ * right move is the caller's clean throw-and-release, not a fabricated record.
+ */
+function salvageCrashedRun(
+  task: ExecTask,
+  model: string,
+  prompt: string,
+  info: CrashedRunInfo,
+): ExecResult | null {
+  const capture = parseStreamCapture(info.partialOutput);
+  const text = capture.text.trim();
+  const progress = info.progressFile?.trim() ?? '';
+  const salvage = progress || text;
+  const source = progress ? 'progress_file' : text ? 'stream' : 'none';
+  const sawUsage = Object.values(capture.usage).some((v) => (v ?? 0) > 0);
+  const billed = typeof info.final?.total_cost_usd === 'number';
+  if (!salvage && !sawUsage && !billed) return null;
+
+  const usage: Usage = sawUsage
+    ? capture.usage
+    : {
+        input_tokens: estTokens(prompt.length),
+        output_tokens: estTokens(text.length + progress.length),
+      };
+  const cents = billed
+    ? Math.max(1, Math.ceil(info.final.total_cost_usd * 100))
+    : Math.max(1, usageToCents(model, usage));
+
+  const summary =
+    `Attempted "${task.title}" but the run failed (${info.reason}). ` +
+    (source === 'progress_file'
+      ? `The agent's own ${PROGRESS_FILE} was salvaged and is attached for the next agent to continue from.`
+      : source === 'stream'
+        ? 'Partial output was captured and is attached for the next agent to continue from.'
+        : 'No partial output survived the failure; the burned spend is recorded so the donation is not lost.');
+
+  // Merge-don't-clobber, exactly as the timeout salvage does.
+  const prior = task.target_state;
+  const mergeable = prior == null || (typeof prior === 'object' && !Array.isArray(prior));
+  const state_update =
+    salvage && mergeable
+      ? {
+          ...(prior as Record<string, unknown> | null | undefined),
+          crash_salvage: {
+            task_id: task.task_id,
+            reason: info.reason,
+            source,
+            partial: salvage.slice(0, SALVAGE_STATE_CHARS),
+          },
+        }
+      : undefined;
+
+  return {
+    result: {
+      crashed: true,
+      reason: info.reason,
+      ...(info.exitCode !== undefined ? { exit_code: info.exitCode } : {}),
+      ...(info.stderrTail ? { stderr_tail: info.stderrTail } : {}),
+      ...(progress ? { progress_file: progress.slice(0, SALVAGE_ARTIFACT_CHARS) } : {}),
+      ...(text ? { partial_output: text.slice(0, SALVAGE_ARTIFACT_CHARS) } : {}),
+    },
+    outcome: 'progress',
+    crashed: true,
+    summary,
+    state_update,
+    actual_cost_cents: cents,
+    raw_usage: {
+      model,
+      crashed: true,
+      reason: info.reason,
+      ...(info.exitCode !== undefined ? { exit_code: info.exitCode } : {}),
+      ...(info.stderrTail ? { stderr_tail: info.stderrTail } : {}),
+      ...(info.elapsedMs !== undefined ? { elapsed_ms: info.elapsedMs } : {}),
+      estimated: !billed,
+      estimator: billed ? 'cli_total_cost_usd' : sawUsage ? 'streamed_usage' : 'char_heuristic',
+      salvage_source: source,
+      usage: billed ? (info.final?.usage ?? usage) : usage,
     },
   };
 }

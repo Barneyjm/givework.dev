@@ -1,5 +1,6 @@
 import { extractCodeContribution, publishCodeContribution } from './code-contrib.js';
 import type { ExecTask, Executor } from './executor.js';
+import { Outbox } from './outbox.js';
 
 // The transport-agnostic runner core: the Backend abstraction, the production
 // HTTP transport, and the poll→checkout→execute→submit loop. Deliberately free of
@@ -80,10 +81,31 @@ export class ToolError extends Error {
   constructor(
     public code: string,
     message: string,
+    /** HTTP status when the transport knows it — distinguishes a definitive 4xx from a retryable 5xx. */
+    public status?: number,
   ) {
     super(message);
   }
 }
+
+/**
+ * Whether a failed submit is a DEFINITIVE server rejection (retrying the same
+ * payload can never succeed: validation 4xx, or a conflict because the task is
+ * no longer locked to us) versus a transient failure (network error, timeout,
+ * 5xx) where the payload stays spooled and is replayed. When the transport
+ * carries no HTTP status (MCP / in-process), platform error codes are
+ * definitive and only the transport/internal shapes are retryable — erring
+ * toward "retryable" is safe either way, because a definitive error on replay
+ * lands the entry in dead/ instead of deleting it.
+ */
+export function isDefinitiveReject(err: unknown): boolean {
+  if (!(err instanceof ToolError)) return false; // network / timeout / abort
+  if (typeof err.status === 'number') return err.status >= 400 && err.status < 500;
+  return !/^(http_5\d\d|internal_error|tool_error)$/.test(err.code);
+}
+
+/** How long one submit attempt may hang before the spool-and-replay path takes over. */
+export const SUBMIT_TIMEOUT_MS = 60_000;
 
 // The runner drives a Backend that exposes the five dev operations. Both
 // transports normalize platform errors to ToolError(code), so the loop's
@@ -127,6 +149,10 @@ export class HttpBackend implements Backend {
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Without a timeout, a dead intermediary can hang a submit forever — the
+      // finished work idling in memory the whole time. The abort surfaces as a
+      // non-ToolError, i.e. transient: the spooled payload is kept and replayed.
+      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     });
     const text = await res.text();
     // A crashed server or an intermediary (e.g. a 502 HTML page) returns
@@ -136,13 +162,18 @@ export class HttpBackend implements Backend {
       try {
         payload = JSON.parse(text);
       } catch {
-        throw new ToolError(`http_${res.status}`, text.slice(0, 300));
+        throw new ToolError(`http_${res.status}`, text.slice(0, 300), res.status);
       }
     }
     // The REST API returns { error, message } with a 4xx for OpErrors; mirror
-    // that into ToolError(code) so the loop sees the same codes as over MCP.
+    // that into ToolError(code, message, status) so the loop sees the same
+    // codes as over MCP, plus the status the retry policy keys on.
     if (!res.ok) {
-      throw new ToolError(payload?.error ?? `http_${res.status}`, payload?.message ?? text);
+      throw new ToolError(
+        payload?.error ?? `http_${res.status}`,
+        payload?.message ?? text,
+        res.status,
+      );
     }
     // A 2xx with an empty body parses to null; hand callers {} so property access
     // doesn't throw.
@@ -240,6 +271,42 @@ export async function withLease<T>(
 }
 
 /**
+ * Replay every spooled submit still sitting in the outbox — work that finished
+ * (tokens burned) but whose submit never got a 2xx. Success deletes the entry;
+ * a definitive server rejection moves it to dead/ WITH the response attached
+ * (never a silent delete — the most common shape is a 409 not_locked after the
+ * lease lapsed, and the volunteer deserves to see what was lost and why);
+ * anything transient keeps the entry for the next pass. Never throws: a broken
+ * spool must not take the live loop down with it.
+ */
+async function replayOutbox(backend: Backend, outbox: Outbox): Promise<void> {
+  for (const entry of outbox.list()) {
+    const short = entry.args.task_id.slice(0, 8);
+    try {
+      const r = await backend.submit(entry.args);
+      outbox.delete(entry);
+      console.log(
+        `  ⇧ replayed a spooled submit for ${short} — work recorded (spent ${r.spent_applied}¢)`,
+      );
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (isDefinitiveReject(err)) {
+        const code = err instanceof ToolError ? err.code : 'rejected';
+        const dest = outbox.moveToDead(entry, { code, message: msg });
+        console.error(
+          `  ! the server rejected the spooled submit for ${short} (${code}: ${msg})` +
+            (dest ? ` — the payload is preserved at ${dest}` : ''),
+        );
+      } else {
+        console.error(
+          `  ! could not replay the spooled submit for ${short} (${msg}) — still saved; will retry`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * The volunteer's work loop: find an affordable open task, check it out, execute
  * it on the donated executor, submit the result, repeat — until the budget runs
  * out, the pool is empty, or maxTasks is reached. Returns the number of completed
@@ -267,9 +334,20 @@ export async function runLoop(
   // burning a fourth.
   let consecutiveTimeouts = 0;
   const MAX_CONSECUTIVE_TIMEOUTS = 3;
+  // Crash salvages get the same treatment as timeout salvages: they are real,
+  // booked contributions (never counted as config failures), but an unbroken
+  // run of them means the CLI itself is dying mid-run at real token cost.
+  let consecutiveCrashes = 0;
+  const MAX_CONSECUTIVE_CRASHES = 3;
+  // The disk spool for finished-but-unsubmitted work — see src/outbox.ts.
+  const outbox = new Outbox();
 
   try {
     while (done < opts.maxTasks) {
+      // Replay anything spooled from an earlier failure (this run or a previous
+      // one) BEFORE claiming new work: landing a held submit also settles its
+      // reservation, unblocking the budget the next checkout needs.
+      await replayOutbox(backend, outbox);
       // --task is a single attempt by definition: once it has been done, or has
       // failed and been released, looping again could only re-claim the same id.
       if (opts.taskId && (done > 0 || failed.has(opts.taskId))) break;
@@ -401,39 +479,72 @@ export async function runLoop(
         }
       }
 
+      // Spool the exact submit payload to disk BEFORE the network attempt: from
+      // here on the work (and the real spend behind it) survives any failure —
+      // network, 5xx, timeout, process death — as a file that replays on the
+      // next iteration or the next `givework run`.
+      const submitArgs: SubmitArgs = {
+        task_id: checkout.task_id,
+        result: exec.result,
+        actual_cost_cents: exec.actual_cost_cents,
+        raw_usage: exec.raw_usage,
+        // Forwarded when the executor produces them; otherwise a terminal submit.
+        outcome: exec.outcome,
+        summary,
+        artifact_uri: artifactUri,
+        artifact: exec.artifact,
+        state_update: exec.state_update,
+      };
+      const spooled = outbox.save(submitArgs);
       let submit: SubmitResult;
       try {
-        submit = await backend.submit({
-          task_id: checkout.task_id,
-          result: exec.result,
-          actual_cost_cents: exec.actual_cost_cents,
-          raw_usage: exec.raw_usage,
-          // Forwarded when the executor produces them; otherwise a terminal submit.
-          outcome: exec.outcome,
-          summary,
-          artifact_uri: artifactUri,
-          artifact: exec.artifact,
-          state_update: exec.state_update,
-        });
+        submit = await backend.submit(submitArgs);
       } catch (err) {
-        // A submit can legitimately fail — most often because the lease expired
-        // during a long run and expire() reclaimed the task (ToolError
-        // 'not_locked'/'task_not_open'). That's a lost unit of work, not a
-        // runner-fatal condition: log it and move on rather than aborting.
-        //
-        // CONTRACT: a hard-rejected submit rolls back atomically on the server
-        // — the task is still locked to us and our reservation still held. The
-        // RUNNER owns freeing both, so the reservation never sits stranded
-        // until lease expiry: attempt a release on every rejected submit. If
-        // the rejection was `not_locked` (the lease already expired) the
-        // release fails the same way, which is fine — there is nothing held.
+        const short = checkout.task_id.slice(0, 8);
+        const msg = (err as Error).message;
+        if (isDefinitiveReject(err)) {
+          // The server definitively rejected the payload — retrying the same
+          // bytes can never succeed, so don't: archive the payload to dead/
+          // (with the response) instead of deleting it, and free the claim.
+          //
+          // CONTRACT: a hard-rejected submit rolls back atomically on the
+          // server — the task is still locked to us and our reservation still
+          // held. The RUNNER owns freeing both, so the reservation never sits
+          // stranded until lease expiry: attempt a release on every rejected
+          // submit. If the rejection was `not_locked` (the lease already
+          // expired) the release fails the same way, which is fine — there is
+          // nothing held.
+          console.error(
+            `  ! submit rejected for ${short} (${msg}) — work not recorded; releasing the task`,
+          );
+          if (spooled) {
+            const code = err instanceof ToolError ? err.code : 'rejected';
+            const dest = outbox.moveToDead(spooled, { code, message: msg });
+            if (dest) console.error(`    the rejected payload is preserved at ${dest}`);
+          }
+          await backend.release(checkout.task_id).catch(() => {});
+          failed.add(checkout.task_id);
+          continue;
+        }
+        // Transient failure (network, timeout, 5xx): the work is spooled and
+        // the task stays claimed to us, so the replay at the top of the next
+        // iteration (or the next runner start) can land it. Do NOT release —
+        // releasing would let another runner re-claim and re-spend on work
+        // that is already done and saved.
         console.error(
-          `  ! submit rejected for ${checkout.task_id.slice(0, 8)} (${(err as Error).message}) — work not recorded; releasing the task`,
+          `  ! submit failed for ${short} (${msg}) — your work is SAVED` +
+            (spooled ? ` at ${spooled.path}` : '') +
+            ' and will be resubmitted automatically; holding the task meanwhile',
         );
-        await backend.release(checkout.task_id).catch(() => {});
+        if (!spooled) {
+          console.error(
+            '    (spooling to disk ALSO failed — if this runner exits before a retry lands, this result is lost)',
+          );
+        }
         failed.add(checkout.task_id);
         continue;
       }
+      if (spooled) outbox.delete(spooled);
       if (submit.verification?.verdict === 'failed') {
         // Verification rejected the claim and the task is back in the pool.
         // Don't pick it up again this run — we'd just re-spend on the same
@@ -470,6 +581,31 @@ export async function runLoop(
         continue;
       }
       consecutiveTimeouts = 0;
+      if (exec.crashed) {
+        // The CLI died mid-run (or returned an error/empty result) but real
+        // tokens were burned and something was recoverable: it is on the
+        // record as a flagged progress contribution, honestly costed, and the
+        // task is back in the pool with the salvaged state. Not a config
+        // failure (those leave nothing recoverable and release instead) — but
+        // an unbroken run of these means the CLI itself is sick, and each one
+        // burns real credit, so stop after three in a row and say why.
+        console.log(
+          `⚠ ${short} crashed mid-run — salvaged the partial work as a progress contribution ` +
+            `(spent ~${submit.spent_applied}¢); task returned to the pool with what was recovered`,
+        );
+        failed.add(checkout.task_id);
+        consecutiveCrashes++;
+        done++;
+        if (consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
+          console.error(
+            `Stopping after ${consecutiveCrashes} consecutive crashed runs — the CLI is dying mid-run ` +
+              `at real token cost. Check \`claude\` auth, memory, and network before running again.`,
+          );
+          break;
+        }
+        continue;
+      }
+      consecutiveCrashes = 0;
       if (submit.salvaged_decomposition) {
         // The proposal broke a validation rule, but the server salvaged it: the
         // full proposal + errors are on the record as a progress contribution

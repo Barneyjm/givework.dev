@@ -235,23 +235,40 @@ describe('decomposition proposals', () => {
     expect(out.status).toBe('submitted');
   });
 
-  it('a review task can never accept a decomposition outcome (no recursion bombs)', async () => {
+  it('a review task can never accept a decomposition outcome (no recursion bombs) — salvaged, not vaporized', async () => {
     const { res } = await proposeDecomposition();
     const reviewer = await createDev('reviewer');
     await setBudget(reviewer, 1000);
     await checkoutTask(reviewer, res.review_task_id!);
 
-    await expect(
-      submitResult(reviewer, res.review_task_id!, { decomposition: proposalOf(2, 10) }, 5, null, {
-        outcome: 'decomposition',
-      }),
-    ).rejects.toMatchObject({ code: 'review_not_decomposable' });
+    // Decomposing a review is a policy violation, but the reviewer's tokens
+    // were genuinely burned producing it — so it books as a salvaged progress
+    // contribution (violation on the record) instead of a rollback that would
+    // discard the spend. Critically, NO review-of-a-review is ever minted.
+    const sub = await submitResult(
+      reviewer,
+      res.review_task_id!,
+      { decomposition: proposalOf(2, 10) },
+      5,
+      null,
+      { outcome: 'decomposition' },
+    );
+    expect(sub.outcome).toBe('progress');
+    expect(sub.salvaged_decomposition?.validation_errors).toEqual([
+      'a decomposition-review task cannot itself be decomposed',
+    ]);
+    expect(sub.review_task_id).toBeUndefined(); // no recursion bomb
 
-    // The whole submit rolled back: no contribution booked, no spend, still locked.
-    expect((await getTaskRow(res.review_task_id!)).status).toBe('locked');
+    // Spend booked, reservation released, review task back in the pool.
+    expect((await getTaskRow(res.review_task_id!)).status).toBe('open');
     const b = await getBudgetRow(reviewer);
-    expect(Number(b.spent_cents)).toBe(0);
-    expect(Number(b.reserved_cents)).toBe(REVIEW_TASK_MAX_CENTS);
+    expect(Number(b.spent_cents)).toBe(5);
+    expect(Number(b.reserved_cents)).toBe(0);
+    // And only the original review task exists — no new review was minted.
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM tasks WHERE spec ? 'review_of'`,
+    );
+    expect(rows[0].n).toBe(1);
   });
 
   it('hard-rejects only an UNPARSEABLE proposal (no subtasks to preserve), rolled back whole', async () => {

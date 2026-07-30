@@ -216,28 +216,46 @@ describe('contributions / resumable tasks', () => {
     expect(rows[0].artifact).toEqual({ verified_range: '1e9..2e9', hits: [] });
   });
 
-  it('truncates an oversized summary and rejects an oversized state_update', async () => {
+  it('truncates an oversized summary and an oversized state_update — the submit always books', async () => {
     const dev = await createDev('dev-limits');
     const target = await createTarget();
     const task = await createTask(target, { max: 500 });
     await setBudget(dev, 2000);
     await checkoutTask(dev, task);
 
-    // Oversized state_update is refused before any spend is booked.
-    await expect(
-      submitResult(dev, task, null, 50, null, {
-        outcome: 'progress',
-        stateUpdate: { blob: 'x'.repeat(70_000) },
-      }),
-    ).rejects.toMatchObject({ code: 'bad_input' });
-
-    // The task is still ours (the reject happened before the settle), so a
-    // valid submit with a very long summary truncates rather than storing it whole.
-    await submitResult(dev, task, null, 50, null, {
+    // An oversized state_update arrives AFTER the tokens are burned, so
+    // rejecting the submit would lose both the work and the booking. It is
+    // truncated (tail kept — the newest content) with an explicit marker, and
+    // the submit succeeds.
+    const sub = await submitResult(dev, task, null, 50, null, {
       outcome: 'progress',
       summary: 'y'.repeat(5000),
+      stateUpdate: { blob: 'x'.repeat(70_000), newest: 'the frontier moved to 1e9' },
     });
+    expect(sub.state_truncated).toBe(true);
+    expect(sub.spent_applied).toBe(50); // booked, not rolled back
+
+    // The stored state carries the truncation note and preserves the tail —
+    // where the newest keys land in JSON serialization order.
+    const { rows: t } = await pool.query(`SELECT state FROM targets WHERE id = $1`, [target]);
+    expect(t[0].state.truncated).toBe(true);
+    expect(t[0].state.note).toContain('exceeded');
+    expect(t[0].state.tail).toContain('the frontier moved to 1e9');
+    expect(Buffer.byteLength(JSON.stringify(t[0].state))).toBeLessThanOrEqual(64 * 1024);
+
+    // A very long summary truncates rather than storing whole (as before).
     const rows = await contributionRows(task);
     expect((rows[0].summary as string).length).toBe(2000);
+
+    // A right-sized state_update still lands verbatim, untouched.
+    const task2 = await createTask(target, { max: 500 });
+    await checkoutTask(dev, task2);
+    const sub2 = await submitResult(dev, task2, null, 10, null, {
+      outcome: 'progress',
+      stateUpdate: { frontier: 'small and tidy' },
+    });
+    expect(sub2.state_truncated).toBeUndefined();
+    const { rows: t2 } = await pool.query(`SELECT state FROM targets WHERE id = $1`, [target]);
+    expect(t2[0].state).toEqual({ frontier: 'small and tidy' });
   });
 });

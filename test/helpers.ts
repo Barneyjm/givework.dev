@@ -1,6 +1,16 @@
 // Ensure a signing secret exists before anything in src/auth touches it.
 process.env.JWT_SECRET ??= 'test-secret-do-not-use-in-prod';
 
+// The runner's submit outbox (src/outbox.ts) defaults to ~/.givework/outbox.
+// Tests exercising runLoop must NEVER spool into (or replay from!) the real
+// user's outbox, so point it at a per-run temp dir before any test constructs
+// an Outbox. Individual outbox tests override this again with their own dir.
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+process.env.GIVEWORK_OUTBOX_DIR ??= mkdtempSync(join(tmpdir(), 'givework-outbox-test-'));
+
 import { signAdminToken, signDevToken } from '../src/auth.js';
 import { pool } from '../src/db.js';
 

@@ -1,5 +1,6 @@
 import { app } from './app.js';
 import { emailHandler } from './intake/email.js';
+import { expire } from './operations.js';
 
 // Cloudflare Workers entrypoint. The Hono app handles HTTP (`fetch`); the
 // `email` handler receives inbound mail via Cloudflare Email Routing — the
@@ -29,4 +30,15 @@ export default {
     return app.fetch(req, env as any, ctx as any);
   },
   email: emailHandler,
+  // Cron trigger (wrangler.toml [triggers]): the lease-expiry sweep. A crashed
+  // runner never calls /release; without this, its task is stranded out of the
+  // pool and its reservation blocks the volunteer's budget until someone
+  // remembers to POST /admin/expire. Thin shim by design — all the logic (and
+  // its tests) live in operations.expire().
+  scheduled: async (_controller: unknown, _env: unknown, _ctx: unknown) => {
+    const r = await expire();
+    if (r.expired_count > 0) {
+      console.log(`expire sweep: reclaimed ${r.expired_count} lapsed task(s)`);
+    }
+  },
 };
