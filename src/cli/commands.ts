@@ -3,7 +3,7 @@ import type { ExecTask, Executor } from '../executor.js';
 import { getExecutor } from '../executor.js';
 import { ONBOARDING_MAX_CENTS } from '../goldbach.js';
 import { getDecomposer } from '../intake/decompose.js';
-import { HttpBackend, runLoop, withLease } from '../run-loop.js';
+import { HttpBackend, runLoop, stubExecutorRemoteRefusal, withLease } from '../run-loop.js';
 import { ApiError, apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 import { login } from './login.js';
@@ -26,6 +26,121 @@ export function arg(args: string[], name: string): string | undefined {
   return i === -1 ? undefined : args[i + 1];
 }
 const has = (args: string[], name: string) => args.includes(name);
+
+// ---------------------------------------------------------------------------
+// Flag allowlists — every flag each subcommand actually reads, so the router
+// can reject anything else instead of silently ignoring it. Production
+// incident: `givework run --help` fell through to a full pool run because
+// unknown flags were dropped on the floor. The spec value records whether the
+// flag consumes the following token as its value.
+// ---------------------------------------------------------------------------
+
+/** Flags a subcommand accepts: flag -> whether it consumes the next token as a value. */
+export type FlagSpec = Record<string, boolean>;
+
+const RUN_FLAGS: FlagSpec = {
+  '--target': true,
+  '--task': true,
+  '--watch': false,
+  '--once': false,
+  '--max': true,
+  '--interval': true,
+  '--stop-on-error': false,
+  '--no-update-check': false,
+};
+
+/** Top-level commands. `start` forwards its args to `onboard` and `run`, so it accepts both sets. */
+export const COMMAND_FLAGS: Record<string, FlagSpec> = {
+  start: { ...RUN_FLAGS, '--budget': true },
+  onboard: { '--budget': true },
+  login: {},
+  whoami: {},
+  budget: {},
+  tasks: { '--max': true, '--sensitivity': true, '--limit': true, '--target': true },
+  stats: {},
+  history: { '--limit': true, '--before': true },
+  run: RUN_FLAGS,
+  version: {},
+  status: {},
+};
+
+export const ADMIN_FLAGS: Record<string, FlagSpec> = {
+  login: {},
+  funnel: {},
+  verify: {},
+  review: {},
+  accept: {},
+  decompose: { '--watch': false, '--interval': true },
+  budget: {},
+  task: { '--json': true },
+};
+
+const TARGET_EDIT_FLAGS: FlagSpec = { '--name': true, '--email': true, '--ein': true };
+
+/** `admin target <sub>`: `--verified`/`--listed` are bare on create but take true|false on set. */
+export const ADMIN_TARGET_FLAGS: Record<string, FlagSpec> = {
+  list: {},
+  show: {},
+  create: { ...TARGET_EDIT_FLAGS, '--verified': false, '--listed': false },
+  set: { ...TARGET_EDIT_FLAGS, '--verified': true, '--listed': true },
+  allow: {},
+  deny: {},
+  'rm-id': {},
+};
+
+export interface FlagCheck {
+  /** `--help`/`-h` was present — print usage and exit 0, never run the command. */
+  help: boolean;
+  /** Flags the invoked subcommand does not recognize, in argv order. */
+  unknown: string[];
+}
+
+/**
+ * Scan an args slice against one subcommand's flag spec. Positional tokens
+ * pass through untouched; a value-taking flag consumes its following token so
+ * a value is never mistaken for a flag.
+ */
+export function checkFlags(args: string[], spec: FlagSpec): FlagCheck {
+  const unknown: string[] = [];
+  let help = false;
+  for (let i = 0; i < args.length; i++) {
+    const tok = args[i];
+    if (tok === '--help' || tok === '-h') {
+      help = true;
+      continue;
+    }
+    if (!tok.startsWith('-')) continue;
+    if (Object.hasOwn(spec, tok)) {
+      if (spec[tok]) i++; // skip the flag's value
+      continue;
+    }
+    unknown.push(tok);
+  }
+  return { help, unknown };
+}
+
+/**
+ * Resolve the spec for the invoked (sub)command and run the scan. Returns null
+ * when the command (or admin subcommand) itself is unknown — the routers
+ * already report those with their own usage text and nonzero exit.
+ */
+export function flagCheckFor(cmd: string | undefined, args: string[]): FlagCheck | null {
+  if (cmd === undefined) return null;
+  if (cmd === 'admin') {
+    const sub = args[0];
+    if (sub === '--help' || sub === '-h') return { help: true, unknown: [] };
+    if (sub === 'target') {
+      const tsub = args[1];
+      if (tsub === '--help' || tsub === '-h') return { help: true, unknown: [] };
+      const spec = tsub !== undefined ? ADMIN_TARGET_FLAGS[tsub] : undefined;
+      return spec ? checkFlags(args.slice(2), spec) : null;
+    }
+    const spec = sub !== undefined ? ADMIN_FLAGS[sub] : undefined;
+    return spec ? checkFlags(args.slice(1), spec) : null;
+  }
+  const spec = COMMAND_FLAGS[cmd];
+  return spec ? checkFlags(args, spec) : null;
+}
 
 /** Read a single line from stdin (for pasting a token). */
 function prompt(question: string): Promise<string> {
@@ -198,9 +313,17 @@ async function warnIfStale(args: string[]): Promise<void> {
 }
 
 export async function run(args: string[]): Promise<void> {
+  const base = apiUrl();
+  // FIRST, before any network call: a stub executor (EXECUTOR unset or not
+  // 'claude') pointed at a remote control plane would submit fabricated
+  // results and book fake spend — see stubExecutorRemoteRefusal.
+  const refusal = stubExecutorRemoteRefusal(base);
+  if (refusal) {
+    console.error(refusal);
+    process.exit(1);
+  }
   await warnIfStale(args);
   const token = requireToken();
-  const base = apiUrl();
 
   // Where to point the donated credit. The default is deliberately the whole
   // pool — general chipping away, wherever work is needed — and both flags are

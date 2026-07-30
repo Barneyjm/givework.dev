@@ -78,6 +78,7 @@ describe('givework start', () => {
     api: process.env.GIVEWORK_API_URL,
     token: process.env.GIVEWORK_TOKEN,
     executor: process.env.EXECUTOR,
+    allowStubRemote: process.env.GIVEWORK_ALLOW_STUB_REMOTE,
   };
   let home: string;
   let calls: string[];
@@ -89,6 +90,9 @@ describe('givework start', () => {
     process.env.HOME = home;
     process.env.GIVEWORK_API_URL = 'http://control-plane.test';
     process.env.EXECUTOR = 'stub'; // never reach for a real `claude`
+    // The control plane above is a mocked fetch, not a real remote — opt out of
+    // the stub-vs-remote refusal so `start --watch` can reach the (mocked) loop.
+    process.env.GIVEWORK_ALLOW_STUB_REMOTE = '1';
     delete process.env.GIVEWORK_TOKEN;
     h.logins = 0;
     h.runLoopOpts = [];
@@ -158,6 +162,7 @@ describe('givework start', () => {
       ['GIVEWORK_API_URL', saved.api],
       ['GIVEWORK_TOKEN', saved.token],
       ['EXECUTOR', saved.executor],
+      ['GIVEWORK_ALLOW_STUB_REMOTE', saved.allowStubRemote],
     ] as const) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
