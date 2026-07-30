@@ -230,15 +230,46 @@ describe('actual exceeds reservation (criterion 9)', () => {
     await expect(checkoutTask(dev, next)).rejects.toMatchObject({ status: 402 });
   });
 
-  it('rejects an implausible cost rather than emptying the budget on one bad number', async () => {
+  it('clamps an implausible cost to the absurdity ceiling — booked and flagged, never discarded', async () => {
     await setBudget(dev, 100000);
     const task = await createTask(np, { max: 500 });
     await checkoutTask(dev, task);
 
-    // 10x the reservation is the ceiling; beyond that it is a bug, not a donation.
-    await expect(submitResult(dev, task, {}, 5001, null)).rejects.toMatchObject({
-      code: 'bad_input',
+    // 10x the reservation is the ceiling. Beyond that the NUMBER is a bug, but
+    // the work and (some) spend behind it are real — rejecting the submit would
+    // roll everything back and leave the biggest spends in the system recorded
+    // nowhere. So the booking clamps at the ceiling and the raw claim rides
+    // along flagged for admin review.
+    const sub = await submitResult(dev, task, {}, 5001, null);
+    expect(sub.cost_clamped).toBe(true);
+    expect(sub.spent_applied).toBe(5000); // the ceiling, not the claim
+    expect(sub.status).toBe('submitted'); // the work itself landed
+
+    const b = await getBudgetRow(dev);
+    expect(b.reserved_cents).toBe(0);
+    expect(b.spent_cents).toBe(5000);
+
+    // The raw claimed figure is preserved verbatim for audit.
+    const submitRow = (await getLedger(dev)).find((l) => l.event_type === 'submit');
+    expect(submitRow.raw_usage).toMatchObject({
+      cost_clamped: true,
+      claimed_cost_cents: 5001,
+      clamped_to_cents: 5000,
     });
+    // The task row's booked cost matches the ledger, not the absurd claim.
+    expect(Number((await getTaskRow(task)).actual_cost_cents)).toBe(5000);
+  });
+
+  it('still hard-rejects non-numeric/negative garbage costs (before any money moves)', async () => {
+    await setBudget(dev, 100000);
+    const task = await createTask(np, { max: 500 });
+    await checkoutTask(dev, task);
+
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      await expect(submitResult(dev, task, {}, bad, null)).rejects.toMatchObject({
+        code: 'bad_input',
+      });
+    }
     // the reservation survives, so the task can still be submitted honestly
     const b = await getBudgetRow(dev);
     expect(b.reserved_cents).toBe(500);

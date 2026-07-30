@@ -59,6 +59,16 @@ id = "4654b8779705462c84ca7e02440c8da6"
 [observability]
 enabled = true
 
+# The lease-expiry sweep must run on its own: a crashed or stranded runner never
+# calls /release, and without this sweep its task stays invisible to the pool
+# and its reservation blocks the volunteer's budget INDEFINITELY. Every 5
+# minutes the Worker's `scheduled` handler (src/worker.ts) runs expire(), which
+# returns lapsed-locked tasks to the pool and refunds their reservations.
+# Checkout/listing also reclaim lazily (see operations.ts), so the cron is the
+# backstop, not the only line of defense.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Outbound transactional email via Cloudflare Email Sending (the domain
 # givework.dev is onboarded there, so SPF/DKIM are aligned). The Worker sends the
 # intake confirmation + completion notifications through this binding

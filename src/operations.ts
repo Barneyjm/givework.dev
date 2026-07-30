@@ -401,11 +401,64 @@ export interface CheckoutResult {
 const PRIOR_CONTRIBUTIONS_LIMIT = 5;
 
 /**
+ * Lazy lease expiry — belt and braces beside the cron sweep. A lock whose
+ * lock_expires_at has passed is reclaimable by design, but the claim queries
+ * guard on status='open', so until expire() runs the task is invisible and its
+ * reservation blocks the volunteer's budget. The cron trigger runs expire()
+ * every 5 minutes; this makes the pool-facing reads self-healing too, so a
+ * lapsed lock never gates on the next cron tick. Best-effort: a failure here
+ * must never fail the read/checkout it piggybacks on.
+ */
+async function reclaimLapsedLocks(): Promise<void> {
+  try {
+    const { rows } = await query(
+      `SELECT 1 FROM tasks WHERE status = 'locked' AND lock_expires_at < now() LIMIT 1`,
+    );
+    if (rows.length > 0) await expire();
+  } catch (err) {
+    console.error('lazy lease-expiry sweep failed (continuing):', err);
+  }
+}
+
+/**
  * Atomically reserve budget and lock an open task to a dev for 10 minutes.
  * Order matters: lock the budget row first (serialization point), then claim
  * the task, then mutate budget, then write the ledger row.
+ *
+ * A task sitting under a LAPSED lock (status='locked' but lock_expires_at has
+ * passed) is reclaimable by design: the attempt below detects it inside its
+ * own transaction (no extra query on the happy path — the donation path's
+ * one-connection budget is load-bearing, see funnel.test), then runs the
+ * expiry sweep and retries once. Without this, a stranded task answers
+ * task_not_open until the next cron tick even though its lease is over.
  */
 export async function checkoutTask(devId: string, taskId: string): Promise<CheckoutResult> {
+  try {
+    return await attemptCheckout(devId, taskId);
+  } catch (err) {
+    if (err instanceof OpError && err.code === LAPSED_LOCK_RETRY) {
+      await expire().catch((sweepErr) => {
+        console.error('lease-expiry sweep during checkout failed (continuing):', sweepErr);
+      });
+      try {
+        return await attemptCheckout(devId, taskId);
+      } catch (retryErr) {
+        // Still lapsed-locked (the sweep failed or lost a race): surface the
+        // public shape, never the internal retry sentinel.
+        if (retryErr instanceof OpError && retryErr.code === LAPSED_LOCK_RETRY) {
+          throw new OpError(CONFLICT, 'task_not_open', 'Task already claimed or not open');
+        }
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
+
+/** Internal sentinel: the task's lock has lapsed — sweep and retry the checkout. */
+const LAPSED_LOCK_RETRY = 'task_lock_lapsed_retry';
+
+async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutResult> {
   const result = await withTransaction(async (client) => {
     // 1. Lock the dev's current-period budget row.
     const budget = await lockDevBudget(client, devId);
@@ -420,8 +473,11 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
 
     // Need the task's cost (budget gate), sensitivity (trust gate) and owner
     // (onboarding gate) up front.
-    const taskRes = await client.query<TaskRow & { onboarding_dev_id: string | null }>(
-      `SELECT id, max_cost_cents, status, sensitivity, onboarding_dev_id
+    const taskRes = await client.query<
+      TaskRow & { onboarding_dev_id: string | null; lock_lapsed: boolean }
+    >(
+      `SELECT id, max_cost_cents, status, sensitivity, onboarding_dev_id,
+              (status = 'locked' AND lock_expires_at < now()) AS lock_lapsed
          FROM tasks WHERE id = $1`,
       [taskId],
     );
@@ -443,6 +499,11 @@ export async function checkoutTask(devId: string, taskId: string): Promise<Check
     // below mask it as a misleading 402. The claim UPDATE still guards on
     // status='open', so this is just clearer up-front error reporting.
     if (task.status !== 'open') {
+      if (task.lock_lapsed) {
+        // Reclaimable, not gone: bubble the internal sentinel so checkoutTask
+        // sweeps the lapsed lock and retries this claim once.
+        throw new OpError(CONFLICT, LAPSED_LOCK_RETRY, 'Task lock has lapsed; sweep and retry');
+      }
       throw new OpError(CONFLICT, 'task_not_open', 'Task already claimed or not open');
     }
 
@@ -857,6 +918,42 @@ function boundedProposal(proposed: unknown): unknown {
 }
 
 /**
+ * Bound a state_update to MAX_STATE_BYTES by truncating instead of rejecting.
+ * By the time a submit carries an oversized state the volunteer's tokens are
+ * already burned, so failing the whole submit over a size cap would discard
+ * real work AND leave the real spend unbooked (the old behaviour). Keep the
+ * TAIL of the serialized state — new material (e.g. a salvage merged in beside
+ * accumulated state) lands at the end of the object, so the newest content is
+ * what survives — under an explicit marker, never silently.
+ */
+function boundedStateUpdate(proposed: unknown): { state: unknown; truncated: boolean } {
+  let json: string;
+  try {
+    json = JSON.stringify(proposed) ?? 'null';
+  } catch {
+    return {
+      state: { truncated: true, note: 'state_update was not JSON-serializable' },
+      truncated: true,
+    };
+  }
+  if (Buffer.byteLength(json) <= MAX_STATE_BYTES) return { state: proposed, truncated: false };
+  // Slice bytes, not chars, so a multibyte-heavy state can't sneak past the cap;
+  // the wrapper below adds ~200 bytes, so keep comfortable head-room.
+  const buf = Buffer.from(json, 'utf8');
+  const tail = buf.subarray(buf.length - (MAX_STATE_BYTES - 512)).toString('utf8');
+  return {
+    state: {
+      truncated: true,
+      note:
+        `state_update JSON exceeded ${MAX_STATE_BYTES} bytes; the tail (newest content) ` +
+        `was preserved and the rest dropped`,
+      tail,
+    },
+    truncated: true,
+  };
+}
+
+/**
  * The spec of the auto-minted peer-review task. spec.review_of is the proposal
  * contribution's id — it is both the pointer the publish step follows and the
  * marker that makes this task itself non-decomposable (no recursion bombs:
@@ -1053,6 +1150,19 @@ export interface SubmitResult {
    * proposal, or a previous approve already published it (exactly-once).
    */
   published_task_ids?: string[];
+  /**
+   * Set when the claimed actual_cost_cents exceeded the absurdity ceiling
+   * (ABSURD_COST_MULTIPLE x the reservation) and was CLAMPED to it rather than
+   * rejected: rejecting would roll the whole submit back and leave a very large
+   * real spend unrecorded. The raw claimed figure is preserved in the
+   * ledger/contribution raw_usage (`claimed_cost_cents`) for admin review.
+   */
+  cost_clamped?: boolean;
+  /**
+   * Set when an oversized state_update was truncated to fit MAX_STATE_BYTES
+   * instead of failing the submit (see boundedStateUpdate).
+   */
+  state_truncated?: boolean;
 }
 
 /**
@@ -1109,11 +1219,14 @@ export async function submitResult(
   // prompt context, so an unbounded value is both a storage-bloat and a
   // content-injection vector. Truncate the note; reject an oversized state.
   const summary = typeof opts.summary === 'string' ? opts.summary.slice(0, MAX_SUMMARY_CHARS) : '';
-  if (opts.stateUpdate !== undefined) {
-    const size = Buffer.byteLength(JSON.stringify(opts.stateUpdate) ?? 'null');
-    if (size > MAX_STATE_BYTES) {
-      throw new OpError(BAD_INPUT, 'bad_input', `state_update exceeds ${MAX_STATE_BYTES} bytes`);
-    }
+  // An oversized state is truncated, never rejected: by submit time the spend
+  // is real, and failing the submit would lose both the work and the booking.
+  let stateUpdate = opts.stateUpdate;
+  let stateTruncated = false;
+  if (stateUpdate !== undefined) {
+    const bounded = boundedStateUpdate(stateUpdate);
+    stateUpdate = bounded.state;
+    stateTruncated = bounded.truncated;
   }
   // A non-terminal contribution returns the task to the pool, so `result` has
   // nowhere to live on the task row. Preserve it as the contribution's inline
@@ -1152,9 +1265,12 @@ export async function submitResult(
     const RETURNING = `max_cost_cents, target_id, title, spec, sensitivity::text AS sensitivity, decomposition_depth`;
     const upd = terminal
       ? await client.query<SettledRow>(
+          // actual_cost_cents mirrors the BOOKED spend, which is clamped at the
+          // absurdity ceiling below — LEAST keeps the task row consistent with
+          // the ledger without needing the reservation read first.
           `UPDATE tasks
               SET status = 'submitted',
-                  actual_cost_cents = $3,
+                  actual_cost_cents = LEAST($3::bigint, max_cost_cents * ${ABSURD_COST_MULTIPLE}),
                   result = $4,
                   submitted_at = now()
             WHERE id = $1 AND assigned_dev_id = $2 AND status = 'locked'
@@ -1196,39 +1312,48 @@ export async function submitResult(
     let salvage: { proposed: unknown; errors: string[] } | null = null;
     let bookedOutcome: ContributionOutcome = outcome;
     if (outcome === 'decomposition') {
-      if (taskSpec?.review_of != null) {
-        throw new OpError(
-          BAD_INPUT,
-          'review_not_decomposable',
-          'A decomposition-review task cannot itself be decomposed',
-        );
-      }
       const rawProposal = (result as { decomposition?: unknown } | null | undefined)?.decomposition;
-      const checked = validateDecomposition(rawProposal, reserved);
-      if (checked.proposal) {
-        proposal = checked.proposal;
-      } else if (!checked.parseable) {
-        throw new OpError(BAD_INPUT, 'bad_decomposition', checked.errors[0]);
-      } else {
-        salvage = { proposed: rawProposal, errors: checked.errors };
+      if (taskSpec?.review_of != null) {
+        // Decomposing a review task is a policy violation (no recursion bombs),
+        // but the tokens that produced the proposal are already burned — so it
+        // is SALVAGED like any other near-miss: booked as progress with the
+        // violation on the record, never a rollback that discards real spend.
+        // The review task returns to the pool unreviewed; no review-of-a-review
+        // is ever minted.
+        salvage = {
+          proposed: rawProposal,
+          errors: ['a decomposition-review task cannot itself be decomposed'],
+        };
         bookedOutcome = 'progress';
+      } else {
+        const checked = validateDecomposition(rawProposal, reserved);
+        if (checked.proposal) {
+          proposal = checked.proposal;
+        } else if (!checked.parseable) {
+          throw new OpError(BAD_INPUT, 'bad_decomposition', checked.errors[0]);
+        } else {
+          salvage = { proposed: rawProposal, errors: checked.errors };
+          bookedOutcome = 'progress';
+        }
       }
     }
 
     // A modest overshoot is a real donation and gets booked. A wildly impossible
-    // number is not a donation, it's a bug or a hostile client — refuse it rather
-    // than let one submit swallow a volunteer's month.
-    if (actualCostCents > reserved * ABSURD_COST_MULTIPLE) {
-      throw new OpError(
-        BAD_INPUT,
-        'bad_input',
-        `actual_cost_cents ${actualCostCents} is implausible for a task reserved at ${reserved}`,
-      );
-    }
-    // Book what was actually spent. Over the reservation is still flagged as an
-    // overage so a consistently wrong estimate surfaces instead of hiding.
-    const spendApplied = actualCostCents;
-    const overageClamped = actualCostCents > reserved;
+    // number is a bug or a hostile client — but rejecting it here would roll the
+    // WHOLE submit back, discarding the completed work and leaving what may be
+    // the largest real spend in the system unrecorded anywhere. So it is CLAMPED
+    // to the absurdity ceiling instead: the contribution books at the ceiling,
+    // the raw claimed figure rides along flagged (`cost_clamped` +
+    // `claimed_cost_cents` in raw_usage) so an admin can review, and only
+    // non-numeric/negative garbage still hard-rejects (validated up front,
+    // before any budget mutation).
+    const absurdCeiling = reserved * ABSURD_COST_MULTIPLE;
+    const costClamped = actualCostCents > absurdCeiling;
+    // Book what was actually spent (clamped at the ceiling). Over the
+    // reservation is still flagged as an overage so a consistently wrong
+    // estimate surfaces instead of hiding.
+    const spendApplied = costClamped ? absurdCeiling : actualCostCents;
+    const overageClamped = spendApplied > reserved;
 
     // 3. Release the reservation, apply the spend — in the reservation's period.
     await client.query(
@@ -1240,14 +1365,25 @@ export async function submitResult(
     );
 
     // 4. Ledger: net delta of this event is (spend applied) - (reservation released).
-    const usagePayload = overageClamped
-      ? {
-          ...(rawUsage && typeof rawUsage === 'object' ? rawUsage : { rawUsage }),
-          overage: true,
-          reported_cost_cents: actualCostCents,
-          reserved_cents: reserved,
-        }
-      : rawUsage;
+    const usagePayload =
+      overageClamped || costClamped
+        ? {
+            ...(rawUsage && typeof rawUsage === 'object' ? rawUsage : { rawUsage }),
+            overage: true,
+            reported_cost_cents: actualCostCents,
+            reserved_cents: reserved,
+            ...(costClamped
+              ? {
+                  // The claimed figure was implausible (> ABSURD_COST_MULTIPLE x
+                  // the reservation) and was clamped, not rejected — preserved
+                  // here verbatim so an admin can audit the malfunction.
+                  cost_clamped: true,
+                  claimed_cost_cents: actualCostCents,
+                  clamped_to_cents: spendApplied,
+                }
+              : {}),
+          }
+        : rawUsage;
 
     await client.query(
       `INSERT INTO ledger (task_id, dev_id, target_id, event_type, delta_cents, raw_usage)
@@ -1342,11 +1478,12 @@ export async function submitResult(
         : [];
     }
 
-    // 6. Refresh the target's compacted working set, if the agent supplied one.
-    if (opts.stateUpdate !== undefined) {
+    // 6. Refresh the target's compacted working set, if the agent supplied one
+    //    (bounded above — an oversized update was truncated, not rejected).
+    if (stateUpdate !== undefined) {
       await client.query(`UPDATE targets SET state = $2 WHERE id = $1`, [
         targetId,
-        JSON.stringify(opts.stateUpdate),
+        JSON.stringify(stateUpdate),
       ]);
     }
 
@@ -1373,6 +1510,8 @@ export async function submitResult(
       ...(salvage ? { salvaged_decomposition: { validation_errors: salvage.errors } } : {}),
       ...(reviewTaskId !== undefined ? { review_task_id: reviewTaskId } : {}),
       ...(publishedTaskIds !== undefined ? { published_task_ids: publishedTaskIds } : {}),
+      ...(costClamped ? { cost_clamped: true } : {}),
+      ...(stateTruncated ? { state_truncated: true } : {}),
     };
   });
   return settled;
@@ -1898,6 +2037,10 @@ export async function getDevStats(devId: string): Promise<DevStats> {
 }
 
 export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRow[]> {
+  // A task under a lapsed lock belongs in this listing — reclaim before
+  // reading so stranded work is visible to the next poll, not just to the
+  // 5-minute cron sweep.
+  await reclaimLapsedLocks();
   const conditions: string[] = [`status = 'open'`];
   const params: unknown[] = [];
 
