@@ -9,10 +9,14 @@ import {
   cliVersionAtLeast,
   coerceResult,
   coerceResultDetailed,
+  DECOMPOSITION_CAP_MULTIPLE,
+  decompositionLimitsSection,
   ExecFailedError,
   type ExecTask,
   ExecTimeoutError,
   getExecutor,
+  MAX_DECOMPOSITION_CHUNKS,
+  MAX_DECOMPOSITION_SUBTASKS,
   MIN_JSON_SCHEMA_CLI_VERSION,
   modelForEffort,
   type PriorContribution,
@@ -21,6 +25,11 @@ import {
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
+import {
+  DECOMPOSITION_CAP_MULTIPLE as OPS_CAP_MULTIPLE,
+  MAX_DECOMPOSITION_CHUNKS as OPS_MAX_CHUNKS,
+  MAX_DECOMPOSITION_SUBTASKS as OPS_MAX_SUBTASKS,
+} from '../src/operations.js';
 
 const task: ExecTask = {
   task_id: 't1',
@@ -854,6 +863,54 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect((clean.result as any).echoed_continuation).toBeUndefined();
   });
 
+  it('salvaged-proposal artifact brings the computed limits along — the correction is self-sufficient', () => {
+    // The #87 salvage path: a prior attempt's invalid decomposition survives
+    // as an inline artifact with its validation errors. The next agent is told
+    // to "fix exactly those errors" — so the limits it must fix them AGAINST
+    // must be right there, computed for this task's cap.
+    const salvaged: PriorContribution = {
+      id: 9,
+      outcome: 'progress',
+      summary: 'Proposed a decomposition that failed validation (details preserved).',
+      artifact: {
+        proposed_decomposition: {
+          reason: 'sweep too big',
+          subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 300 }],
+        },
+        validation_errors: ["subtask 0: max_cost_cents 300 exceeds 2x the parent task's cap (160)"],
+      },
+      created_at: '2026-07-22T10:00:00Z',
+    };
+    const section = buildContinuationSection(null, [salvaged], 80);
+    expect(section).toContain('fix exactly those errors and resubmit');
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain("must be at most 160 (2x this task's 80¢ cap)");
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+
+    // No artifact → no limits noise in an ordinary continuation…
+    const plain = buildContinuationSection(null, [{ ...salvaged, artifact: undefined }], 80);
+    expect(plain).not.toContain('DECOMPOSITION LIMITS');
+    // …and an unknown cap can't render made-up numbers.
+    expect(buildContinuationSection(null, [salvaged])).not.toContain('DECOMPOSITION LIMITS');
+  });
+
+  it('limits + state + artifact-bearing prior still fit the continuation size cap', () => {
+    const big = { frontier: 'y'.repeat(10_000) };
+    const salvaged: PriorContribution = {
+      id: 9,
+      outcome: 'progress',
+      summary: 's'.repeat(1_000),
+      artifact: {
+        proposed_decomposition: { subtasks: [] },
+        validation_errors: ['e'.repeat(4_000)],
+      },
+    };
+    const section = buildContinuationSection(big, [salvaged], 80);
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain('Preserved artifact');
+  });
+
   it('SYSTEM_PROMPT tells the agent it cannot execute code (decompose instead)', async () => {
     const { seen, run } = capturePrompt();
     await new ClaudeCliExecutor({ run }).execute(task);
@@ -865,6 +922,58 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect(seen.input).toContain('no shell, no interpreter, and no sandbox');
     expect(seen.input).toContain('never present imagined program output as computed fact');
     expect(seen.input).toContain('the correct deliverable is a decomposition');
+  });
+});
+
+// The production wasted-spin pattern: agents priced subtasks over the 2x cap
+// because the prompt only ever stated the rule symbolically — attempt 8
+// proposed 160/200/300¢ subtasks against an 80¢ limit and discovered the rule
+// by failing validation, a full paid run per discovery. The prompt must state
+// the COMPUTED numbers for the task at hand.
+describe('decomposition limits — computed numbers reach the prompt', () => {
+  it('renders every validation-enforced limit with the concrete numbers', () => {
+    const s = decompositionLimitsSection(80);
+    expect(s).toContain(
+      "each subtask's max_cost_cents must be at most 160 (2x this task's 80¢ cap)",
+    );
+    expect(s).toContain('est_cost_cents must be <= max_cost_cents');
+    expect(s).toContain('at most 12 model-executed subtasks');
+    expect(s).toContain('up to 64 chunks per proposal');
+    expect(s).toContain('same repo+sha+entrypoint');
+    expect(s).toContain('a decomposition-review task can never itself be decomposed');
+    expect(s).toContain('split into more, smaller chunks');
+  });
+
+  it('mirrored constants stay equal to the real validation constants in operations.ts', () => {
+    // executor.ts must not import operations.ts (execution plane, no pg), so
+    // the caps are mirrored — this is the tripwire if validation ever changes.
+    expect(DECOMPOSITION_CAP_MULTIPLE).toBe(OPS_CAP_MULTIPLE);
+    expect(MAX_DECOMPOSITION_SUBTASKS).toBe(OPS_MAX_SUBTASKS);
+    expect(MAX_DECOMPOSITION_CHUNKS).toBe(OPS_MAX_CHUNKS);
+  });
+
+  it('the claude -p prompt carries the computed caps for THIS task', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 80 });
+    expect(seenInput).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(seenInput).toContain("at most 160 (2x this task's 80¢ cap)");
+    // the concrete section sits between the system prompt's rules and the task
+    expect(seenInput.indexOf('DECOMPOSITION LIMITS')).toBeGreaterThan(seenInput.indexOf('Rules:'));
+    expect(seenInput.indexOf('DECOMPOSITION LIMITS')).toBeLessThan(seenInput.indexOf('Task: '));
+  });
+
+  it('a different cap yields different computed numbers — nothing is hard-coded', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 250 });
+    expect(seenInput).toContain("at most 500 (2x this task's 250¢ cap)");
   });
 });
 

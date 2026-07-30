@@ -391,8 +391,18 @@ function stateHasContent(state: unknown): boolean {
  * bites it is the OLDEST attempts that fall off — with an explicit note, never
  * silently. State that itself exceeds its budget is truncated with a note too:
  * a next agent must never mistake a clipped frontier for the whole frontier.
+ *
+ * When a prior carries a hydrated artifact (today: a salvaged invalid
+ * decomposition, i.e. #87's "fix exactly those errors and resubmit" path) and
+ * `maxCostCents` is known, the section also states the computed decomposition
+ * limits — the correction context must be self-sufficient, not send the next
+ * agent guessing at the cap it just breached.
  */
-export function buildContinuationSection(state: unknown, priors: PriorContribution[] = []): string {
+export function buildContinuationSection(
+  state: unknown,
+  priors: PriorContribution[] = [],
+  maxCostCents?: number,
+): string {
   const hasState = stateHasContent(state);
   const hasPriors = priors.length > 0;
   if (!hasState && !hasPriors) return '';
@@ -417,6 +427,15 @@ export function buildContinuationSection(state: unknown, priors: PriorContributi
   }
 
   if (hasPriors) {
+    // A preserved artifact means a salvaged proposal awaits correction; put
+    // the computed limits next to the errors so the resubmit can be priced
+    // right without rediscovering the caps. Pushed BEFORE the priors budget
+    // below is computed, so the section's size cap still holds.
+    if (maxCostCents !== undefined && priors.some((p) => p.artifact != null)) {
+      parts.push(
+        `A preserved decomposition proposal below failed validation. When correcting it:\n${decompositionLimitsSection(maxCostCents)}`,
+      );
+    }
     const header = 'Recent attempts on this task (newest first):';
     let used = parts.join('\n\n').length + header.length + 4;
     const lines: string[] = [];
@@ -472,7 +491,11 @@ export class StubExecutor implements Executor {
     const actual = Math.round(task.max_cost_cents * 0.8);
     // Echo the continuation section exactly as the production executor would
     // frame it, so tests can assert the checkout handoff reached the executor.
-    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
+    const continuation = buildContinuationSection(
+      task.target_state,
+      task.prior_contributions,
+      task.max_cost_cents,
+    );
     return {
       result: {
         stub: true,
@@ -484,6 +507,45 @@ export class StubExecutor implements Executor {
       raw_usage: { stub: true, model: task.model, simulated_cost_cents: actual },
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Decomposition limits — the CONCRETE numbers, injected per task.
+//
+// validateDecomposition (src/operations.ts) enforces hard caps on every
+// proposal, but agents only ever saw them stated symbolically ("at most TWICE
+// this task's own cap") — and in production they kept pricing subtasks above
+// the ceiling and discovering the rule by failing validation, a full paid run
+// wasted per discovery. So the prompt now states the computed numbers for the
+// task at hand. The constants are mirrored from src/operations.ts on purpose:
+// the execution plane must not import operations.ts (it pulls pg — see
+// run-loop.ts's no-server-imports rule); a test asserts the mirrors stay equal
+// to the real validation constants.
+// ---------------------------------------------------------------------------
+
+/** Mirror of operations.DECOMPOSITION_CAP_MULTIPLE — per-subtask cap is this × the parent's. */
+export const DECOMPOSITION_CAP_MULTIPLE = 2;
+/** Mirror of operations.MAX_DECOMPOSITION_SUBTASKS — model-executed subtasks per proposal. */
+export const MAX_DECOMPOSITION_SUBTASKS = 12;
+/** Mirror of operations.MAX_DECOMPOSITION_CHUNKS — pinned-code sandbox chunks per proposal. */
+export const MAX_DECOMPOSITION_CHUNKS = 64;
+
+/**
+ * The decomposition rules validateDecomposition actually enforces, rendered
+ * with the computed numbers for ONE task (never symbolically — "at most 160"
+ * for an 80¢ task, not "at most 2x the cap"). Injected wherever the prompt
+ * offers the decomposition deliverable, so an agent never has to discover a
+ * limit by burning a run on a rejected proposal.
+ */
+export function decompositionLimitsSection(maxCostCents: number): string {
+  const perSubtaskCap = DECOMPOSITION_CAP_MULTIPLE * maxCostCents;
+  return (
+    `DECOMPOSITION LIMITS for THIS task — validation enforces these exactly; a proposal that breaks one is rejected:\n` +
+    `- each subtask's max_cost_cents must be at most ${perSubtaskCap} (${DECOMPOSITION_CAP_MULTIPLE}x this task's ${maxCostCents}¢ cap); every cost is a positive integer in cents, and est_cost_cents must be <= max_cost_cents;\n` +
+    `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; only pinned-code sandbox chunks may fan wider, up to ${MAX_DECOMPOSITION_CHUNKS} chunks per proposal, and all chunks must pin the same repo+sha+entrypoint;\n` +
+    `- a decomposition-review task can never itself be decomposed.\n` +
+    `If the work costs more than the cap allows per chunk, split into more, smaller chunks.`
+  );
 }
 
 // System prompt for the executor that calls a model (ClaudeCliExecutor).
@@ -502,7 +564,7 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
        "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
     ]
   }
-Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
+Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 /**
  * JSON Schema for the contribution envelope — the contract SYSTEM_PROMPT asks
@@ -936,9 +998,17 @@ export class ClaudeCliExecutor implements Executor {
     const budgetMinutes = Math.max(1, Math.round(timeoutMs / 60_000));
     // The accumulated frontier from checkout. Without this the handoff dies at
     // the runner's doorstep and every attempt restarts from the static spec.
-    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
+    const continuation = buildContinuationSection(
+      task.target_state,
+      task.prior_contributions,
+      task.max_cost_cents,
+    );
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
+      // The concrete numbers for the rules above — computed, never symbolic,
+      // so an agent can't price a subtask over the cap and only find out by
+      // wasting the run on a rejected proposal.
+      `${decompositionLimitsSection(task.max_cost_cents)}\n\n` +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
       (task.spec?.output_schema
         ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
