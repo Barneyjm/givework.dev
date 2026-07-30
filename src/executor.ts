@@ -581,19 +581,45 @@ export function isReviewTask(spec: ExecTask['spec'] | undefined): boolean {
  * executor stays pg-free. Review tasks minted before that field existed get
  * NO cap figures at all — an empty string here — because a wrong number in a
  * reviewer's mouth is worse than none.
+ *
+ * When the reviewed proposal ALSO shipped code (spec.code_published_at /
+ * spec.code_files, baked in at mint time), the section says so explicitly.
+ * Production incident this closes: a proposer shipped its simulation program
+ * as a code_contribution, the runner published the PR — and the reviewer
+ * rejected the proposal because "the actual proposal contains no
+ * code_contribution key — the simulation code is absent". The reviewer must be
+ * TOLD the code is there before it judges the proposal for lacking it.
  */
 export function reviewContextSection(spec: ExecTask['spec'] | undefined): string {
+  const parts: string[] = [];
   const reviewedCap = Number(
     (spec as { reviewed_max_cost_cents?: unknown } | undefined)?.reviewed_max_cost_cents,
   );
-  if (!Number.isInteger(reviewedCap) || reviewedCap <= 0) return '';
-  const perSubtaskCap = DECOMPOSITION_CAP_MULTIPLE * reviewedCap;
-  return (
-    `REVIEW CONTEXT — the caps that govern the proposal under review (NOT this review task's own budget):\n` +
-    `- you are reviewing a decomposition of a task capped at ${reviewedCap}¢; validation allows each proposed subtask's max_cost_cents to be at most ${perSubtaskCap}¢ (${DECOMPOSITION_CAP_MULTIPLE}x that ${reviewedCap}¢ cap); every cost is a positive integer in cents, and est_cost_cents must be <= max_cost_cents;\n` +
-    `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; up to ${MAX_DECOMPOSITION_CHUNKS} pinned-code sandbox chunks.\n` +
-    `Judge the proposal's pricing against THESE numbers. This review task's own cost cap does not constrain the proposal's subtasks in any way.`
-  );
+  if (Number.isInteger(reviewedCap) && reviewedCap > 0) {
+    const perSubtaskCap = DECOMPOSITION_CAP_MULTIPLE * reviewedCap;
+    parts.push(
+      `REVIEW CONTEXT — the caps that govern the proposal under review (NOT this review task's own budget):\n` +
+        `- you are reviewing a decomposition of a task capped at ${reviewedCap}¢; validation allows each proposed subtask's max_cost_cents to be at most ${perSubtaskCap}¢ (${DECOMPOSITION_CAP_MULTIPLE}x that ${reviewedCap}¢ cap); every cost is a positive integer in cents, and est_cost_cents must be <= max_cost_cents;\n` +
+        `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; up to ${MAX_DECOMPOSITION_CHUNKS} pinned-code sandbox chunks.\n` +
+        `Judge the proposal's pricing against THESE numbers. This review task's own cost cap does not constrain the proposal's subtasks in any way.`,
+    );
+  }
+  const s = spec as { code_published_at?: unknown; code_files?: unknown } | undefined;
+  const codeUri = typeof s?.code_published_at === 'string' ? s.code_published_at : null;
+  const codeFiles = Array.isArray(s?.code_files) && s.code_files.length > 0;
+  if (codeUri || codeFiles) {
+    parts.push(
+      `REVIEW CONTEXT — the proposal ships code: the same submit that carried the decomposition ` +
+        `under review also delivered a code contribution` +
+        (codeUri
+          ? `, published at ${codeUri}`
+          : ` (its pull-request publish did not complete, so the inline listing is the only copy)`) +
+        (codeFiles ? `; its files are listed in the task prompt below` : '') +
+        `. Judge the decomposition INCLUDING that code — never reject the proposal as "missing" ` +
+        `code that accompanies it.`,
+    );
+  }
+  return parts.join('\n\n');
 }
 
 // System prompt for the executor that calls a model (ClaudeCliExecutor).
@@ -617,7 +643,7 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
        "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
     ]
   }
-Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: phase 1 is ONE subtask that WRITES a small, reviewable search program — and its prompt MUST instruct that agent to emit the program as a "code_contribution" (see CODE CONTRIBUTIONS above; that is how the code lands in the contrib repo, gets human-reviewed, merged, and gains the commit SHA); phase 2 — a later decomposition, once that SHA exists — fans out the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. Never ask a model-path subtask to EXECUTE code: model runs have no shell and no interpreter, so execution happens ONLY via code-pinned CHUNK subtasks on donated CPU. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
+Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: phase 1 is ONE subtask that WRITES a small, reviewable search program — and its prompt MUST instruct that agent to emit the program as a "code_contribution" (see CODE CONTRIBUTIONS above; that is how the code lands in the contrib repo, gets human-reviewed, merged, and gains the commit SHA); phase 2 — a later decomposition, once that SHA exists — fans out the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. Never ask a model-path subtask to EXECUTE code: model runs have no shell and no interpreter, so execution happens ONLY via code-pinned CHUNK subtasks on donated CPU. If you ship code ALONGSIDE the proposal (a "code_contribution" key next to "decomposition"), it is NOT lost: the reviewer of your proposal is shown the published PR URL and the full file listing with it — so when the plan's phase 1 is the program itself, ship the program rather than merely describing it. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 /**
  * JSON Schema for the contribution envelope — the contract SYSTEM_PROMPT asks

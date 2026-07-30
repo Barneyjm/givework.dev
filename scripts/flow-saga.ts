@@ -262,6 +262,50 @@ export function correctedProposal(revision: number) {
   };
 }
 
+/** The proposal whose phase-1 program ships WITH it — the v0.3.8 incident shape. */
+export function codeShippingProposal() {
+  return {
+    reason:
+      'The sweep needs executed code; the reviewable sieve program ships with this very ' +
+      'proposal as a code_contribution.',
+    subtasks: [
+      {
+        title: 'Validate the shipped sieve against known small ranges',
+        prompt:
+          'Check the shipped sieve program (see the code contribution riding this proposal) ' +
+          'against the published verification frontier for [4, 10^4].',
+        kind: 'exploration',
+        effort: 'low',
+        est_cost_cents: 10,
+        max_cost_cents: 20,
+      },
+      {
+        title: 'Design chunk slices for the shipped sieve',
+        prompt: 'Propose disjoint range slices sized for 64-chunk fan-out of the shipped sieve.',
+        kind: 'exploration',
+        effort: 'low',
+        est_cost_cents: 10,
+        max_cost_cents: 20,
+      },
+    ],
+  };
+}
+
+/** The program that ships with codeShippingProposal — asserted inside the review spec. */
+export const SHIPPED_CODE = {
+  title: 'Range sieve harness',
+  description: 'Executable sieve the fan-out chunks will pin once merged.',
+  files: [
+    {
+      path: 'flow-rig/sieve.py',
+      content: 'def sieve(lo, hi):\n    """Two-prime check over [lo, hi]."""\n    ...\n',
+    },
+  ],
+};
+
+/** The PR URL the runner would have set as artifact_uri after publishing SHIPPED_CODE. */
+export const SHIPPED_CODE_PR = 'https://github.com/Barneyjm/givework-contrib/pull/424242';
+
 /** Terminal review submit payload (the reviewer's whole result object). */
 function reviewSubmit(taskId: string, approve: boolean, reasons: string): SubmitArgs {
   return {
@@ -475,6 +519,68 @@ export async function runStubSaga(
   );
   await a.release(cheapest.id);
   stage('S6 subtask checkout', `claimed + released ${cheapest.id.slice(0, 8)}`);
+
+  // S8 — code shipped WITH a proposal travels to the reviewer (the review-3
+  // incident: reviewer rejected a code-shipping proposal because "the actual
+  // proposal contains no code_contribution key — the simulation code is
+  // absent"). S7 is the outbox stage in runStubOutboxStage.
+  await a.checkout(fx.parentTaskId);
+  submit = await a.submit({
+    task_id: fx.parentTaskId,
+    result: {
+      decomposition: codeShippingProposal(),
+      code_contribution: SHIPPED_CODE,
+      summary: 'Split the sweep and shipped the sieve program',
+    },
+    actual_cost_cents: 6,
+    raw_usage: { rig: 'flow-saga', scripted: true },
+    outcome: 'decomposition',
+    summary: 'Split the sweep and shipped the sieve program',
+    artifact_uri: SHIPPED_CODE_PR, // what the runner sets after publishing the code PR
+  });
+  reviews = await openReviewTasks(fx.targetId);
+  expectStage(
+    reviews.length === 1,
+    'S8-code',
+    'the code-shipping proposal must mint exactly one review task',
+    { submit, reviews },
+  );
+  const codeSpec = reviews[0].spec;
+  expectStage(
+    codeSpec?.code_published_at === SHIPPED_CODE_PR &&
+      typeof codeSpec?.prompt === 'string' &&
+      codeSpec.prompt.includes(`code published at: ${SHIPPED_CODE_PR}`) &&
+      codeSpec.prompt.includes('flow-rig/sieve.py') &&
+      codeSpec.prompt.includes('def sieve(lo, hi)') &&
+      reviewContextSection(codeSpec).includes(`published at ${SHIPPED_CODE_PR}`),
+    'S8-code',
+    "the review spec must carry the shipped code — PR URL, file listing, and the executor's context note",
+    codeSpec,
+  );
+  // The inline copy is durable server-side, GitHub up or down.
+  contribs = await contributionsFor(fx.parentTaskId);
+  const codeProposal = contribs[contribs.length - 1];
+  expectStage(
+    codeProposal.outcome === 'decomposition' &&
+      String(codeProposal.artifact?.code_contribution?.files?.[0]?.content).includes('def sieve'),
+    'S8-code',
+    "the code_contribution must persist inline on the proposal contribution's artifact",
+    codeProposal,
+  );
+  const review3 = await b.checkout(reviews[0].id);
+  await b.submit(
+    reviewSubmit(review3.task_id, true, 'The split ships its reviewable program — publish.'),
+  );
+  const publishedNow = await publishedSubtasks(fx.targetId);
+  const fromCode = publishedNow.filter((t) => t.decomposed_from === codeProposal.id);
+  expectStage(
+    fromCode.length === codeShippingProposal().subtasks.length &&
+      fromCode.every((t) => t.status === 'open'),
+    'S8-code',
+    'approving the code-shipping proposal must publish its subtasks, open and claimable',
+    publishedNow,
+  );
+  stage('S8 code-to-reviewer', `review saw the code; ${fromCode.length} more subtasks published`);
 
   const bookedCents = await totalBookedCents(fx.targetId);
   await a.close();

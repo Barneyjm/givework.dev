@@ -982,6 +982,9 @@ describe('code_contribution — documented in the prompt, permitted by the envel
     expect(seenInput).toContain('emit the program as a "code_contribution"');
     // …and pins execution to the sandbox, never a model subtask
     expect(seenInput).toContain('ONLY via code-pinned CHUNK subtasks');
+    // proposers must know code shipped beside a decomposition reaches its
+    // reviewer (v0.3.8: proposals were rejected for "missing" code that shipped)
+    expect(seenInput).toContain('the reviewer of your proposal is shown the published PR URL');
   });
 
   it('a code_contribution result passes schema mode and round-trips to the extractor', async () => {
@@ -1271,6 +1274,37 @@ describe('review tasks — cap context comes from the reviewed task, never their
     expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 12.5 })).toBe('');
     expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 'forty' })).toBe('');
     expect(reviewContextSection(undefined)).toBe('');
+  });
+
+  it('reviewContextSection announces code shipped with the proposal (URL or inline-only)', () => {
+    // The v0.3.8 incident: the reviewer rejected a code-shipping proposal as
+    // "the actual proposal contains no code_contribution key". When the mint
+    // baked code fields into the spec, the section must say the code is there.
+    const withUrl = reviewContextSection({
+      review_of: 41,
+      reviewed_max_cost_cents: 40,
+      code_published_at: 'https://github.com/x/contrib/pull/9',
+      code_files: [{ path: 'sweeps/sieve.py', bytes: 128 }],
+    });
+    expect(withUrl).toContain('the proposal ships code');
+    expect(withUrl).toContain('published at https://github.com/x/contrib/pull/9');
+    expect(withUrl).toContain('listed in the task prompt below');
+    expect(withUrl).toContain('INCLUDING that code');
+    // The cap half still renders alongside, unchanged.
+    expect(withUrl).toContain('capped at 40¢');
+
+    // Publish failed → inline-only wording; a cap-less legacy spec still gets the note.
+    const inlineOnly = reviewContextSection({
+      review_of: 41,
+      code_files: [{ path: 'sweeps/sieve.py', bytes: 128 }],
+    });
+    expect(inlineOnly).toContain('publish did not complete');
+    expect(inlineOnly).not.toContain('capped at');
+
+    // No code fields → exactly the old behaviour (nothing about code).
+    expect(reviewContextSection({ review_of: 41, reviewed_max_cost_cents: 40 })).not.toContain(
+      'ships code',
+    );
   });
 
   it('isReviewTask keys on spec.review_of presence alone', () => {
