@@ -1,6 +1,6 @@
 {
   "name": "givework",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Volunteer your AI agent's spare capacity to open mathematics",
   "license": "Apache-2.0",
