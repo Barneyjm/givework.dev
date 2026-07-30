@@ -644,6 +644,75 @@ export const RESULT_JSON_SCHEMA = {
 } as const;
 
 /**
+ * Map one task-spec output_schema value — prose like
+ * `'boolean — true publishes the proposed subtasks'` or plain `'string'` — to
+ * the JSON Schema type its leading token names, or undefined when the prose
+ * doesn't start with a recognizable type (then the key ships with a
+ * description only: better unconstrained than wrongly constrained).
+ */
+function jsonTypeOfSpecField(desc: string): string | undefined {
+  const m = desc.match(/^\s*(boolean|bool|string|integer|int|number|float|object|array)\b/i);
+  if (!m) return undefined;
+  const t = m[1].toLowerCase();
+  return t === 'bool' ? 'boolean' : t === 'int' ? 'integer' : t === 'float' ? 'number' : t;
+}
+
+/**
+ * The schema actually passed to `claude -p --json-schema`: the contribution
+ * envelope, plus the TASK's own spec.output_schema keys as typed properties.
+ *
+ * Production bug this closes: review tasks declare
+ * `output_schema: { approve: 'boolean — …' }`, but only the generic envelope
+ * was enforced — so an agent returned `{"approve": "false"}` (a STRING) and
+ * the publish gate's strict `approve === true` silently never fired: spend
+ * booked, verdict lost. Typing the task's keys in the schema makes the CLI
+ * enforce the task's contract at the source.
+ *
+ * Envelope keys always win a collision — `outcome`'s enum routes the submit
+ * and must never be redefined by a task spec. Task keys are typed but never
+ * `required`: a partial-but-honest result must still validate.
+ */
+export function resultSchemaFor(outputSchema?: Record<string, string>): typeof RESULT_JSON_SCHEMA {
+  if (!outputSchema || typeof outputSchema !== 'object') return RESULT_JSON_SCHEMA;
+  const extra: Record<string, unknown> = {};
+  for (const [key, desc] of Object.entries(outputSchema)) {
+    if (key in RESULT_JSON_SCHEMA.properties || typeof desc !== 'string') continue;
+    const type = jsonTypeOfSpecField(desc);
+    extra[key] = type ? { type, description: desc } : { description: desc };
+  }
+  if (Object.keys(extra).length === 0) return RESULT_JSON_SCHEMA;
+  return {
+    ...RESULT_JSON_SCHEMA,
+    properties: { ...RESULT_JSON_SCHEMA.properties, ...extra },
+  } as typeof RESULT_JSON_SCHEMA;
+}
+
+/**
+ * Light post-parse repair for the extraction-ladder path (older CLIs never get
+ * --json-schema, so nothing enforced the task's types): a field the task's
+ * output_schema declares BOOLEAN that came back as the string "true"/"false"
+ * is coerced to the real boolean. Never a blind global coercion — only fields
+ * the spec explicitly types boolean, only the two unambiguous strings. This is
+ * exactly the `{"approve": "false"}` shape that silently defeated the strict
+ * `approve === true` publish gate.
+ */
+export function coerceBooleanFields(result: unknown, outputSchema?: Record<string, string>) {
+  if (result == null || typeof result !== 'object' || Array.isArray(result)) return result;
+  if (!outputSchema || typeof outputSchema !== 'object') return result;
+  let out = result as Record<string, unknown>;
+  for (const [key, desc] of Object.entries(outputSchema)) {
+    if (typeof desc !== 'string' || jsonTypeOfSpecField(desc) !== 'boolean') continue;
+    const v = out[key];
+    if (typeof v !== 'string') continue;
+    const s = v.trim().toLowerCase();
+    if (s !== 'true' && s !== 'false') continue;
+    if (out === result) out = { ...out }; // copy-on-write; untouched results pass through as-is
+    out[key] = s === 'true';
+  }
+  return out;
+}
+
+/**
  * Earliest CLI version --json-schema is trusted on. Chosen deliberately: the
  * headless docs pin v2.1.205 as the release where an invalid schema fails
  * LOUDLY (`Error: --json-schema is not a valid JSON Schema` + diagnostic);
@@ -1044,6 +1113,10 @@ export class ClaudeCliExecutor implements Executor {
     // composes with stream-json; a killed run simply never gets its final
     // result event, and the salvage paths work identically in both modes.
     let useJsonSchema = await this.supportsJsonSchema();
+    // Envelope + the task's own output_schema keys, typed — the task contract
+    // (e.g. a review's `approve: boolean`) is enforced at the source, not
+    // merely narrated in the prompt.
+    const jsonSchema = resultSchemaFor(task.spec?.output_schema);
     const argsFor = (withSchema: boolean) => [
       '-p',
       '--output-format',
@@ -1057,7 +1130,7 @@ export class ClaudeCliExecutor implements Executor {
       PROGRESS_ALLOWED_TOOLS,
       '--model',
       model,
-      ...(withSchema ? ['--json-schema', JSON.stringify(RESULT_JSON_SCHEMA)] : []),
+      ...(withSchema ? ['--json-schema', JSON.stringify(jsonSchema)] : []),
     ];
 
     // Fresh working directory per run — where PROGRESS.md lives, and all the
@@ -1155,10 +1228,17 @@ export class ClaudeCliExecutor implements Executor {
     // nonetheless lacks structured_output — or an older CLI that never got the
     // flag — goes through the text-extraction ladder.
     const structured = structuredOutputOf(data);
-    const { value: result, parse_mode }: CoercedResult =
+    const { value: extracted, parse_mode }: CoercedResult =
       structured !== undefined
         ? { value: structured, parse_mode: 'structured_output' }
         : coerceResultDetailed(resultText);
+    // Ladder path only: nothing enforced the task's declared types, so repair
+    // the one unambiguous slip — string "true"/"false" in a schema-declared
+    // boolean field. structured_output already came back schema-enforced.
+    const result =
+      parse_mode === 'structured_output'
+        ? extracted
+        : coerceBooleanFields(extracted, task.spec?.output_schema);
 
     // Prefer the CLI's own cost figure; fall back to token metering if absent.
     const cents =

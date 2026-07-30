@@ -7,6 +7,7 @@ import {
   ClaudeCliExecutor,
   CONTINUATION_MAX_CHARS,
   cliVersionAtLeast,
+  coerceBooleanFields,
   coerceResult,
   coerceResultDetailed,
   DECOMPOSITION_CAP_MULTIPLE,
@@ -22,6 +23,7 @@ import {
   type PriorContribution,
   parseStreamCapture,
   RESULT_JSON_SCHEMA,
+  resultSchemaFor,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
@@ -922,6 +924,111 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect(seen.input).toContain('no shell, no interpreter, and no sandbox');
     expect(seen.input).toContain('never present imagined program output as computed fact');
     expect(seen.input).toContain('the correct deliverable is a decomposition');
+  });
+});
+
+// The production silent-verdict-loss pattern: review tasks declare
+// output_schema {approve: 'boolean — …'}, but only the generic envelope was
+// enforced — a reviewer returned {"approve": "false"} (a STRING), and a string
+// "true" would slip past the strict `approve === true` publish gate: reviewer
+// spend booked, approval lost, subtasks never minted.
+describe('task output_schema — enforced natively, repaired on the ladder', () => {
+  const supported = async () => '2.1.210 (Claude Code)';
+  const reviewSchema = {
+    approve: 'boolean — true publishes the proposed subtasks; anything else publishes nothing',
+    reasons: 'string — the concrete grounds for your verdict',
+  };
+  const reviewTask: ExecTask = {
+    ...task,
+    spec: {
+      prompt: 'review this proposal',
+      review_of: 41,
+      deliverable: 'decomposition_review',
+      output_schema: reviewSchema,
+      acceptance: 'approve must be an explicit boolean',
+    },
+  };
+
+  it('resultSchemaFor types the task keys alongside the envelope', () => {
+    const schema = resultSchemaFor(reviewSchema);
+    expect((schema.properties as any).approve).toEqual({
+      type: 'boolean',
+      description: reviewSchema.approve,
+    });
+    expect((schema.properties as any).reasons.type).toBe('string');
+    // the envelope survives intact around the task keys
+    expect(schema.properties.outcome.enum).toContain('decomposition');
+    expect((schema as any).required).toBeUndefined(); // task keys never become required
+    expect(schema.additionalProperties).toBe(true);
+  });
+
+  it('envelope keys win collisions, no schema means the exact envelope, loose prose stays untyped', () => {
+    // `outcome` routes the submit — a task spec must not be able to redefine it
+    const collided = resultSchemaFor({ outcome: 'boolean — hijack attempt' });
+    expect(collided.properties.outcome.enum).toContain('decomposition');
+    // no output_schema → the untouched envelope object
+    expect(resultSchemaFor(undefined)).toBe(RESULT_JSON_SCHEMA);
+    // a description that names no recognizable type constrains nothing
+    const loose = resultSchemaFor({ verdict: 'your call, described in text' });
+    expect((loose.properties as any).verdict).toEqual({
+      description: 'your call, described in text',
+    });
+  });
+
+  it('sends the merged schema to claude -p: a review run has approve typed boolean at the source', async () => {
+    let argsSeen: string[] = [];
+    const run = async (args: string[]) => {
+      argsSeen = args;
+      return JSON.stringify({
+        result: '',
+        structured_output: { approve: true, reasons: 'well-posed, economical' },
+        total_cost_usd: 0.01,
+      });
+    };
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(reviewTask);
+    const sent = JSON.parse(argsSeen[argsSeen.indexOf('--json-schema') + 1]);
+    expect(sent.properties.approve.type).toBe('boolean');
+    expect(sent.properties.reasons.type).toBe('string');
+    expect(sent.properties.outcome.enum).toContain('decomposition'); // envelope intact
+    expect((r.result as any).approve).toBe(true); // proper boolean flows through untouched
+  });
+
+  it('ladder path: "true"/"false" strings coerce to booleans ONLY where the schema says boolean', async () => {
+    // Older CLI (no --json-schema): the exact production shape, approve as a string.
+    const run = async () =>
+      JSON.stringify({
+        result: '{"approve":"false","reasons":"padded plan","note":"true"}',
+        total_cost_usd: 0.01,
+      });
+    const r = await new ClaudeCliExecutor({ run }).execute({
+      ...reviewTask,
+      spec: { ...reviewTask.spec, output_schema: { ...reviewSchema, note: 'string — aside' } },
+    });
+    expect((r.result as any).approve).toBe(false); // declared boolean → coerced
+    expect((r.result as any).reasons).toBe('padded plan');
+    expect((r.result as any).note).toBe('true'); // declared string → left alone
+
+    const yes = async () =>
+      JSON.stringify({ result: '{"approve":" True ","reasons":"ok"}', total_cost_usd: 0.01 });
+    const r2 = await new ClaudeCliExecutor({ run: yes }).execute(reviewTask);
+    expect((r2.result as any).approve).toBe(true); // trims + case-folds, still unambiguous
+  });
+
+  it('absent output_schema → behavior unchanged, nothing is coerced', async () => {
+    const run = async () =>
+      JSON.stringify({ result: '{"approve":"false","summary":"s"}', total_cost_usd: 0.01 });
+    const bare: ExecTask = { ...task, spec: { prompt: 'p' } };
+    const r = await new ClaudeCliExecutor({ run }).execute(bare);
+    expect((r.result as any).approve).toBe('false'); // stays a string — no blind coercion
+  });
+
+  it('coerceBooleanFields is surgical: only the two unambiguous strings, only declared fields', () => {
+    expect(coerceBooleanFields({ approve: 'yes' }, reviewSchema)).toEqual({ approve: 'yes' });
+    expect(coerceBooleanFields({ approve: true }, reviewSchema)).toEqual({ approve: true });
+    expect(coerceBooleanFields('false', reviewSchema)).toBe('false'); // non-object passthrough
+    expect(coerceBooleanFields(null, reviewSchema)).toBeNull();
+    const untouched = { reasons: 'true' }; // declared string — same object back, not a copy
+    expect(coerceBooleanFields(untouched, reviewSchema)).toBe(untouched);
   });
 });
 
