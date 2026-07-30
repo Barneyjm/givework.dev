@@ -4,6 +4,7 @@ import { signDevToken } from './auth.js';
 import { withTransaction } from './db.js';
 import { recordEvent } from './funnel.js';
 import { OpError } from './operations.js';
+import { captureFunnelEvent } from './posthog.js';
 
 // Self-serve developer sign-in via GitHub OAuth (web flow). Two public routes:
 //   GET /auth/github/login    -> redirect to GitHub's consent screen
@@ -260,7 +261,11 @@ oauthRoutes.get('/github/callback', async (c) => {
     const accessToken = await exchangeCode(code, cfg);
     const user = await fetchGitHubUser(accessToken);
     // GitHub identity IS the verification (gated by a light bar) — no manual step.
-    const { id: devId } = await upsertDev(user, shouldAutoVerify(user));
+    const { id: devId, created } = await upsertDev(user, shouldAutoVerify(user));
+    // Analytics mirror of the funnel's dev_created (a genuinely new row only, like
+    // recordEvent in upsertDev) — fire-and-forget, no PII: the distinct id is a
+    // hash of the dev id, never the GitHub identity. See src/posthog.ts.
+    if (created) captureFunnelEvent(c, 'dev_created', devId, { via: 'github_oauth' });
     const token = await signDevToken(devId);
 
     // CLI mode: hand the token to the local `givework login` server over loopback.

@@ -8,6 +8,7 @@ import {
   OpError,
   setOwnBudget,
 } from './operations.js';
+import { captureFunnelEvent } from './posthog.js';
 
 // A dev's own self-serve surface. Every route is dev-token gated and acts only
 // on the caller: dev_id always comes from the token `sub`, never the body or
@@ -68,11 +69,15 @@ devRoutes.get('/me/stats', (c) => {
 devRoutes.post('/budget', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     if (body.budget_cents === undefined || body.budget_cents === null) {
       throw new OpError(400, 'bad_input', 'Missing field: budget_cents');
     }
-    return setOwnBudget(dev, Number(body.budget_cents));
+    const view = await setOwnBudget(dev, Number(body.budget_cents));
+    // Analytics mirror — fire-and-forget after the write; the Postgres funnel
+    // row (src/funnel.ts) is the system of record. See src/posthog.ts.
+    captureFunnelEvent(c, 'budget_set', dev, { budget_cents: view.budget_cents });
+    return view;
   })(c);
 });
 
@@ -82,5 +87,16 @@ devRoutes.post('/budget', async (c) => {
 // a crash instead of minting a second one. dev_id comes from the token.
 devRoutes.post('/onboarding', (c) => {
   const dev = c.get('principal').dev_id!;
-  return handle(() => mintOnboardingTask(dev))(c);
+  return handle(async () => {
+    const task = await mintOnboardingTask(dev);
+    // Only a fresh mint is a funnel step — the idempotent re-fetch is not.
+    if (!task.existing) {
+      captureFunnelEvent(c, 'onboarding_minted', dev, {
+        target_slug: task.target_slug,
+        task_kind: 'computational',
+        max_cost_cents: task.max_cost_cents,
+      });
+    }
+    return task;
+  })(c);
 });

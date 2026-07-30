@@ -22,6 +22,7 @@ import {
   OpError,
   releaseTask,
 } from './operations.js';
+import { captureFunnelEvent } from './posthog.js';
 import { resultsToCsv, resultsToJson } from './results.js';
 import { submitAndVerify } from './verify.js';
 
@@ -431,9 +432,18 @@ app.get('/requests/:id/results', async (c) => {
 app.post('/checkout', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id']);
-    return checkoutTask(dev, body.task_id);
+    const r = await checkoutTask(dev, body.task_id);
+    // Analytics mirror — fire-and-forget AFTER the transaction committed, never
+    // inside it, and never awaited: adds zero latency and can never fail the
+    // checkout. The Postgres funnel row (src/funnel.ts) is the system of record.
+    captureFunnelEvent(c, 'checkout', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      max_cost_cents: r.max_cost_cents,
+    });
+    return r;
   })(c);
 });
 
@@ -443,7 +453,7 @@ app.post('/submit', requireDev, async (c) => {
   return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
     const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-    return submitAndVerify(
+    const r = await submitAndVerify(
       dev,
       body.task_id,
       body.result ?? null,
@@ -458,6 +468,16 @@ app.post('/submit', requireDev, async (c) => {
       },
       binding,
     );
+    // Analytics mirror — see /checkout. Booked figures only; never the result,
+    // summary or artifact content.
+    captureFunnelEvent(c, 'submit', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      outcome: r.outcome,
+      status: r.status,
+      spent_cents: r.spent_applied,
+    });
+    return r;
   })(c);
 });
 
@@ -473,9 +493,16 @@ app.post('/heartbeat', requireDev, async (c) => {
 app.post('/release', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id']);
-    return releaseTask(dev, body.task_id);
+    const r = await releaseTask(dev, body.task_id);
+    // Analytics mirror — see /checkout.
+    captureFunnelEvent(c, 'release', dev, {
+      target_slug: r.target_slug,
+      task_kind: r.task_kind,
+      reserved_released_cents: r.reserved_released,
+    });
+    return r;
   })(c);
 });
 
