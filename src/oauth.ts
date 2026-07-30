@@ -4,6 +4,7 @@ import { signDevToken } from './auth.js';
 import { withTransaction } from './db.js';
 import { recordEvent } from './funnel.js';
 import { OpError } from './operations.js';
+import { captureServerEvent } from './posthog-server.js';
 
 // Self-serve developer sign-in via GitHub OAuth (web flow). Two public routes:
 //   GET /auth/github/login    -> redirect to GitHub's consent screen
@@ -200,7 +201,13 @@ export async function upsertDev(
     );
     return { id: inserted.rows[0].id, created: inserted.rows[0].created };
   });
-  if (result.created) await recordEvent(result.id, 'dev_created', { via: 'github_oauth' });
+  if (result.created) {
+    await recordEvent(result.id, 'dev_created', { via: 'github_oauth' });
+    await captureServerEvent(result.id, 'contributor_signed_up', {
+      via: 'github_oauth',
+      auto_verified: autoVerify,
+    });
+  }
   return result;
 }
 
@@ -274,7 +281,7 @@ oauthRoutes.get('/github/callback', async (c) => {
     }
 
     const apiOrigin = new URL(c.req.url).origin;
-    return c.html(tokenPage(user.login, token, apiOrigin));
+    return c.html(tokenPage(user.login, token, apiOrigin, devId));
   } catch (err) {
     // Render the HTML error page for ALL failures (a raw JSON 500 from the global
     // handler is a poor browser experience). OpErrors carry a safe, specific
@@ -331,12 +338,24 @@ function footer(): string {
 
 /** Success page: shows the dev token and copy-paste runner setup, wrapped in the
  * site chrome with clear navigation back into Givework. */
-function tokenPage(handle: string, token: string, apiOrigin: string): string {
+function tokenPage(handle: string, token: string, apiOrigin: string, devId: string): string {
+  const phToken = process.env.POSTHOG_PROJECT_TOKEN ?? '';
+  const phScript = phToken
+    ? `<script src="${escapeHtml(apiOrigin)}/analytics-config.js"></script>
+<script src="${escapeHtml(apiOrigin)}/posthog-init.js"></script>
+<script>
+(function () {
+  if (!window.posthog) return;
+  posthog.identify(${JSON.stringify(devId)}, { github_handle: ${JSON.stringify(handle)} });
+})();
+</script>`
+    : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Givework — agent connected</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E">
 <style>${CHROME_CSS}</style></head><body>
+${phScript}
 ${header()}
 <main>
 <h1>Welcome, @${escapeHtml(handle)} 👋</h1>

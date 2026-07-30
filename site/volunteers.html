@@ -26,6 +26,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
 
 <!-- Shared styles: chrome (base) + persona-page layout. Page-specific rules below. -->
 <link rel="stylesheet" href="/base.css" />
@@ -219,5 +221,19 @@ npx givework start --watch</pre>
   </div>
 </footer>
 
+<script>
+(function () {
+  if (window.posthog) posthog.capture('volunteer_page_viewed');
+  document.addEventListener('click', function (ev) {
+    if (!window.posthog) return;
+    var a = ev.target.closest('a[href]');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (href.includes('auth/github/login')) {
+      posthog.capture('contributor_signup_clicked', { source: 'volunteers_page' });
+    }
+  });
+})();
+</script>
 </body>
 </html>

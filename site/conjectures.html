@@ -26,6 +26,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
 
 <!-- Shared styles: chrome (base) + persona-page layout. Page-specific rules below. -->
 <link rel="stylesheet" href="/base.css" />
@@ -358,6 +360,7 @@
     var btn = ev.target.closest('.bf');
     if (!btn) return;
     active = btn.getAttribute('data-tag') || null;
+    if (window.posthog) posthog.capture('conjecture_board_filtered', { filter_type: 'tag', tag: active });
     renderFilters();
     renderCards();
   });
@@ -366,12 +369,30 @@
     var btn = ev.target.closest('.bf[data-status]');
     if (!btn) return;
     activeStatus = btn.getAttribute('data-status') || null;
+    if (window.posthog) posthog.capture('conjecture_board_filtered', { filter_type: 'status', status: activeStatus });
     controls.querySelectorAll('.bf[data-status]').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b === btn));
     });
     renderCards();
   });
-  sortSel.addEventListener('change', renderCards);
+  sortSel.addEventListener('change', function () {
+    if (window.posthog) posthog.capture('conjecture_board_filtered', { filter_type: 'sort', sort: sortSel.value });
+    renderCards();
+  });
+
+  // Track clicks on conjecture cards and problem proposal CTA.
+  document.addEventListener('click', function (ev) {
+    if (!window.posthog) return;
+    var a = ev.target.closest('a[href]');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (href.startsWith('/conjectures/')) {
+      var slug = href.replace('/conjectures/', '');
+      posthog.capture('conjecture_card_clicked', { slug: slug });
+    } else if (href.includes('mailto:') && href.includes('proposal')) {
+      posthog.capture('problem_proposal_clicked', { source: 'conjectures_page' });
+    }
+  });
 
   fetch('/leaderboard')
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })

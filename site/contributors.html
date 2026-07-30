@@ -16,6 +16,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
 
 <link rel="stylesheet" href="/base.css" />
 <link rel="stylesheet" href="/persona.css" />
@@ -144,11 +146,21 @@
     board.innerHTML = h;
   }
 
-  fetch('/leaderboard', { headers: { accept: 'application/json' }, cache: 'no-store' })
+  document.addEventListener(‘click’, function (ev) {
+    if (!window.posthog) return;
+    var a = ev.target.closest(‘a[href]’);
+    if (!a) return;
+    var href = a.getAttribute(‘href’) || ‘’;
+    if (href.includes(‘auth/github/login’)) {
+      posthog.capture(‘contributor_signup_clicked’, { source: ‘contributors_page’ });
+    }
+  });
+
+  fetch(‘/leaderboard’, { headers: { accept: ‘application/json’ }, cache: ‘no-store’ })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) { renderTotals(d.totals); renderBoard(d.contributors); })
     .catch(function () {
-      document.getElementById('board').innerHTML = '<p class="board-msg">Couldn’t load the leaderboard just now.</p>';
+      document.getElementById(‘board’).innerHTML = ‘<p class="board-msg">Couldn’t load the leaderboard just now.</p>’;
     });
 })();
 </script>

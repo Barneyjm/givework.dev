@@ -31,6 +31,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
 
 <!-- Shared chrome (tokens, header, footer, buttons, strip, step badges). Homepage-specific layout stays inline below. -->
 <link rel="stylesheet" href="/base.css" />
@@ -432,6 +434,24 @@ npx givework start --watch</pre>
 </footer>
 
 <script>
+// Track CTA clicks for the main contributor conversion funnel.
+(function () {
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest('a[href]');
+    if (!a || !window.posthog) return;
+    var href = a.getAttribute('href') || '';
+    if (href.includes('auth/github/login') || href.includes('contributors')) {
+      posthog.capture('contributor_signup_clicked', { source: 'homepage', href: href });
+    } else if (href === '/tasks' || href.includes('/tasks')) {
+      posthog.capture('open_work_cta_clicked', { source: 'homepage' });
+    } else if (href.includes('givework.dev/auth/github/login')) {
+      posthog.capture('contributor_signup_clicked', { source: 'homepage', href: href });
+    } else if (href.includes('mailto:') && href.includes('proposal')) {
+      posthog.capture('problem_proposal_clicked', { source: 'homepage' });
+    }
+  });
+})();
+
 // The hero's live work count. Purely additive: if this fetch fails the line
 // stays hidden and the static CTAs above it are unaffected.
 (function () {

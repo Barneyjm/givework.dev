@@ -22,6 +22,7 @@ import {
   OpError,
   releaseTask,
 } from './operations.js';
+import { captureServerEvent } from './posthog-server.js';
 import { resultsToCsv, resultsToJson } from './results.js';
 import { submitAndVerify } from './verify.js';
 
@@ -162,6 +163,21 @@ app.get('/version', (c) => {
     commit: process.env.GIT_SHA ?? 'dev',
     ref: process.env.GIT_REF ?? 'local',
     deployed_at: deployedAtIso,
+  });
+});
+
+// PostHog client config served to the static site. Reads the PostHog project
+// token and host from environment variables so they never appear in committed
+// code. The script sets two window globals; posthog-init.js reads them.
+app.get('/analytics-config.js', (_c) => {
+  const token = process.env.POSTHOG_PROJECT_TOKEN ?? '';
+  const host = process.env.POSTHOG_API_HOST ?? 'https://us.i.posthog.com';
+  const body = `window.__POSTHOG_TOKEN__=${JSON.stringify(token)};window.__POSTHOG_HOST__=${JSON.stringify(host)};`;
+  return new Response(body, {
+    headers: {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=300',
+    },
   });
 });
 
@@ -431,9 +447,14 @@ app.get('/requests/:id/results', async (c) => {
 app.post('/checkout', requireDev, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const dev = c.get('principal').dev_id!;
-  return handle(() => {
+  return handle(async () => {
     requireFields(body, ['task_id']);
-    return checkoutTask(dev, body.task_id);
+    const result = await checkoutTask(dev, body.task_id);
+    await captureServerEvent(dev, 'task_checked_out', {
+      task_id: body.task_id,
+      max_cost_cents: result.max_cost_cents,
+    });
+    return result;
   })(c);
 });
 
@@ -443,7 +464,7 @@ app.post('/submit', requireDev, async (c) => {
   return handle(async () => {
     requireFields(body, ['task_id', 'actual_cost_cents']);
     const binding = (c.env as { SEND_EMAIL?: SendEmailBinding } | undefined)?.SEND_EMAIL;
-    return submitAndVerify(
+    const result = await submitAndVerify(
       dev,
       body.task_id,
       body.result ?? null,
@@ -458,6 +479,14 @@ app.post('/submit', requireDev, async (c) => {
       },
       binding,
     );
+    await captureServerEvent(dev, 'contribution_submitted', {
+      task_id: body.task_id,
+      actual_cost_cents: Number(body.actual_cost_cents),
+      outcome: body.outcome ?? null,
+      task_status: result.status,
+      verdict: result.verification?.verdict ?? null,
+    });
+    return result;
   })(c);
 });
 
