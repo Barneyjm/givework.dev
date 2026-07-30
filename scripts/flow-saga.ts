@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { signDevToken } from '../src/auth.js';
 import { pool } from '../src/db.js';
-import { buildContinuationSection, type Executor } from '../src/executor.js';
+import { buildContinuationSection, type Executor, reviewContextSection } from '../src/executor.js';
 import {
   type Backend,
   HttpBackend,
@@ -385,6 +385,15 @@ export async function runStubSaga(
       reviews[0].spec?.output_schema?.approve?.startsWith('boolean'),
     'S3-mint',
     'the review task must show the reviewer the actual proposal and a boolean contract',
+    reviews[0].spec,
+  );
+  // v0.3.6's incident: the reviewer must be shown the REVIEWED task's caps
+  // (baked in at mint time), never its own 15¢ budget rendered as a limit.
+  expectStage(
+    reviews[0].spec?.reviewed_max_cost_cents === FLOW_PARENT_CAP_CENTS &&
+      reviewContextSection(reviews[0].spec).includes(`at most ${FLOW_SUBTASK_CEILING_CENTS}¢`),
+    'S3-mint',
+    "the review spec must bake the REVIEWED task's cap and render the parent's ceiling (v0.3.6)",
     reviews[0].spec,
   );
   stage('S3 review mint', `review task ${reviews[0].id.slice(0, 8)} minted`);

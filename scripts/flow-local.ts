@@ -232,6 +232,26 @@ async function runClaudeSaga(): Promise<void> {
         `Model run #${modelRuns}: real \`claude -p\` REVIEWS ${review.id.slice(0, 8)} (dev B)`,
       );
       await runLoop(backendB, executor, { ...loopOpts, taskId: review.id });
+      // v0.3.6's incident, asserted on the wire: the reviewer's prompt must
+      // state the REVIEWED task's caps (REVIEW CONTEXT) and must NOT render a
+      // decomposition limit from the review task's own 15¢ budget.
+      const reviewPrompt = lastPromptFor(review.id);
+      if (reviewPrompt) {
+        if (
+          !reviewPrompt.includes('REVIEW CONTEXT') ||
+          !reviewPrompt.includes(`at most ${FLOW_SUBTASK_CEILING_CENTS}¢`) ||
+          reviewPrompt.includes('DECOMPOSITION LIMITS for THIS task')
+        ) {
+          fail(
+            'prompt-review-caps',
+            "the review prompt did not state the REVIEWED task's caps (v0.3.6 regression)",
+            { promptLogPath },
+          );
+        }
+        console.log(
+          `   ✓ review prompt stated the REVIEWED task's caps (ceiling ${FLOW_SUBTASK_CEILING_CENTS}¢)`,
+        );
+      }
       const stillOpen = (await openReviewTasks(fx.targetId)).some((r) => r.id === review.id);
       const ev = readPromptLog()
         .filter((e) => e.event === 'result' && e.task_id === review.id)
