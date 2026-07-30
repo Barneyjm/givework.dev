@@ -2,6 +2,10 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  MAX_FILE_BYTES as MAX_CODE_FILE_BYTES,
+  MAX_FILES as MAX_CODE_FILES,
+} from './code-contrib.js';
 import { extractWorkUnit, WorkUnitExecutor } from './workunit.js';
 
 // Task execution — the actual donated work. The donation is each monthly
@@ -391,8 +395,18 @@ function stateHasContent(state: unknown): boolean {
  * bites it is the OLDEST attempts that fall off — with an explicit note, never
  * silently. State that itself exceeds its budget is truncated with a note too:
  * a next agent must never mistake a clipped frontier for the whole frontier.
+ *
+ * When a prior carries a hydrated artifact (today: a salvaged invalid
+ * decomposition, i.e. #87's "fix exactly those errors and resubmit" path) and
+ * `maxCostCents` is known, the section also states the computed decomposition
+ * limits — the correction context must be self-sufficient, not send the next
+ * agent guessing at the cap it just breached.
  */
-export function buildContinuationSection(state: unknown, priors: PriorContribution[] = []): string {
+export function buildContinuationSection(
+  state: unknown,
+  priors: PriorContribution[] = [],
+  maxCostCents?: number,
+): string {
   const hasState = stateHasContent(state);
   const hasPriors = priors.length > 0;
   if (!hasState && !hasPriors) return '';
@@ -417,6 +431,16 @@ export function buildContinuationSection(state: unknown, priors: PriorContributi
   }
 
   if (hasPriors) {
+    // A preserved artifact means a prior proposal awaits correction (it failed
+    // validation, or a peer review rejected it); put the computed limits next
+    // to the feedback so the resubmit can be priced right without
+    // rediscovering the caps. Pushed BEFORE the priors budget below is
+    // computed, so the section's size cap still holds.
+    if (maxCostCents !== undefined && priors.some((p) => p.artifact != null)) {
+      parts.push(
+        `A prior decomposition proposal below was not accepted (validation errors or a peer review's rejection). When correcting and resubmitting it:\n${decompositionLimitsSection(maxCostCents)}`,
+      );
+    }
     const header = 'Recent attempts on this task (newest first):';
     let used = parts.join('\n\n').length + header.length + 4;
     const lines: string[] = [];
@@ -440,9 +464,15 @@ export function buildContinuationSection(state: unknown, priors: PriorContributi
         if (json.length > CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS) {
           json = `${json.slice(0, CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS)}…[artifact truncated]`;
         }
-        line +=
-          `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
-          `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
+        const reviewRejected =
+          typeof p.artifact === 'object' &&
+          (p.artifact as { review_rejected?: unknown }).review_rejected === true;
+        line += reviewRejected
+          ? `\n  Preserved artifact from this attempt (a peer reviewer REJECTED the previous ` +
+            `decomposition proposal for the reasons recorded here — address them and resubmit ` +
+            `an improved proposal, or take a different approach entirely):\n  ${json}`
+          : `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
+            `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
       }
       // Reserve room for the truncation note so appending it can never push
       // the section past the cap (the pre-note budget must leave it space).
@@ -472,7 +502,11 @@ export class StubExecutor implements Executor {
     const actual = Math.round(task.max_cost_cents * 0.8);
     // Echo the continuation section exactly as the production executor would
     // frame it, so tests can assert the checkout handoff reached the executor.
-    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
+    const continuation = buildContinuationSection(
+      task.target_state,
+      task.prior_contributions,
+      task.max_cost_cents,
+    );
     return {
       result: {
         stub: true,
@@ -486,12 +520,56 @@ export class StubExecutor implements Executor {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Decomposition limits — the CONCRETE numbers, injected per task.
+//
+// validateDecomposition (src/operations.ts) enforces hard caps on every
+// proposal, but agents only ever saw them stated symbolically ("at most TWICE
+// this task's own cap") — and in production they kept pricing subtasks above
+// the ceiling and discovering the rule by failing validation, a full paid run
+// wasted per discovery. So the prompt now states the computed numbers for the
+// task at hand. The constants are mirrored from src/operations.ts on purpose:
+// the execution plane must not import operations.ts (it pulls pg — see
+// run-loop.ts's no-server-imports rule); a test asserts the mirrors stay equal
+// to the real validation constants.
+// ---------------------------------------------------------------------------
+
+/** Mirror of operations.DECOMPOSITION_CAP_MULTIPLE — per-subtask cap is this × the parent's. */
+export const DECOMPOSITION_CAP_MULTIPLE = 2;
+/** Mirror of operations.MAX_DECOMPOSITION_SUBTASKS — model-executed subtasks per proposal. */
+export const MAX_DECOMPOSITION_SUBTASKS = 12;
+/** Mirror of operations.MAX_DECOMPOSITION_CHUNKS — pinned-code sandbox chunks per proposal. */
+export const MAX_DECOMPOSITION_CHUNKS = 64;
+
+/**
+ * The decomposition rules validateDecomposition actually enforces, rendered
+ * with the computed numbers for ONE task (never symbolically — "at most 160"
+ * for an 80¢ task, not "at most 2x the cap"). Injected wherever the prompt
+ * offers the decomposition deliverable, so an agent never has to discover a
+ * limit by burning a run on a rejected proposal.
+ */
+export function decompositionLimitsSection(maxCostCents: number): string {
+  const perSubtaskCap = DECOMPOSITION_CAP_MULTIPLE * maxCostCents;
+  return (
+    `DECOMPOSITION LIMITS for THIS task — validation enforces these exactly; a proposal that breaks one is rejected:\n` +
+    `- each subtask's max_cost_cents must be at most ${perSubtaskCap} (${DECOMPOSITION_CAP_MULTIPLE}x this task's ${maxCostCents}¢ cap); every cost is a positive integer in cents, and est_cost_cents must be <= max_cost_cents;\n` +
+    `- at most ${MAX_DECOMPOSITION_SUBTASKS} model-executed subtasks per proposal; only pinned-code sandbox chunks may fan wider, up to ${MAX_DECOMPOSITION_CHUNKS} chunks per proposal, and all chunks must pin the same repo+sha+entrypoint;\n` +
+    `- a decomposition-review task can never itself be decomposed.\n` +
+    `If the work costs more than the cap allows per chunk, split into more, smaller chunks.`
+  );
+}
+
 // System prompt for the executor that calls a model (ClaudeCliExecutor).
 const SYSTEM_PROMPT = `You are a task executor for Givework, where developers donate AI compute to open mathematics.
 You are given one concrete task — an attack on an open problem — with a prompt, an expected output shape, and acceptance criteria.
 Do the task rigorously and respond with ONLY a single JSON object matching the requested output shape — no preamble, no markdown fences, no commentary. If no shape is given, return {"output": <your result as a string>}.
 
 EXECUTION REALITY — you cannot run code. This run has no shell, no interpreter, and no sandbox; the only tool you have is writing the PROGRESS.md file described below. Reasoning, analysis, proof work, and mathematics you can and should do directly. But if the deliverable requires EXECUTING code (running a search, a simulation, a numerical sweep), do not pretend to run it and never present imagined program output as computed fact — the correct deliverable is a decomposition (below): one subtask that WRITES a small, reviewable program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then sandboxed chunk subtasks that actually execute it on donated CPU.
+
+CODE CONTRIBUTIONS — when the task's deliverable is code (a search program, a verifier, a tool), add a "code_contribution" key to your JSON object:
+  "code_contribution": {"title": "<short title>", "description": "<what it does and how to check it>",
+    "files": [{"path": "<repo-relative path>", "content": "<full file content>"}]}
+The platform opens a pull request with exactly these files to the public contrib repo; the PR URL becomes your contribution's artifact, and the code also stays inline in your result so nothing is lost. Hard limits: at most ${MAX_CODE_FILES} files, each at most ${MAX_CODE_FILE_BYTES} bytes (~${Math.round(MAX_CODE_FILE_BYTES / 1000)} KB); every path must be a safe repo-relative path (no leading "/", no "..", no ".git" or ".github" segments) — a contribution breaking any of these is dropped. You cannot run this code (see EXECUTION REALITY): say what it should do, never what it "did".
 
 BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap and a bounded time window. If, once you understand the task, it plainly cannot fit its budget or window, do NOT grind at it until the clock kills the run — that burns the donation and records nothing. The CORRECT deliverable for an oversized task is a decomposition proposal. Add a "decomposition" key to your JSON object:
   "decomposition": {
@@ -502,7 +580,7 @@ BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap
        "effort": "low|medium|high", "est_cost_cents": <int>, "max_cost_cents": <int>}
     ]
   }
-Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: ONE subtask that writes a small, reviewable search program (a code contribution that gets human-reviewed, merged, and pinned by commit SHA), then — in a later decomposition, once that SHA exists — the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
+Rules: at most 12 subtasks that will invoke a model; every cost is integer cents; each subtask's max_cost_cents is at most TWICE this task's own cap — the DECOMPOSITION LIMITS section below restates these with the concrete numbers computed for THIS task; obey those numbers. Sandbox CHUNK subtasks — those additionally carrying "code": {"repo", "sha" (full 40-hex commit), "entrypoint", "input"} pinning one ALREADY-MERGED program that every chunk shares (only "input" varies per slice) — run on donated CPU, not tokens, and may fan wider: up to 64 chunks per proposal. Where the work is a large mechanical search (the Lander–Parkin pattern that disproved Euler's sum-of-powers conjecture), prefer the two-phase shape: phase 1 is ONE subtask that WRITES a small, reviewable search program — and its prompt MUST instruct that agent to emit the program as a "code_contribution" (see CODE CONTRIBUTIONS above; that is how the code lands in the contrib repo, gets human-reviewed, merged, and gains the commit SHA); phase 2 — a later decomposition, once that SHA exists — fans out the cheap sandboxed chunk subtasks that each run the pinned program over one slice of the search space. Never ask a model-path subtask to EXECUTE code: model runs have no shell and no interpreter, so execution happens ONLY via code-pinned CHUNK subtasks on donated CPU. A good plan IS a successful contribution: another volunteer's agent reviews it, and if approved the subtasks are published as real tasks. Grinding to timeout is the failure mode; the plan is success.`;
 
 /**
  * JSON Schema for the contribution envelope — the contract SYSTEM_PROMPT asks
@@ -535,6 +613,24 @@ export const RESULT_JSON_SCHEMA = {
       description: "Replacement for the target's compacted working set",
     },
     artifact_uri: { type: 'string' },
+    code_contribution: {
+      type: 'object',
+      description:
+        'Deliverable code — the runner opens a PR with these files to the public contrib repo (see CODE CONTRIBUTIONS in the system prompt)',
+      properties: {
+        title: { type: 'string' },
+        description: { type: 'string' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, content: { type: 'string' } },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      required: ['title', 'files'],
+    },
     decomposition: {
       type: 'object',
       description: 'The task-exceeds-budget deliverable (see BUDGET HONESTY in the system prompt)',
@@ -580,6 +676,75 @@ export const RESULT_JSON_SCHEMA = {
   },
   additionalProperties: true,
 } as const;
+
+/**
+ * Map one task-spec output_schema value — prose like
+ * `'boolean — true publishes the proposed subtasks'` or plain `'string'` — to
+ * the JSON Schema type its leading token names, or undefined when the prose
+ * doesn't start with a recognizable type (then the key ships with a
+ * description only: better unconstrained than wrongly constrained).
+ */
+function jsonTypeOfSpecField(desc: string): string | undefined {
+  const m = desc.match(/^\s*(boolean|bool|string|integer|int|number|float|object|array)\b/i);
+  if (!m) return undefined;
+  const t = m[1].toLowerCase();
+  return t === 'bool' ? 'boolean' : t === 'int' ? 'integer' : t === 'float' ? 'number' : t;
+}
+
+/**
+ * The schema actually passed to `claude -p --json-schema`: the contribution
+ * envelope, plus the TASK's own spec.output_schema keys as typed properties.
+ *
+ * Production bug this closes: review tasks declare
+ * `output_schema: { approve: 'boolean — …' }`, but only the generic envelope
+ * was enforced — so an agent returned `{"approve": "false"}` (a STRING) and
+ * the publish gate's strict `approve === true` silently never fired: spend
+ * booked, verdict lost. Typing the task's keys in the schema makes the CLI
+ * enforce the task's contract at the source.
+ *
+ * Envelope keys always win a collision — `outcome`'s enum routes the submit
+ * and must never be redefined by a task spec. Task keys are typed but never
+ * `required`: a partial-but-honest result must still validate.
+ */
+export function resultSchemaFor(outputSchema?: Record<string, string>): typeof RESULT_JSON_SCHEMA {
+  if (!outputSchema || typeof outputSchema !== 'object') return RESULT_JSON_SCHEMA;
+  const extra: Record<string, unknown> = {};
+  for (const [key, desc] of Object.entries(outputSchema)) {
+    if (key in RESULT_JSON_SCHEMA.properties || typeof desc !== 'string') continue;
+    const type = jsonTypeOfSpecField(desc);
+    extra[key] = type ? { type, description: desc } : { description: desc };
+  }
+  if (Object.keys(extra).length === 0) return RESULT_JSON_SCHEMA;
+  return {
+    ...RESULT_JSON_SCHEMA,
+    properties: { ...RESULT_JSON_SCHEMA.properties, ...extra },
+  } as typeof RESULT_JSON_SCHEMA;
+}
+
+/**
+ * Light post-parse repair for the extraction-ladder path (older CLIs never get
+ * --json-schema, so nothing enforced the task's types): a field the task's
+ * output_schema declares BOOLEAN that came back as the string "true"/"false"
+ * is coerced to the real boolean. Never a blind global coercion — only fields
+ * the spec explicitly types boolean, only the two unambiguous strings. This is
+ * exactly the `{"approve": "false"}` shape that silently defeated the strict
+ * `approve === true` publish gate.
+ */
+export function coerceBooleanFields(result: unknown, outputSchema?: Record<string, string>) {
+  if (result == null || typeof result !== 'object' || Array.isArray(result)) return result;
+  if (!outputSchema || typeof outputSchema !== 'object') return result;
+  let out = result as Record<string, unknown>;
+  for (const [key, desc] of Object.entries(outputSchema)) {
+    if (typeof desc !== 'string' || jsonTypeOfSpecField(desc) !== 'boolean') continue;
+    const v = out[key];
+    if (typeof v !== 'string') continue;
+    const s = v.trim().toLowerCase();
+    if (s !== 'true' && s !== 'false') continue;
+    if (out === result) out = { ...out }; // copy-on-write; untouched results pass through as-is
+    out[key] = s === 'true';
+  }
+  return out;
+}
 
 /**
  * Earliest CLI version --json-schema is trusted on. Chosen deliberately: the
@@ -936,9 +1101,17 @@ export class ClaudeCliExecutor implements Executor {
     const budgetMinutes = Math.max(1, Math.round(timeoutMs / 60_000));
     // The accumulated frontier from checkout. Without this the handoff dies at
     // the runner's doorstep and every attempt restarts from the static spec.
-    const continuation = buildContinuationSection(task.target_state, task.prior_contributions);
+    const continuation = buildContinuationSection(
+      task.target_state,
+      task.prior_contributions,
+      task.max_cost_cents,
+    );
     const prompt =
       `${SYSTEM_PROMPT}\n\n` +
+      // The concrete numbers for the rules above — computed, never symbolic,
+      // so an agent can't price a subtask over the cap and only find out by
+      // wasting the run on a rejected proposal.
+      `${decompositionLimitsSection(task.max_cost_cents)}\n\n` +
       `Task: ${task.title}\n\n${task.spec?.prompt ?? ''}\n` +
       (task.spec?.output_schema
         ? `Output shape (JSON keys → type): ${JSON.stringify(task.spec.output_schema)}\n`
@@ -974,6 +1147,10 @@ export class ClaudeCliExecutor implements Executor {
     // composes with stream-json; a killed run simply never gets its final
     // result event, and the salvage paths work identically in both modes.
     let useJsonSchema = await this.supportsJsonSchema();
+    // Envelope + the task's own output_schema keys, typed — the task contract
+    // (e.g. a review's `approve: boolean`) is enforced at the source, not
+    // merely narrated in the prompt.
+    const jsonSchema = resultSchemaFor(task.spec?.output_schema);
     const argsFor = (withSchema: boolean) => [
       '-p',
       '--output-format',
@@ -987,7 +1164,7 @@ export class ClaudeCliExecutor implements Executor {
       PROGRESS_ALLOWED_TOOLS,
       '--model',
       model,
-      ...(withSchema ? ['--json-schema', JSON.stringify(RESULT_JSON_SCHEMA)] : []),
+      ...(withSchema ? ['--json-schema', JSON.stringify(jsonSchema)] : []),
     ];
 
     // Fresh working directory per run — where PROGRESS.md lives, and all the
@@ -1085,10 +1262,17 @@ export class ClaudeCliExecutor implements Executor {
     // nonetheless lacks structured_output — or an older CLI that never got the
     // flag — goes through the text-extraction ladder.
     const structured = structuredOutputOf(data);
-    const { value: result, parse_mode }: CoercedResult =
+    const { value: extracted, parse_mode }: CoercedResult =
       structured !== undefined
         ? { value: structured, parse_mode: 'structured_output' }
         : coerceResultDetailed(resultText);
+    // Ladder path only: nothing enforced the task's declared types, so repair
+    // the one unambiguous slip — string "true"/"false" in a schema-declared
+    // boolean field. structured_output already came back schema-enforced.
+    const result =
+      parse_mode === 'structured_output'
+        ? extracted
+        : coerceBooleanFields(extracted, task.spec?.output_schema);
 
     // Prefer the CLI's own cost figure; fall back to token metering if absent.
     const cents =

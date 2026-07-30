@@ -3,24 +3,40 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_FILE_BYTES as CC_MAX_FILE_BYTES,
+  MAX_FILES as CC_MAX_FILES,
+  extractCodeContribution,
+} from '../src/code-contrib.js';
+import {
   buildContinuationSection,
   ClaudeCliExecutor,
   CONTINUATION_MAX_CHARS,
   cliVersionAtLeast,
+  coerceBooleanFields,
   coerceResult,
   coerceResultDetailed,
+  DECOMPOSITION_CAP_MULTIPLE,
+  decompositionLimitsSection,
   ExecFailedError,
   type ExecTask,
   ExecTimeoutError,
   getExecutor,
+  MAX_DECOMPOSITION_CHUNKS,
+  MAX_DECOMPOSITION_SUBTASKS,
   MIN_JSON_SCHEMA_CLI_VERSION,
   modelForEffort,
   type PriorContribution,
   parseStreamCapture,
   RESULT_JSON_SCHEMA,
+  resultSchemaFor,
   StubExecutor,
   usageToCents,
 } from '../src/executor.js';
+import {
+  DECOMPOSITION_CAP_MULTIPLE as OPS_CAP_MULTIPLE,
+  MAX_DECOMPOSITION_CHUNKS as OPS_MAX_CHUNKS,
+  MAX_DECOMPOSITION_SUBTASKS as OPS_MAX_SUBTASKS,
+} from '../src/operations.js';
 
 const task: ExecTask = {
   task_id: 't1',
@@ -854,6 +870,79 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect((clean.result as any).echoed_continuation).toBeUndefined();
   });
 
+  it('salvaged-proposal artifact brings the computed limits along — the correction is self-sufficient', () => {
+    // The #87 salvage path: a prior attempt's invalid decomposition survives
+    // as an inline artifact with its validation errors. The next agent is told
+    // to "fix exactly those errors" — so the limits it must fix them AGAINST
+    // must be right there, computed for this task's cap.
+    const salvaged: PriorContribution = {
+      id: 9,
+      outcome: 'progress',
+      summary: 'Proposed a decomposition that failed validation (details preserved).',
+      artifact: {
+        proposed_decomposition: {
+          reason: 'sweep too big',
+          subtasks: [{ title: 'a', prompt: 'p', max_cost_cents: 300 }],
+        },
+        validation_errors: ["subtask 0: max_cost_cents 300 exceeds 2x the parent task's cap (160)"],
+      },
+      created_at: '2026-07-22T10:00:00Z',
+    };
+    const section = buildContinuationSection(null, [salvaged], 80);
+    expect(section).toContain('fix exactly those errors and resubmit');
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain("must be at most 160 (2x this task's 80¢ cap)");
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+
+    // No artifact → no limits noise in an ordinary continuation…
+    const plain = buildContinuationSection(null, [{ ...salvaged, artifact: undefined }], 80);
+    expect(plain).not.toContain('DECOMPOSITION LIMITS');
+    // …and an unknown cap can't render made-up numbers.
+    expect(buildContinuationSection(null, [salvaged])).not.toContain('DECOMPOSITION LIMITS');
+  });
+
+  it('a review_rejected artifact renders the address-and-resubmit instruction, with the limits', () => {
+    // The peer-review rejection channel: the reviewer's reasons are appended
+    // to the PARENT task as a zero-cost contribution (see operations.ts
+    // recordReviewRejection), and the continuation must tell the next agent to
+    // address the verdict — not to "fix validation errors" that don't exist.
+    const rejected: PriorContribution = {
+      id: 12,
+      outcome: 'progress',
+      summary: 'Peer review REJECTED the proposed decomposition: caps padded 10x',
+      artifact: {
+        review_rejected: true,
+        reasons: 'caps padded 10x beyond the stated work',
+        reviewed_contribution: 7,
+      },
+      created_at: '2026-07-23T00:00:00Z',
+    };
+    const section = buildContinuationSection(null, [rejected], 80);
+    expect(section).toContain('peer reviewer REJECTED the previous decomposition proposal');
+    expect(section).toContain('address them and resubmit');
+    expect(section).toContain('caps padded 10x beyond the stated work');
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain("at most 160 (2x this task's 80¢ cap)");
+    expect(section).not.toContain('fix exactly those errors'); // that instruction is validation-salvage's
+  });
+
+  it('limits + state + artifact-bearing prior still fit the continuation size cap', () => {
+    const big = { frontier: 'y'.repeat(10_000) };
+    const salvaged: PriorContribution = {
+      id: 9,
+      outcome: 'progress',
+      summary: 's'.repeat(1_000),
+      artifact: {
+        proposed_decomposition: { subtasks: [] },
+        validation_errors: ['e'.repeat(4_000)],
+      },
+    };
+    const section = buildContinuationSection(big, [salvaged], 80);
+    expect(section.length).toBeLessThanOrEqual(CONTINUATION_MAX_CHARS);
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(section).toContain('Preserved artifact');
+  });
+
   it('SYSTEM_PROMPT tells the agent it cannot execute code (decompose instead)', async () => {
     const { seen, run } = capturePrompt();
     await new ClaudeCliExecutor({ run }).execute(task);
@@ -865,6 +954,216 @@ describe('continuation context — checkout state reaches the model prompt', () 
     expect(seen.input).toContain('no shell, no interpreter, and no sandbox');
     expect(seen.input).toContain('never present imagined program output as computed fact');
     expect(seen.input).toContain('the correct deliverable is a decomposition');
+  });
+});
+
+// code_contribution existed in code (code-contrib.ts → PR to the contrib repo)
+// but the prompt never mentioned it — no agent could use the path, and the
+// two-phase decomposition story had no phase 1. The prompt must document the
+// field with the REAL extraction limits, and the envelope must permit it.
+describe('code_contribution — documented in the prompt, permitted by the envelope', () => {
+  it('the claude -p prompt documents code_contribution with the real extraction limits', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute(task);
+    expect(seenInput).toContain('CODE CONTRIBUTIONS');
+    expect(seenInput).toContain('"code_contribution"');
+    // the numbers are the ones extractCodeContribution actually enforces
+    expect(seenInput).toContain(
+      `at most ${CC_MAX_FILES} files, each at most ${CC_MAX_FILE_BYTES} bytes`,
+    );
+    expect(seenInput).toContain('no ".git" or ".github" segments');
+    // the two-phase decomposition guidance wires phase 1 to the field…
+    expect(seenInput).toContain('emit the program as a "code_contribution"');
+    // …and pins execution to the sandbox, never a model subtask
+    expect(seenInput).toContain('ONLY via code-pinned CHUNK subtasks');
+  });
+
+  it('a code_contribution result passes schema mode and round-trips to the extractor', async () => {
+    const body = {
+      summary: 'wrote the sweep program',
+      code_contribution: {
+        title: 'Goldbach sweep program',
+        description: 'sieve + verify per slice',
+        files: [{ path: 'sweeps/goldbach.py', content: 'print("hi")\n' }],
+      },
+    };
+    const run = async () =>
+      JSON.stringify({ result: '', structured_output: body, total_cost_usd: 0.01 });
+    const r = await new ClaudeCliExecutor({
+      run,
+      probeVersion: async () => '2.1.210 (Claude Code)',
+    }).execute(task);
+    expect(r.result).toEqual(body);
+    // the runner-side extractor accepts exactly what the schema shaped
+    expect(extractCodeContribution(r.result)).toEqual(body.code_contribution);
+
+    // the envelope names the field explicitly, with the file shape…
+    const cc = (RESULT_JSON_SCHEMA.properties as any).code_contribution;
+    expect(cc.required).toEqual(['title', 'files']);
+    expect(cc.properties.files.items.required).toEqual(['path', 'content']);
+    // …while the top level stays permissive (partial results must validate)
+    expect((RESULT_JSON_SCHEMA as any).required).toBeUndefined();
+  });
+});
+
+// The production silent-verdict-loss pattern: review tasks declare
+// output_schema {approve: 'boolean — …'}, but only the generic envelope was
+// enforced — a reviewer returned {"approve": "false"} (a STRING), and a string
+// "true" would slip past the strict `approve === true` publish gate: reviewer
+// spend booked, approval lost, subtasks never minted.
+describe('task output_schema — enforced natively, repaired on the ladder', () => {
+  const supported = async () => '2.1.210 (Claude Code)';
+  const reviewSchema = {
+    approve: 'boolean — true publishes the proposed subtasks; anything else publishes nothing',
+    reasons: 'string — the concrete grounds for your verdict',
+  };
+  const reviewTask: ExecTask = {
+    ...task,
+    spec: {
+      prompt: 'review this proposal',
+      review_of: 41,
+      deliverable: 'decomposition_review',
+      output_schema: reviewSchema,
+      acceptance: 'approve must be an explicit boolean',
+    },
+  };
+
+  it('resultSchemaFor types the task keys alongside the envelope', () => {
+    const schema = resultSchemaFor(reviewSchema);
+    expect((schema.properties as any).approve).toEqual({
+      type: 'boolean',
+      description: reviewSchema.approve,
+    });
+    expect((schema.properties as any).reasons.type).toBe('string');
+    // the envelope survives intact around the task keys
+    expect(schema.properties.outcome.enum).toContain('decomposition');
+    expect((schema as any).required).toBeUndefined(); // task keys never become required
+    expect(schema.additionalProperties).toBe(true);
+  });
+
+  it('envelope keys win collisions, no schema means the exact envelope, loose prose stays untyped', () => {
+    // `outcome` routes the submit — a task spec must not be able to redefine it
+    const collided = resultSchemaFor({ outcome: 'boolean — hijack attempt' });
+    expect(collided.properties.outcome.enum).toContain('decomposition');
+    // no output_schema → the untouched envelope object
+    expect(resultSchemaFor(undefined)).toBe(RESULT_JSON_SCHEMA);
+    // a description that names no recognizable type constrains nothing
+    const loose = resultSchemaFor({ verdict: 'your call, described in text' });
+    expect((loose.properties as any).verdict).toEqual({
+      description: 'your call, described in text',
+    });
+  });
+
+  it('sends the merged schema to claude -p: a review run has approve typed boolean at the source', async () => {
+    let argsSeen: string[] = [];
+    const run = async (args: string[]) => {
+      argsSeen = args;
+      return JSON.stringify({
+        result: '',
+        structured_output: { approve: true, reasons: 'well-posed, economical' },
+        total_cost_usd: 0.01,
+      });
+    };
+    const r = await new ClaudeCliExecutor({ run, probeVersion: supported }).execute(reviewTask);
+    const sent = JSON.parse(argsSeen[argsSeen.indexOf('--json-schema') + 1]);
+    expect(sent.properties.approve.type).toBe('boolean');
+    expect(sent.properties.reasons.type).toBe('string');
+    expect(sent.properties.outcome.enum).toContain('decomposition'); // envelope intact
+    expect((r.result as any).approve).toBe(true); // proper boolean flows through untouched
+  });
+
+  it('ladder path: "true"/"false" strings coerce to booleans ONLY where the schema says boolean', async () => {
+    // Older CLI (no --json-schema): the exact production shape, approve as a string.
+    const run = async () =>
+      JSON.stringify({
+        result: '{"approve":"false","reasons":"padded plan","note":"true"}',
+        total_cost_usd: 0.01,
+      });
+    const r = await new ClaudeCliExecutor({ run }).execute({
+      ...reviewTask,
+      spec: { ...reviewTask.spec, output_schema: { ...reviewSchema, note: 'string — aside' } },
+    });
+    expect((r.result as any).approve).toBe(false); // declared boolean → coerced
+    expect((r.result as any).reasons).toBe('padded plan');
+    expect((r.result as any).note).toBe('true'); // declared string → left alone
+
+    const yes = async () =>
+      JSON.stringify({ result: '{"approve":" True ","reasons":"ok"}', total_cost_usd: 0.01 });
+    const r2 = await new ClaudeCliExecutor({ run: yes }).execute(reviewTask);
+    expect((r2.result as any).approve).toBe(true); // trims + case-folds, still unambiguous
+  });
+
+  it('absent output_schema → behavior unchanged, nothing is coerced', async () => {
+    const run = async () =>
+      JSON.stringify({ result: '{"approve":"false","summary":"s"}', total_cost_usd: 0.01 });
+    const bare: ExecTask = { ...task, spec: { prompt: 'p' } };
+    const r = await new ClaudeCliExecutor({ run }).execute(bare);
+    expect((r.result as any).approve).toBe('false'); // stays a string — no blind coercion
+  });
+
+  it('coerceBooleanFields is surgical: only the two unambiguous strings, only declared fields', () => {
+    expect(coerceBooleanFields({ approve: 'yes' }, reviewSchema)).toEqual({ approve: 'yes' });
+    expect(coerceBooleanFields({ approve: true }, reviewSchema)).toEqual({ approve: true });
+    expect(coerceBooleanFields('false', reviewSchema)).toBe('false'); // non-object passthrough
+    expect(coerceBooleanFields(null, reviewSchema)).toBeNull();
+    const untouched = { reasons: 'true' }; // declared string — same object back, not a copy
+    expect(coerceBooleanFields(untouched, reviewSchema)).toBe(untouched);
+  });
+});
+
+// The production wasted-spin pattern: agents priced subtasks over the 2x cap
+// because the prompt only ever stated the rule symbolically — attempt 8
+// proposed 160/200/300¢ subtasks against an 80¢ limit and discovered the rule
+// by failing validation, a full paid run per discovery. The prompt must state
+// the COMPUTED numbers for the task at hand.
+describe('decomposition limits — computed numbers reach the prompt', () => {
+  it('renders every validation-enforced limit with the concrete numbers', () => {
+    const s = decompositionLimitsSection(80);
+    expect(s).toContain(
+      "each subtask's max_cost_cents must be at most 160 (2x this task's 80¢ cap)",
+    );
+    expect(s).toContain('est_cost_cents must be <= max_cost_cents');
+    expect(s).toContain('at most 12 model-executed subtasks');
+    expect(s).toContain('up to 64 chunks per proposal');
+    expect(s).toContain('same repo+sha+entrypoint');
+    expect(s).toContain('a decomposition-review task can never itself be decomposed');
+    expect(s).toContain('split into more, smaller chunks');
+  });
+
+  it('mirrored constants stay equal to the real validation constants in operations.ts', () => {
+    // executor.ts must not import operations.ts (execution plane, no pg), so
+    // the caps are mirrored — this is the tripwire if validation ever changes.
+    expect(DECOMPOSITION_CAP_MULTIPLE).toBe(OPS_CAP_MULTIPLE);
+    expect(MAX_DECOMPOSITION_SUBTASKS).toBe(OPS_MAX_SUBTASKS);
+    expect(MAX_DECOMPOSITION_CHUNKS).toBe(OPS_MAX_CHUNKS);
+  });
+
+  it('the claude -p prompt carries the computed caps for THIS task', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 80 });
+    expect(seenInput).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(seenInput).toContain("at most 160 (2x this task's 80¢ cap)");
+    // the concrete section sits between the system prompt's rules and the task
+    expect(seenInput.indexOf('DECOMPOSITION LIMITS')).toBeGreaterThan(seenInput.indexOf('Rules:'));
+    expect(seenInput.indexOf('DECOMPOSITION LIMITS')).toBeLessThan(seenInput.indexOf('Task: '));
+  });
+
+  it('a different cap yields different computed numbers — nothing is hard-coded', async () => {
+    let seenInput = '';
+    const run = async (_a: string[], input: string) => {
+      seenInput = input;
+      return JSON.stringify({ result: '{"summary":"ok"}', total_cost_usd: 0 });
+    };
+    await new ClaudeCliExecutor({ run }).execute({ ...task, max_cost_cents: 250 });
+    expect(seenInput).toContain("at most 500 (2x this task's 250¢ cap)");
   });
 });
 

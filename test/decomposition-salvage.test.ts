@@ -367,5 +367,10 @@ describe('run loop — salvage and hard-reject never strand the reservation', ()
     expect(promptSeen).toContain('"max_cost_cents":100');
     // and the standing instruction to fix exactly those errors and resubmit
     expect(promptSeen).toContain('fix exactly those errors and resubmit the corrected proposal');
+    // …with the computed limits right next to the errors (task cap is 40¢ →
+    // per-subtask ceiling 80): the correction context is self-sufficient, the
+    // next agent never rediscovers the cap by burning another run.
+    expect(promptSeen).toContain('DECOMPOSITION LIMITS for THIS task');
+    expect(promptSeen).toContain("at most 80 (2x this task's 40¢ cap)");
   });
 });

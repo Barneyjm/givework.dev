@@ -10,8 +10,10 @@ import path from 'node:path';
 // gate lives on the repo — nothing here makes code executable by anyone.
 
 const DEFAULT_CONTRIB_REPO = 'Barneyjm/givework-contrib';
-const MAX_FILES = 20;
-const MAX_FILE_BYTES = 200_000;
+// Exported so the executor's prompt can state the REAL limits (an agent that
+// only learns them by having its contribution silently dropped wastes a run).
+export const MAX_FILES = 20;
+export const MAX_FILE_BYTES = 200_000;
 
 export interface CodeContribution {
   title: string;

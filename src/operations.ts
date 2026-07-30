@@ -577,12 +577,15 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
     );
     //    A salvaged invalid decomposition additionally hydrates its inline
     //    artifact (the full proposal + validation_errors) so the next agent can
-    //    resubmit it corrected; other artifacts stay out of the payload (they
-    //    default to the whole executor result), and a pathologically large one
-    //    is skipped rather than shipped.
+    //    resubmit it corrected, and a peer review's rejection hydrates its
+    //    review_rejected artifact (the reviewer's reasons) so the next agent
+    //    addresses the verdict instead of resubmitting the same proposal into
+    //    another burned review round; other artifacts stay out of the payload
+    //    (they default to the whole executor result), and a pathologically
+    //    large one is skipped rather than shipped.
     const prior = await client.query<ContributionSummary>(
       `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at,
-              CASE WHEN artifact ? 'validation_errors'
+              CASE WHEN (artifact ? 'validation_errors' OR artifact ? 'review_rejected')
                     AND octet_length(artifact::text) <= ${SALVAGED_ARTIFACT_HYDRATE_MAX_BYTES}
                    THEN artifact END AS artifact
          FROM contributions
@@ -999,6 +1002,69 @@ function reviewTaskSpec(
 /** The crisp approve contract: publish iff the review's result carries `approve: true` (strict boolean). */
 function reviewApproves(result: unknown): boolean {
   return (result as { approve?: unknown } | null | undefined)?.approve === true;
+}
+
+/**
+ * Record a peer review's REJECTION where the proposer's next agent will
+ * actually see it. Checkout hydration is task-scoped, but the reviewer's
+ * reasons land on the REVIEW task's own contribution — so without this, the
+ * proposing task's next agent never learns the proposal was rejected or why,
+ * and can loop forever resubmitting the same split, each round minting a fresh
+ * review task and burning both agents' spend.
+ *
+ * So a non-approving terminal review appends a zero-cost 'progress'
+ * contribution to the PARENT task (the one whose decomposition was reviewed),
+ * carrying a `review_rejected` artifact with the reviewer's reasons — the same
+ * artifact-hydration channel a salvaged invalid proposal rides (checkoutTask
+ * whitelists it into the next agent's continuation context). Attributed to the
+ * reviewer, at cost 0: the reviewer's real spend is already booked on the
+ * review task, and booking it again here would double-count the donation.
+ * A dangling/mistyped review_of records nothing — same leniency as the
+ * approve path.
+ */
+async function recordReviewRejection(
+  client: Client,
+  reviewerDevId: string,
+  contributionId: number,
+  reviewResult: unknown,
+  reviewTaskId: string,
+): Promise<void> {
+  const { rows } = await client.query<{ task_id: string; target_id: string }>(
+    `SELECT task_id, target_id FROM contributions
+      WHERE id = $1 AND outcome = 'decomposition'`,
+    [contributionId],
+  );
+  const prop = rows[0];
+  if (!prop) return;
+  const r = reviewResult as { reasons?: unknown } | null | undefined;
+  const hasReasons = typeof r?.reasons === 'string' && r.reasons.trim().length > 0;
+  // Prefer the reviewer's structured reasons; fall back to the whole (bounded)
+  // review result so a free-form verdict still reaches the next agent.
+  const reasons = hasReasons
+    ? (r.reasons as string).trim().slice(0, MAX_SUMMARY_CHARS)
+    : boundedProposal(reviewResult);
+  const summary = (
+    hasReasons
+      ? `Peer review REJECTED the proposed decomposition: ${(r.reasons as string).trim()}`
+      : 'Peer review REJECTED the proposed decomposition (no reasons given).'
+  ).slice(0, MAX_SUMMARY_CHARS);
+  await client.query(
+    `INSERT INTO contributions
+       (task_id, target_id, dev_id, outcome, summary, artifact, cost_cents, raw_usage)
+     VALUES ($1, $2, $3, 'progress', $4, $5, 0, $6)`,
+    [
+      prop.task_id,
+      prop.target_id,
+      reviewerDevId,
+      summary,
+      JSON.stringify({
+        review_rejected: true,
+        reasons,
+        reviewed_contribution: contributionId,
+      }),
+      JSON.stringify({ review_task_id: reviewTaskId }),
+    ],
+  );
 }
 
 /**
@@ -1473,9 +1539,15 @@ export async function submitResult(
     //     can't record an approval without its publish (or vice versa).
     let publishedTaskIds: string[] | undefined;
     if (terminal && Number.isInteger(taskSpec?.review_of)) {
-      publishedTaskIds = reviewApproves(result)
-        ? await publishApprovedDecomposition(client, taskSpec?.review_of as number)
-        : [];
+      const reviewedId = taskSpec?.review_of as number;
+      if (reviewApproves(result)) {
+        publishedTaskIds = await publishApprovedDecomposition(client, reviewedId);
+      } else {
+        // The verdict must reach the PROPOSING task's next agent, not just the
+        // review task's log — see recordReviewRejection.
+        publishedTaskIds = [];
+        await recordReviewRejection(client, devId, reviewedId, result, taskId);
+      }
     }
 
     // 6. Refresh the target's compacted working set, if the agent supplied one

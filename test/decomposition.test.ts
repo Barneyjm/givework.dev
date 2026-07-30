@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { pool } from '../src/db.js';
+import { buildContinuationSection } from '../src/executor.js';
 import {
   checkoutTask,
   MAX_DECOMPOSITION_CHUNKS,
@@ -201,6 +202,81 @@ describe('decomposition proposals', () => {
       res.contribution_id,
     ]);
     expect(rows[0].outcome).toBe('decomposition'); // still on the record
+  });
+
+  it("a rejection's reasons land on the PARENT task and hydrate into its next checkout", async () => {
+    // The wasted-loop pattern this closes: checkout hydration is task-scoped,
+    // and the reviewer's reasons used to live only on the REVIEW task — the
+    // proposing task's next agent never saw the verdict and could resubmit the
+    // same proposal forever, minting a fresh review (and burning two agents'
+    // spend) every round.
+    const { parent, res } = await proposeDecomposition();
+    const reviewer = await createDev('reviewer');
+    await setBudget(reviewer, 1000);
+    await checkoutTask(reviewer, res.review_task_id!);
+    await submitResult(
+      reviewer,
+      res.review_task_id!,
+      { approve: false, reasons: 'caps padded 10x beyond the stated work' },
+      10,
+      null,
+    );
+
+    // The parent gained a zero-cost feedback contribution from the reviewer.
+    const { rows } = await pool.query(
+      `SELECT * FROM contributions WHERE task_id = $1 ORDER BY id DESC`,
+      [parent],
+    );
+    expect(rows).toHaveLength(2); // the proposal + the rejection record
+    const fb = rows[0];
+    expect(fb.outcome).toBe('progress');
+    expect(fb.dev_id).toBe(reviewer);
+    expect(Number(fb.cost_cents)).toBe(0);
+    expect(fb.summary).toContain('Peer review REJECTED the proposed decomposition');
+    expect(fb.artifact.review_rejected).toBe(true);
+    expect(fb.artifact.reasons).toBe('caps padded 10x beyond the stated work');
+    expect(fb.artifact.reviewed_contribution).toBe(res.contribution_id);
+
+    // NO double-booking: the reviewer's only spend is the review submit itself.
+    const b = await getBudgetRow(reviewer);
+    expect(Number(b.spent_cents)).toBe(10);
+    expect(Number(b.reserved_cents)).toBe(0);
+    const ledger = await pool.query(
+      `SELECT count(*)::int AS n FROM ledger WHERE dev_id = $1 AND event_type = 'submit'`,
+      [reviewer],
+    );
+    expect(ledger.rows[0].n).toBe(1);
+
+    // The parent's next checkout hydrates the verdict…
+    const next = await createDev('next-attempt');
+    await setBudget(next, 1000);
+    const co = await checkoutTask(next, parent);
+    expect((co.prior_contributions[0].artifact as any).review_rejected).toBe(true);
+    // …and the rendered continuation carries the reasons plus the instruction
+    // to address them, exactly like the validation-salvage channel.
+    const section = buildContinuationSection(
+      co.target_state,
+      co.prior_contributions,
+      co.max_cost_cents,
+    );
+    expect(section).toContain('caps padded 10x beyond the stated work');
+    expect(section).toContain('peer reviewer REJECTED the previous decomposition proposal');
+    expect(section).toContain('address them and resubmit');
+    expect(section).toContain('DECOMPOSITION LIMITS for THIS task');
+  });
+
+  it('an approving review adds NO feedback contribution to the parent', async () => {
+    const { parent, res } = await proposeDecomposition();
+    const reviewer = await createDev('reviewer');
+    await setBudget(reviewer, 1000);
+    await checkoutTask(reviewer, res.review_task_id!);
+    await submitResult(reviewer, res.review_task_id!, { approve: true }, 10, null);
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM contributions WHERE task_id = $1`,
+      [parent],
+    );
+    expect(rows[0].n).toBe(1); // just the proposal itself — approve path unchanged
   });
 
   it('only approve === true publishes ("yes"/1/truthy are rejections)', async () => {
