@@ -27,6 +27,8 @@ export interface CheckoutResult {
     outcome: string;
     summary: string;
     artifact_uri: string | null;
+    /** Inline artifact — hydrated only for a salvaged invalid decomposition. */
+    artifact?: unknown;
     cost_cents: number;
     created_at: string;
   }>;
@@ -42,6 +44,12 @@ export interface SubmitResult {
   /** Post-verification task state: 'open' means verification rejected the work. */
   status?: 'submitted' | 'open' | 'accepted';
   verification?: { verdict: string; target_status: string | null } | null;
+  /**
+   * Set when a decomposition proposal failed validation and the control plane
+   * salvaged it as a progress contribution (full proposal + these errors
+   * preserved for the next agent) instead of discarding the work.
+   */
+  salvaged_decomposition?: { validation_errors: string[] };
 }
 export interface SubmitArgs {
   task_id: string;
@@ -412,9 +420,17 @@ export async function runLoop(
         // during a long run and expire() reclaimed the task (ToolError
         // 'not_locked'/'task_not_open'). That's a lost unit of work, not a
         // runner-fatal condition: log it and move on rather than aborting.
+        //
+        // CONTRACT: a hard-rejected submit rolls back atomically on the server
+        // — the task is still locked to us and our reservation still held. The
+        // RUNNER owns freeing both, so the reservation never sits stranded
+        // until lease expiry: attempt a release on every rejected submit. If
+        // the rejection was `not_locked` (the lease already expired) the
+        // release fails the same way, which is fine — there is nothing held.
         console.error(
-          `  ! submit rejected for ${checkout.task_id.slice(0, 8)} (${(err as Error).message}) — work not recorded, continuing`,
+          `  ! submit rejected for ${checkout.task_id.slice(0, 8)} (${(err as Error).message}) — work not recorded; releasing the task`,
         );
+        await backend.release(checkout.task_id).catch(() => {});
         failed.add(checkout.task_id);
         continue;
       }
@@ -454,6 +470,22 @@ export async function runLoop(
         continue;
       }
       consecutiveTimeouts = 0;
+      if (submit.salvaged_decomposition) {
+        // The proposal broke a validation rule, but the server salvaged it: the
+        // full proposal + errors are on the record as a progress contribution
+        // and the task is back in the pool, so the NEXT agent (which sees both
+        // in its continuation context) can resubmit it corrected. Truthful
+        // messaging: no review task exists, nothing will publish from this.
+        // Don't re-claim it ourselves this run — the same executor would most
+        // likely reproduce the same invalid proposal.
+        console.log(
+          `⑂ ${short}: decomposition proposal failed validation (${submit.salvaged_decomposition.validation_errors.join('; ')}) — ` +
+            `preserved as a progress contribution for the next agent; spent ${submit.spent_applied}¢, task returned to the pool`,
+        );
+        failed.add(checkout.task_id);
+        done++;
+        continue;
+      }
       if (exec.outcome === 'decomposition') {
         // The deliverable was a plan, not an answer — and that's success, not
         // a fallback (grinding to timeout is the failure mode). Nothing is

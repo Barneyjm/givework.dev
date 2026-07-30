@@ -61,6 +61,13 @@ export interface PriorContribution {
   outcome: string;
   summary: string | null;
   artifact_uri?: string | null;
+  /**
+   * Inline artifact, present only when the control plane decided the next
+   * agent needs the full thing — today that is a salvaged invalid
+   * decomposition ({proposed_decomposition, validation_errors}), preserved so
+   * the proposal can be corrected and resubmitted instead of re-derived.
+   */
+  artifact?: unknown;
   cost_cents?: number;
   created_at?: string;
 }
@@ -213,11 +220,20 @@ export function usageToCents(model: string, usage: Usage): number {
 // ---------------------------------------------------------------------------
 
 /** Total cap on the injected continuation section. */
-export const CONTINUATION_MAX_CHARS = 8_000;
+export const CONTINUATION_MAX_CHARS = 12_000;
 /** Cap on the serialized target state within that budget. */
 const CONTINUATION_STATE_MAX_CHARS = 6_000;
-/** Cap on any single prior-attempt line. */
+/** Cap on any single prior-attempt summary line. */
 const CONTINUATION_PRIOR_MAX_CHARS = 700;
+/**
+ * Cap on a prior's hydrated inline artifact (a salvaged invalid decomposition:
+ * the full proposal + validation errors). Sized so state (6k) + one artifact-
+ * bearing prior always fit inside CONTINUATION_MAX_CHARS — the salvage must
+ * never be the thing the size cap silently drops.
+ */
+const CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS = 3_000;
+/** Head-room kept back so the "[history truncated …]" note always fits the cap. */
+const TRUNCATION_NOTE_RESERVE_CHARS = 80;
 
 /** True when the compacted state actually says something (checkout defaults to `{}`). */
 function stateHasContent(state: unknown): boolean {
@@ -271,7 +287,26 @@ export function buildContinuationSection(state: unknown, priors: PriorContributi
       if (line.length > CONTINUATION_PRIOR_MAX_CHARS) {
         line = `${line.slice(0, CONTINUATION_PRIOR_MAX_CHARS)}…`;
       }
-      if (used + line.length + 1 > CONTINUATION_MAX_CHARS) break;
+      // A hydrated inline artifact is the full thing the next agent must see —
+      // today a salvaged invalid decomposition, i.e. the proposal to fix and
+      // resubmit. Rendered under its own cap, after the summary line's.
+      if (p.artifact != null) {
+        let json: string;
+        try {
+          json = typeof p.artifact === 'string' ? p.artifact : JSON.stringify(p.artifact);
+        } catch {
+          json = String(p.artifact);
+        }
+        if (json.length > CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS) {
+          json = `${json.slice(0, CONTINUATION_PRIOR_ARTIFACT_MAX_CHARS)}…[artifact truncated]`;
+        }
+        line +=
+          `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
+          `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
+      }
+      // Reserve room for the truncation note so appending it can never push
+      // the section past the cap (the pre-note budget must leave it space).
+      if (used + line.length + 1 > CONTINUATION_MAX_CHARS - TRUNCATION_NOTE_RESERVE_CHARS) break;
       lines.push(line);
       used += line.length + 1;
       kept++;
