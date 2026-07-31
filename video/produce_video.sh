@@ -20,11 +20,12 @@
 #   MANIM_IMG container image     (default: docker.io/manimcommunity/manim:stable)
 #
 # AUDIO IS STATIC-GAIN ONLY. The mix applies one measured gain to the voice
-# (to -16.5 LUFS) and one to the bed (20 LU under the voice), then a lowpass
-# and a sidechain duck. No loudnorm, no alimiter — dynamic normalisers pump
-# and lift the noise floor between sentences; a loudnorm mix of this exact
-# pipeline shipped audible static (pause floor -41 dBFS against -44..-46 for
-# every static-gain mix). render_check.mjs now fails that floor.
+# (target -16.5 LUFS, capped by true-peak headroom to -1.5 dBTP) and one to
+# the bed (20 LU under the voice), then a lowpass and a sidechain duck. No
+# loudnorm, no alimiter — dynamic normalisers pump and lift the noise floor
+# between sentences. This shipped as audible static once: an unpinned anullsrc
+# concat leg crushed the program to 8-bit (see step 5) and loudnorm amplified
+# the hiss in every pause. render_check.mjs's pause-floor gate fails both.
 set -euo pipefail
 
 VIDEO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -86,32 +87,41 @@ subprocess.run(["ffmpeg","-v","error","-y",*inp,"-filter_complex",";".join(filt)
 PY
 
 # 4. one continuous music bed for the whole piece, mixed UNDER the voice with
-#    measured static gains (see header).
+#    measured static gains (see header). The voice gain targets -16.5 LUFS but
+#    is capped by true-peak headroom to -1.5 dBTP — with ~20 LU-crest VoxCPM
+#    takes the peak term governs (lands around -21 LUFS), and that is correct:
+#    pushing further would need a limiter, and limiters are banned here. The
+#    bed is measured THROUGH its lowpass and set 20 LU under the actual voice.
 DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$WORK/${SLUG}-voice.mp4")
 "$VOX_PY" "$VIDEO_DIR/gen_music.py" "$DUR" "$WORK/music_$SLUG.wav" >/dev/null
-lufs() {
-  ffmpeg -hide_banner -i "$1" -af ebur128=framelog=quiet -f null /dev/null 2>&1 |
-    grep -E "^\s+I:" | tail -1 | grep -oE '\-?[0-9.]+'
-}
-VI=$(lufs "$WORK/${SLUG}-voice.mp4")
-MI=$(lufs "$WORK/music_$SLUG.wav")
-VG=$(python3 -c "print(f'{-16.5 - ($VI):.1f}')")
-MG=$(python3 -c "print(f'{-36.5 - ($MI):.1f}')")
-echo "  voice $VI LUFS (gain ${VG} dB), bed $MI LUFS (gain ${MG} dB)"
+read -r VOICE_I VOICE_TP <<<"$(ffmpeg -hide_banner -nostdin -i "$WORK/${SLUG}-voice.mp4" \
+  -af ebur128=peak=true -f null - 2>&1 | tail -20 | awk '$1=="I:"{i=$2} $1=="Peak:"{p=$2} END{print i, p}')"
+BED_I=$(ffmpeg -hide_banner -nostdin -i "$WORK/music_$SLUG.wav" -af "lowpass=f=3500,ebur128" \
+  -f null - 2>&1 | tail -20 | awk '$1=="I:"{i=$2} END{print i}')
+read -r VGAIN BGAIN VOUT <<<"$(python3 -c "
+vi, vtp, bi = $VOICE_I, $VOICE_TP, $BED_I
+g = min(-16.5 - vi, -1.5 - vtp)   # loudness target, capped by true-peak headroom
+print(round(g, 2), round((vi + g - 20.0) - bi, 2), round(vi + g, 2))")"
+echo "  static gains: voice ${VGAIN}dB (I=${VOICE_I} TP=${VOICE_TP} -> ~${VOUT} LUFS), bed ${BGAIN}dB (20 LU under)"
 ffmpeg -v error -y -i "$WORK/${SLUG}-voice.mp4" -i "$WORK/music_$SLUG.wav" -filter_complex \
-  "[0:a]volume=${VG}dB,asplit=2[v][k];[1:a]volume=${MG}dB,lowpass=f=3500[m];\
+  "[0:a]volume=${VGAIN}dB,asplit=2[v][k];[1:a]volume=${BGAIN}dB,lowpass=f=3500[m];\
    [m][k]sidechaincompress=threshold=0.03:ratio=4:attack=20:release=320[d];\
    [v][d]amix=inputs=2:normalize=0:duration=first[a]" \
   -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k "$WORK/${SLUG}-music.mp4"
 
 # 5. poster title card + 1s lead — final 1080p only (the poster must match the
 #    video resolution). For previews, the music cut IS the final.
+#    CRITICAL: aformat pins sample_fmts=fltp on BOTH concat audio legs. Without
+#    it the anullsrc leg negotiates u8 (enum 0) and concat converts the whole
+#    main program to 8-BIT audio (~-59 dBFS quantization hiss — the "static"
+#    defect, 2026-07-31). render_check.mjs's pause-floor gate catches it now,
+#    but do not remove the pins.
 POSTER_T="${POSTER_T:-2.6}" # a settled moment of the title beat
 if [ "$Q" = "h" ]; then
   ffmpeg -v error -y -ss "$POSTER_T" -i "$WORK/${SLUG}-music.mp4" -frames:v 1 "$WORK/poster_$SLUG.png"
   ffmpeg -v error -y -loop 1 -t 1.0 -i "$WORK/poster_$SLUG.png" -i "$WORK/${SLUG}-music.mp4" \
     -f lavfi -t 1.0 -i anullsrc=r=48000:cl=stereo \
-    -filter_complex "[0:v]scale=1920:1080,fps=60,setsar=1,format=yuv420p[lead];[2:a]aformat=sample_rates=48000:channel_layouts=stereo[sil];[lead][sil][1:v][1:a]concat=n=2:v=1:a=1[v][a]" \
+    -filter_complex "[0:v]scale=1920:1080,fps=60,setsar=1,format=yuv420p[lead];[2:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[sil];[1:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[main];[lead][sil][1:v][main]concat=n=2:v=1:a=1[v][a]" \
     -map "[v]" -map "[a]" -c:v libx264 -crf 20 -preset medium -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart \
     "$WORK/${SLUG}-final.mp4"
 else

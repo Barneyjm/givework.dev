@@ -178,8 +178,11 @@ outputs land there, never here.
 
 ### The audio rule: static gain only
 
-The mix applies exactly two measured, constant gains — voice to −16.5 LUFS
-integrated, bed to 20 LU under that — plus a 3.5 kHz lowpass on the bed and a
+The mix applies exactly two measured, constant gains — voice toward −16.5 LUFS
+integrated but capped by true-peak headroom to −1.5 dBTP (with high-crest
+VoxCPM takes the peak cap governs, landing near −21 LUFS — that is correct;
+going further would need a limiter), bed measured through its lowpass and set
+20 LU under the actual voice — plus a 3.5 kHz lowpass on the bed and a
 sidechain duck while the voice speaks. **No `loudnorm`, no `alimiter`, nothing
 adaptive.** This rule exists because it has been violated twice, and both times
 the result *shipped*:
@@ -187,16 +190,23 @@ the result *shipped*:
 1. A bed generated hot and scaled by a guessed constant landed at speech level
    — reported as "static", because a bed you can't hear under the voice is
    just noise you turn up to follow the words.
-2. A `loudnorm`-based mix lifted the bed and the TTS hiss in every pause
-   between sentences — audible static exactly where the ear listens for room
-   tone. Measured: −41.4 dBFS pause floor against −44…−46 for every
-   static-gain mix.
+2. The poster-lead concat pinned sample rates and channel layouts but **not
+   `sample_fmts`**, so the `anullsrc` leg negotiated u8 and concat crushed the
+   whole main program to 8-bit audio (~−59 dBFS quantization hiss) — which a
+   `loudnorm` stage then amplified in every pause between sentences, exactly
+   where the ear listens for room tone.
 
 A dynamic normaliser cannot know which part of the signal is wanted; between
 sentences the "signal" is the noise floor, and it gets lifted. Measure once,
-apply constant gain, and the pauses stay as quiet as the mix left them.
-`render_check.mjs` now fails any share whose speech-pause floor is above
-−42.5 dBFS.
+apply constant gain, and the pauses stay as quiet as the mix left them. Two
+mechanical consequences, both wired into the committed scripts:
+
+- Every concat audio leg — `anullsrc` above all — pins
+  `aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo`.
+- `render_check.mjs` measures the hiss floor inside speech pauses (quietest
+  sustained 200 ms of the 4.5–15 kHz band, median across pauses — breaths
+  can't trip it) and fails above −70 dB. Calibrated on all 28 share cuts:
+  clean static-gain mixes measure −78…−87, the u8/loudnorm class −58.
 
 One more assembly invariant: **one continuous music bed per assembled piece**
 (`assemble.sh` generates it for the concatenated length). Mixing per act
@@ -308,6 +318,7 @@ usually a cross-fade — an actually empty beat stays empty.
 | true peak above −0.5 dBFS | clipping on re-encode |
 | spectral centroid above 6.2 kHz | a harsh, hissy mix |
 | spectral flatness below 0.02 while loud | a pure tone — squeal or feedback |
+| speech-pause hiss floor above −70 dB (4.5–15 kHz) | a loudnorm or 8-bit-crushed mix — static between sentences |
 
 **Advises** (reported, not rejected): off-palette drift, mostly-silent runs, a very
 dark mix, and a scene whose beats all look identical.

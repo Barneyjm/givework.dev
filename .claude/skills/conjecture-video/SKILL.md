@@ -60,25 +60,35 @@ second — the palette guard refuses to render otherwise).
 
 ## AUDIO IS STATIC-GAIN ONLY
 
-Exactly two measured constant gains: voice to −16.5 LUFS integrated, bed to
-20 LU under that (−36.5), plus `lowpass=f=3500` on the bed and a sidechain duck
-under the voice. ONE continuous bed per assembled piece — never per-beat,
-never per-act (per-segment beds restart at every join and make each seam
-audible). **NO `loudnorm`. NO `alimiter`. Nothing adaptive.**
+Exactly two measured constant gains: voice toward −16.5 LUFS integrated,
+capped by true-peak headroom to −1.5 dBTP (high-crest VoxCPM takes make the
+peak cap govern, ≈ −21 LUFS — correct; pushing further needs a limiter, and
+limiters are banned); bed measured through its lowpass and set 20 LU under the
+actual voice, plus `lowpass=f=3500` on the bed and a sidechain duck under the
+voice. ONE continuous bed per assembled piece — never per-beat, never per-act
+(per-segment beds restart at every join and make each seam audible). **NO
+`loudnorm`. NO `alimiter`. Nothing adaptive.**
 
 Why this is a rule and not a preference — it has been violated twice and both
 times shipped:
 
 1. A bed scaled by a guessed constant sat at speech level and read as static.
-2. A `loudnorm` mix lifted the bed and TTS hiss in every inter-sentence pause
-   — audible static precisely where the ear expects room tone. Measured pause
-   floor −41.4 dBFS vs −44…−46 for every static-gain mix.
+2. **The u8 concat footgun**: a poster-lead concat that pinned sample rates
+   and layouts but not `sample_fmts` let the `anullsrc` leg negotiate u8, and
+   concat crushed the whole program to 8-bit audio (~−59 dBFS quantization
+   hiss); a `loudnorm` stage then amplified that hiss in every inter-sentence
+   pause — audible static precisely where the ear expects room tone.
 
-A dynamic normaliser cannot tell signal from floor, and between sentences the
-floor IS the signal it normalises up. `video/render_check.mjs` fails any share
-whose speech-pause floor is above −42.5 dBFS. The correct recipes are in
-`video/produce_video.sh`, `video/assemble.sh`, `video/build_cta_outro.sh` —
-use them, do not re-derive the ffmpeg filtergraph.
+Therefore: **every concat audio leg — `anullsrc` above all — pins
+`aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo`** (the
+committed scripts already do). A dynamic normaliser cannot tell signal from
+floor, and between sentences the floor IS the signal it normalises up.
+`video/render_check.mjs` fails any share whose speech-pause hiss floor
+(quietest sustained 200 ms of the 4.5–15 kHz band, median across pauses —
+breath-immune) is above −70 dB; clean mixes measure −78…−87, the defect class
+−58. The correct recipes are in `video/produce_video.sh`, `video/assemble.sh`,
+`video/build_cta_outro.sh` — use them, do not re-derive the ffmpeg
+filtergraph.
 
 ## Brand
 

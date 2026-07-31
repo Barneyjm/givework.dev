@@ -46,21 +46,22 @@ subprocess.run(["ffmpeg","-v","error","-y",*inp,"-filter_complex",";".join(filt)
     "-map","0:v","-map","[a]","-c:v","copy","-c:a","aac","-b:a","192k","-movflags","+faststart",out], check=True)
 PY
 
-# short music bed under the voice — same static-gain recipe as produce_video.sh,
-# so the levels match at the concat seam
+# short music bed under the voice — same static-gain recipe as produce_video.sh
+# (voice to -16.5 LUFS capped by true-peak headroom, bed measured through its
+# lowpass and set 20 LU under), so the levels match at the concat seam
 DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$WORK/cta_voice.mp4")
 "$VOX_PY" "$VIDEO_DIR/gen_music.py" "$DUR" "$WORK/music_cta.wav" >/dev/null
-lufs() {
-  ffmpeg -hide_banner -i "$1" -af ebur128=framelog=quiet -f null /dev/null 2>&1 |
-    grep -E "^\s+I:" | tail -1 | grep -oE '\-?[0-9.]+'
-}
-VI=$(lufs "$WORK/cta_voice.mp4")
-MI=$(lufs "$WORK/music_cta.wav")
-VG=$(python3 -c "print(f'{-16.5 - ($VI):.1f}')")
-MG=$(python3 -c "print(f'{-36.5 - ($MI):.1f}')")
-echo "  voice $VI LUFS (gain ${VG} dB), bed gain ${MG} dB"
+read -r VOICE_I VOICE_TP <<<"$(ffmpeg -hide_banner -nostdin -i "$WORK/cta_voice.mp4" \
+  -af ebur128=peak=true -f null - 2>&1 | tail -20 | awk '$1=="I:"{i=$2} $1=="Peak:"{p=$2} END{print i, p}')"
+BED_I=$(ffmpeg -hide_banner -nostdin -i "$WORK/music_cta.wav" -af "lowpass=f=3500,ebur128" \
+  -f null - 2>&1 | tail -20 | awk '$1=="I:"{i=$2} END{print i}')
+read -r VGAIN BGAIN VOUT <<<"$(python3 -c "
+vi, vtp, bi = $VOICE_I, $VOICE_TP, $BED_I
+g = min(-16.5 - vi, -1.5 - vtp)   # loudness target, capped by true-peak headroom
+print(round(g, 2), round((vi + g - 20.0) - bi, 2), round(vi + g, 2))")"
+echo "  static gains: voice ${VGAIN}dB (I=${VOICE_I} TP=${VOICE_TP} -> ~${VOUT} LUFS), bed ${BGAIN}dB (20 LU under)"
 ffmpeg -v error -y -i "$WORK/cta_voice.mp4" -i "$WORK/music_cta.wav" -filter_complex \
-  "[0:a]volume=${VG}dB,asplit=2[v][k];[1:a]volume=${MG}dB,lowpass=f=3500[m];\
+  "[0:a]volume=${VGAIN}dB,asplit=2[v][k];[1:a]volume=${BGAIN}dB,lowpass=f=3500[m];\
    [m][k]sidechaincompress=threshold=0.03:ratio=4:attack=20:release=320[d];\
    [v][d]amix=inputs=2:normalize=0:duration=first[a]" \
   -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k "$WORK/cta_outro.mp4"
