@@ -43,14 +43,26 @@ programs, reducers) that other agents can later execute — the
   `code = {repo, sha (full 40-hex), entrypoint, input}` is dispatched to the
   work-unit executor (src/workunit.ts) regardless of the configured LLM
   executor. The runner fetches exactly that SHA from exactly the allowlisted
-  repo (`GIVEWORK_CONTRIB_REPO`), runs the entrypoint in podman —
+  repo (`GIVEWORK_CONTRIB_REPO`), runs the entrypoint in a container sandbox —
   `--network=none`, memory/pids caps, read-only checkout — feeds `input` on
-  stdin, and parses stdout JSON as the result. No podman → no execution,
-  ever; the task is released. Scripts can steer the loop by including
-  `outcome` / `summary` / `state_update` in their output, so chunked search
-  over `state.cursor` works exactly like today's resumable tasks. A
-  `replication` verification re-runs the same SHA on the same chunk and
-  compares output.
+  stdin, and parses stdout JSON as the result. The container engine is picked
+  the same way `EXECUTOR` picks the LLM executor: `GIVEWORK_CONTAINER_ENGINE`
+  (`podman` or `docker`, case- and whitespace-insensitive; blank means unset)
+  wins when set, otherwise the runner probes `podman` then `docker` and uses
+  whichever answers (see `resolveContainerEngine`). The probe is `version`,
+  not `--version`, because only the former reaches the daemon: a stopped
+  Docker Desktop or an unstarted `podman machine` passes `--version` and would
+  turn "sandbox ✓" into an execution failure on every work unit. It is a
+  successful probe that gets cached — per `WorkUnitExecutor`, so once per
+  runner process in practice — while a failed one is re-probed, so a sandbox
+  installed part-way through a long `--watch` starts being used. No engine
+  found (neither installed, no usable override) → no execution, ever; the task
+  is released, and `givework start`/`run` say so up front rather than only at
+  that moment. Scripts can
+  steer the loop by including `outcome` / `summary` / `state_update` in their
+  output, so chunked search over `state.cursor` works exactly like today's
+  resumable tasks. A `replication` verification re-runs the same SHA on the
+  same chunk and compares output.
 - **Two clocks, two rules.** LLM time (an agent *writing* code) burns the
   volunteer's Claude credit — keep `EXECUTOR_TIMEOUT_MS` tight (default
   180s). CPU time (a merged harness *running*) is nearly free and may
@@ -68,9 +80,11 @@ programs, reducers) that other agents can later execute — the
   (`python3-stdlib`, `c11-gcc`, `lean4`) — an unreadable/unrecognized
   manifest falls back to `python3-stdlib`, so every contribution merged
   before a runtime existed keeps behaving exactly as it always did. All
-  images are pinned by digest, and all run inside the identical podman flags
-  (`--network=none`, capped memory/cpus/pids, read-only source mount) — the
-  sandbox, not the language, is what makes a runtime safe to add.
+  images are pinned by digest, and all run inside the identical container
+  flags (`--network=none`, capped memory/cpus/pids, read-only source mount) —
+  the sandbox, not the language, is what makes a runtime safe to add. Every
+  flag is argument-compatible across podman and docker, so which engine
+  actually ran it never changes the invocation.
 - **Proof checking (`lean4`)**: the runtime that makes `verify_via:
   proof_checker` live. A formalization chunk pins a merged `.lean` file;
   the sandbox runs `lean <entrypoint>` (Lean 4.10.0, core prelude only — no
@@ -89,8 +103,8 @@ programs, reducers) that other agents can later execute — the
   baked in at image build time (`lake exe cache get` with network on, then
   `--network=none` at run time), and `lake build` instead of single-file
   `lean` — the image is multi-GB, which is why v1 ships without it. The
-  upstream image is linux/amd64 only; arm64 hosts run it under podman's
-  emulation (the canary checks in ~2 s emulated).
+  upstream image is linux/amd64 only; arm64 hosts run it under the engine's
+  emulation (the canary checks in ~2 s emulated under podman).
 
 ## Next phases — not yet wired
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`

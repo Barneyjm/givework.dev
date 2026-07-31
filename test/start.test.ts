@@ -16,6 +16,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   logins: 0,
   runLoopOpts: [] as any[],
+  // Default: sandbox found. Individual tests reassign to exercise the
+  // not-found line — real `podman`/`docker` are never spawned here.
+  engineLine: 'sandbox: podman 5.3 ✓ — CPU work units and Lean proof checking enabled',
 }));
 
 vi.mock('../src/cli/login.js', () => ({
@@ -35,6 +38,17 @@ vi.mock('../src/executor.js', () => ({
   }),
 }));
 
+// Only the sandbox-status line is faked — no real `podman`/`docker` process
+// may be spawned by a unit test, and the line's own wording is covered by
+// workunit.test.ts.
+vi.mock('../src/workunit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/workunit.js')>();
+  return {
+    ...actual,
+    containerEngineStatusLine: async () => h.engineLine,
+  };
+});
+
 // Only runLoop is replaced — onboard uses HttpBackend/withLease from the same
 // module and those must stay real, or the guided-task path stops being tested.
 vi.mock('../src/run-loop.js', async (importOriginal) => {
@@ -47,7 +61,7 @@ vi.mock('../src/run-loop.js', async (importOriginal) => {
   };
 });
 
-const { hasContributed, readyLines, start } = await import('../src/cli/commands.js');
+const { hasContributed, readyLines, run, start } = await import('../src/cli/commands.js');
 
 const MINTED = {
   task_id: '11111111-1111-1111-1111-111111111111',
@@ -96,6 +110,7 @@ describe('givework start', () => {
     delete process.env.GIVEWORK_TOKEN;
     h.logins = 0;
     h.runLoopOpts = [];
+    h.engineLine = 'sandbox: podman 5.3 ✓ — CPU work units and Lean proof checking enabled';
     calls = [];
     plane = { budget: null, tasksCompleted: 0, mints: 0, submits: 0, taskStatus: 'open' };
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -328,6 +343,60 @@ describe('givework start', () => {
       return inner(url, init);
     }) as typeof fetch;
     await expect(start([])).resolves.toBeUndefined();
+  });
+
+  // --- sandbox preflight (GIVEWORK_CONTAINER_ENGINE detection) ---
+  //
+  // No real `podman`/`docker` process is ever spawned here — containerEngineStatusLine
+  // is faked at the top of this file, and these tests only pin down that `start`
+  // and `run` each print whatever it returns, once, regardless of what it says.
+
+  it('start prints the sandbox line when a container engine is found', async () => {
+    process.env.GIVEWORK_TOKEN = 'dev-token';
+    plane.tasksCompleted = 1;
+    plane.budget = { budget_cents: 500, available_cents: 500 };
+    const printed: string[] = [];
+    (console.log as any).mockImplementation((...a: unknown[]) => printed.push(a.join(' ')));
+    await start([]);
+    expect(printed).toContain(
+      'sandbox: podman 5.3 ✓ — CPU work units and Lean proof checking enabled',
+    );
+  });
+
+  it('start prints the sandbox line when no container engine is found, and does not fail', async () => {
+    h.engineLine =
+      'sandbox: no container engine found — model tasks only. Install podman or docker ' +
+      '(or set GIVEWORK_CONTAINER_ENGINE) to donate CPU.';
+    process.env.GIVEWORK_TOKEN = 'dev-token';
+    plane.tasksCompleted = 1;
+    plane.budget = { budget_cents: 500, available_cents: 500 };
+    const printed: string[] = [];
+    (console.log as any).mockImplementation((...a: unknown[]) => printed.push(a.join(' ')));
+    await expect(start([])).resolves.toBeUndefined(); // never fatal
+    expect(printed).toContain(h.engineLine);
+  });
+
+  it('run prints the sandbox line exactly once per invocation', async () => {
+    process.env.GIVEWORK_TOKEN = 'dev-token';
+    const printed: string[] = [];
+    (console.log as any).mockImplementation((...a: unknown[]) => printed.push(a.join(' ')));
+    await run([]);
+    const occurrences = printed.filter((l) => l === h.engineLine).length;
+    expect(occurrences).toBe(1);
+  });
+
+  it('start --watch prints the sandbox line exactly once and still starts the loop', async () => {
+    process.env.GIVEWORK_TOKEN = 'dev-token';
+    plane.tasksCompleted = 1;
+    plane.budget = { budget_cents: 500, available_cents: 500 };
+    const printed: string[] = [];
+    (console.log as any).mockImplementation((...a: unknown[]) => printed.push(a.join(' ')));
+    await start(['--watch']);
+    // `start` prints it in its preflight and then calls straight through to
+    // `run`, which prints it too unless told not to — twice reads like two
+    // checks disagreeing, and re-spawns the probe.
+    expect(printed.filter((l) => l === h.engineLine)).toHaveLength(1);
+    expect(h.runLoopOpts).toHaveLength(1);
   });
 });
 

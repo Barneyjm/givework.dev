@@ -4,6 +4,7 @@ import { getExecutor } from '../executor.js';
 import { ONBOARDING_MAX_CENTS } from '../goldbach.js';
 import { getDecomposer } from '../intake/decompose.js';
 import { HttpBackend, runLoop, stubExecutorRemoteRefusal, withLease } from '../run-loop.js';
+import { containerEngineStatusLine } from '../workunit.js';
 import { ApiError, apiRequest } from './api.js';
 import { apiUrl, loadConfig, requireAdminToken, requireToken, saveConfig } from './config.js';
 import { login } from './login.js';
@@ -13,8 +14,10 @@ import { captureCliEvent, telemetryEnabled } from './telemetry.js';
 // sandboxed WorkUnitExecutor; everything else to the LLM path — the deterministic
 // stub by default, `claude -p` when EXECUTOR=claude. It is SDK-free (no
 // @anthropic-ai/sdk), so bundling it keeps the CLI small. Using it here is what
-// lets a volunteer's runner actually handle work units (podman sandbox, or a
-// graceful skip when podman isn't installed) instead of running claude -p on them.
+// lets a volunteer's runner actually handle work units (a podman/docker sandbox
+// resolved the same way EXECUTOR resolves the LLM executor — see
+// resolveContainerEngine / GIVEWORK_CONTAINER_ENGINE in workunit.ts — or a
+// graceful skip when neither is installed) instead of running claude -p on them.
 const cliExecutor = getExecutor;
 
 // Implementations of the CLI verbs. Each takes the post-command argv slice. Pure
@@ -312,7 +315,11 @@ async function warnIfStale(args: string[]): Promise<void> {
   }
 }
 
-export async function run(args: string[]): Promise<void> {
+export async function run(
+  args: string[],
+  /** `sandboxLine: false` when the caller (`start`) already printed it. */
+  opts: { sandboxLine?: boolean } = {},
+): Promise<void> {
   const base = apiUrl();
   // FIRST, before any network call: a stub executor (EXECUTOR unset or not
   // 'claude') pointed at a remote control plane would submit fabricated
@@ -358,6 +365,15 @@ export async function run(args: string[]): Promise<void> {
 
   const backend = new HttpBackend(base, token);
   console.log(`Givework runner → ${base}`);
+  // The pool can hand out CPU work-unit and Lean tasks alongside model tasks
+  // (whether narrowed by --target/--task or not — we don't know a task's kind
+  // until checkout), so report the sandbox once, up front, rather than
+  // letting a volunteer without podman/docker discover it only when one of
+  // those tasks gets released back to the pool. Once: `start --watch` prints
+  // it during its own preflight and then calls straight through to here, and
+  // saying the same thing twice reads like two different checks disagreeing —
+  // it also re-spawns the probe.
+  if (opts.sandboxLine !== false) console.log(await containerEngineStatusLine());
   if (targetSlug) console.log(`Working on ${targetSlug} only (drop --target for the whole pool)`);
   try {
     const v = await backend.version().catch(() => null);
@@ -835,6 +851,12 @@ export function readyLines(
 export async function start(args: string[]): Promise<void> {
   const base = apiUrl();
 
+  // 0. Sandbox preflight — advisory only, never fatal. Model-only volunteering
+  // is first-class: a volunteer with no podman/docker still gets the full
+  // work loop, just without CPU work units or Lean proof checking, and this
+  // line is how they find out (and how to fix it) without digging.
+  console.log(await containerEngineStatusLine());
+
   // 1. Identity. Silently skipped when a token is already on disk (or in env).
   if (!loadConfig().token) {
     console.log('Signing you in with GitHub — a browser window will open.\n');
@@ -893,7 +915,7 @@ export async function start(args: string[]): Promise<void> {
   // donate nothing while looking like it worked.
   if (!process.env.EXECUTOR) process.env.EXECUTOR = 'claude';
   console.log('\n--watch: starting the work loop. Ctrl-C to stop.\n');
-  await run(args);
+  await run(args, { sandboxLine: false }); // step 0 above already printed it
 }
 
 // --- admin commands ---

@@ -7,30 +7,80 @@ import type { ExecResult, ExecTask, Executor } from './executor.js';
 // Work-unit execution — the CPU half of the "folding@home driven by code"
 // design (CODE_CONTRIB.md). A task whose spec carries `code` names merged
 // contrib-repo code at a pinned SHA; the runner fetches exactly that SHA from
-// exactly the allowlisted repo and executes it inside a podman sandbox with no
-// network. CPU time is the donation here, not tokens: actual_cost_cents is 0,
-// and runs may take hours — the run-loop's lease heartbeat keeps the claim
-// alive while this executes.
+// exactly the allowlisted repo and executes it inside a container sandbox
+// (podman or docker — see resolveContainerEngine below) with no network. CPU
+// time is the donation here, not tokens: actual_cost_cents is 0, and runs may
+// take hours — the run-loop's lease heartbeat keeps the claim alive while
+// this executes. The same sandbox is what a future Lean-proof-checking
+// runtime would run inside too — the engine detection here is generic to
+// "some work unit needs a container," not tied to one runtime.
 
 const DEFAULT_ALLOWED_REPO = 'Barneyjm/givework-contrib';
 /** CPU time is cheap; default to 6h. Override with WORKUNIT_TIMEOUT_MS. */
 const DEFAULT_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 
+// Which container binary runs the sandbox, chosen the same way EXECUTOR picks
+// the LLM executor: an explicit env var wins outright, otherwise probe in a
+// fixed order and take the first that answers. podman first because it's the
+// rootless default we document; docker as the fallback most volunteers
+// already have. Every flag `podman run`/`rm` uses below is also valid on
+// `docker run`/`rm` (verified against this exact flag set: --rm, -i, --name,
+// --network=none, --memory, --cpus, --pids-limit, --read-only, --tmpfs, -v,
+// -w all exist, identically, on both CLIs) — so the resolved binary can be
+// substituted with no other change to the invocation.
+export type ContainerEngine = 'podman' | 'docker';
+const CONTAINER_ENGINES: readonly ContainerEngine[] = ['podman', 'docker'];
+export const CONTAINER_ENGINE_ENV = 'GIVEWORK_CONTAINER_ENGINE';
+
+// `version`, NOT `--version`. The two are not the same test: `--version`
+// prints the client banner and exits 0 without ever contacting the daemon, so
+// it answers "is the CLI on PATH" — a stopped Docker Desktop, a user not in
+// the `docker` group, an unstarted `podman machine` all pass it. `version`
+// reaches the server and exits non-zero when it can't, which is the question
+// that actually matters here: a probe that says yes and then can't run a
+// container turns "sandbox ✓" into three straight execution failures, and
+// MAX_CONSECUTIVE_FAILURES in the run loop then takes model tasks down with
+// it. It also makes the probe order self-correcting — podman installed but
+// its machine stopped now falls through to a working docker instead of
+// claiming the slot. Both CLIs still print a parseable version banner for it.
+const PROBE_ARGS: readonly string[] = ['version'];
+// The probe sits on the CLI start-up path for *every* volunteer, including
+// model-only ones who never run a work unit, so it must be unable to hang:
+// a wrapper script or a binary on a wedged network mount would otherwise
+// block `givework start` before it prints anything at all.
+const PROBE_TIMEOUT_MS = 5000;
+
+function isContainerEngine(v: string): v is ContainerEngine {
+  return v === 'podman' || v === 'docker';
+}
+
+/** First "\d+.\d+" in a version banner (e.g. "podman version 5.3.1" -> "5.3"). */
+function parseEngineVersion(versionOutput: string): string {
+  const m = versionOutput.match(/(\d+\.\d+)/);
+  return m ? m[1] : versionOutput.trim().split('\n')[0].slice(0, 20) || 'unknown';
+}
+
+export interface ResolvedContainerEngine {
+  engine: ContainerEngine;
+  version: string;
+}
+
 // Runtimes a merged contribution's manifest.json may declare. Pinned by
 // digest, not tag — a tag can be repointed later; a digest cannot. "Loosened
 // later via pinned base images, never via 'trust me'" (CODE_CONTRIB.md) is
-// what licenses adding c11-gcc here: the isolation comes from the podman
+// what licenses adding c11-gcc here: the isolation comes from the container
 // flags below (--network=none, capped memory/cpus/pids, read-only source
 // mount), not from the language, so an added runtime doesn't weaken the
 // sandbox — it only widens what real computational work can be donated
-// (each verified end-to-end against this exact flag set before shipping).
-// lean4 is the proof-checking rail: exit 0 from the compiler IS the verdict
-// (verify.ts's proof_checker method), so the interpretation of the container's
-// output is per-runtime, not one JSON contract.
+// (each verified end-to-end against this exact flag set, on both podman and
+// docker, before shipping). lean4 is the proof-checking rail: exit 0 from the
+// compiler IS the verdict (verify.ts's proof_checker method), so the
+// interpretation of the container's output is per-runtime, not one JSON
+// contract.
 interface RuntimeConfig {
   /** repo@sha256:... — never a mutable tag. */
   image: string;
-  /** The podman-run trailing command (after the image arg) for this entrypoint. */
+  /** The container-run trailing command (after the image arg) for this entrypoint. */
   command: (entrypoint: string) => string[];
   /**
    * `--entrypoint` override for images whose baked-in ENTRYPOINT would swallow
@@ -307,7 +357,7 @@ export interface ProcOpts {
   input?: string;
   timeoutMs?: number;
 }
-type RunProc = (cmd: string, args: string[], opts?: ProcOpts) => Promise<string>;
+export type RunProc = (cmd: string, args: string[], opts?: ProcOpts) => Promise<string>;
 
 function execProc(cmd: string, args: string[], opts: ProcOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -339,8 +389,70 @@ function execProc(cmd: string, args: string[], opts: ProcOpts = {}): Promise<str
 }
 
 /**
+ * Which container binary to run the sandbox with, mirroring how EXECUTOR
+ * picks the LLM executor: GIVEWORK_CONTAINER_ENGINE wins outright when set
+ * (podman or docker; anything else is a configuration error naming both
+ * accepted values, thrown immediately rather than silently ignored).
+ * Otherwise probe `podman version` then `docker version`, in that order, and
+ * use whichever *answers from its daemon* (see PROBE_ARGS). Resolves to null
+ * (never throws for this case) when nothing answers — the caller decides what
+ * "no sandbox" means for it.
+ */
+export async function resolveContainerEngine(
+  run: RunProc = execProc,
+): Promise<ResolvedContainerEngine | null> {
+  // Trimmed and lower-cased before the check, so the shapes that mean "I did
+  // not choose an engine" are treated as unset rather than as a fatal
+  // misconfiguration: `GIVEWORK_CONTAINER_ENGINE=` (the normal way to blank a
+  // var in a profile, a .env, or a compose `environment:` entry), and a value
+  // carrying a trailing newline from `$(cat …)`. `Docker` is a typo, not a
+  // different engine, so it is accepted rather than punished.
+  const override = process.env[CONTAINER_ENGINE_ENV]?.trim().toLowerCase();
+  let candidates: readonly ContainerEngine[];
+  if (override) {
+    if (!isContainerEngine(override)) {
+      throw new Error(
+        `${CONTAINER_ENGINE_ENV} must be "podman" or "docker" (got ${JSON.stringify(override)})`,
+      );
+    }
+    candidates = [override];
+  } else {
+    candidates = CONTAINER_ENGINES;
+  }
+  for (const engine of candidates) {
+    const out = await run(engine, [...PROBE_ARGS], { timeoutMs: PROBE_TIMEOUT_MS }).catch(
+      () => null,
+    );
+    if (out !== null) return { engine, version: parseEngineVersion(out) };
+  }
+  return null;
+}
+
+/**
+ * The one-line sandbox status `givework start`/`run` print at start-up.
+ * Never throws — model-only volunteering is first-class and this is advisory,
+ * not a gate. But a bad override and nothing installed are different problems
+ * with different fixes, so they get different lines: telling someone who set
+ * GIVEWORK_CONTAINER_ENGINE=Docker to "install podman or docker (or set
+ * GIVEWORK_CONTAINER_ENGINE)" sends them to fix the one thing that is already
+ * the cause.
+ */
+export async function containerEngineStatusLine(run: RunProc = execProc): Promise<string> {
+  let resolved: ResolvedContainerEngine | null;
+  try {
+    resolved = await resolveContainerEngine(run);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `sandbox: ${msg} — model tasks only until that is fixed or unset.`;
+  }
+  return resolved
+    ? `sandbox: ${resolved.engine} ${resolved.version} ✓ — CPU work units and Lean proof checking enabled`
+    : `sandbox: no container engine found — model tasks only. Install podman or docker (or set ${CONTAINER_ENGINE_ENV}) to donate CPU.`;
+}
+
+/**
  * Executes a work unit: fetch the pinned SHA from the allowlisted repo, run
- * the entrypoint in a podman sandbox (no network, capped memory/pids,
+ * the entrypoint in a container sandbox (no network, capped memory/pids,
  * read-only checkout), and parse its stdout as the task result. Refuses to
  * run without the sandbox — there is no unsandboxed fallback.
  */
@@ -349,6 +461,16 @@ export class WorkUnitExecutor implements Executor {
   private timeoutMs: number;
   private allowedRepo: string;
   private runtimeOverrides: Partial<Record<string, string>>;
+  // Resolved once per instance and reused for every task it executes — a
+  // long-lived runner should not re-spawn `podman version` / `docker version`
+  // before every single checkout. Successes only: a failed probe is cleared
+  // so the next task re-probes. `getExecutor()` builds one executor per
+  // runLoop, which under `start --watch` lives for days, and the failures are
+  // the transient kind — a volunteer who installs podman (or starts Docker
+  // Desktop) five minutes after seeing the "no container engine" line should
+  // get work units for the rest of that run, not have the first probe's
+  // answer frozen in for it.
+  private enginePromise?: Promise<ResolvedContainerEngine>;
 
   constructor(
     opts: {
@@ -406,6 +528,29 @@ export class WorkUnitExecutor implements Executor {
     return { name, config: override ? { ...base, image: override } : base };
   }
 
+  /** Resolved once on success (see enginePromise above), re-probed on failure. */
+  private engine(): Promise<ResolvedContainerEngine> {
+    if (!this.enginePromise) {
+      const probe = resolveContainerEngine(this.run).then((resolved) => {
+        if (!resolved) {
+          throw new Error(
+            `no container engine found — install podman or docker (or set ${CONTAINER_ENGINE_ENV}) ` +
+              'to run work units (sandbox unavailable)',
+          );
+        }
+        return resolved;
+      });
+      this.enginePromise = probe;
+      // Uncache a rejection so the next task probes again. The caller still
+      // sees this rejection — this handler only clears the slot, it does not
+      // swallow anything.
+      probe.catch(() => {
+        if (this.enginePromise === probe) this.enginePromise = undefined;
+      });
+    }
+    return this.enginePromise;
+  }
+
   async execute(task: ExecTask): Promise<ExecResult> {
     const wu = extractWorkUnit(task.spec);
     if (!wu) throw new Error('task has no valid work-unit spec');
@@ -418,11 +563,10 @@ export class WorkUnitExecutor implements Executor {
     // restarting. Spec input provides the fixed params (n, budget, seed); the
     // state provides the moving cursor and carried-forward best-so-far.
     const stdinInput = mergeWorkUnitInput(wu.input, task.target_state);
-    // No sandbox, no execution — a volunteer without podman releases the task
+    // No sandbox, no execution — a volunteer with neither podman nor docker
+    // (and no valid GIVEWORK_CONTAINER_ENGINE override) releases the task
     // rather than running contributed code on the bare machine.
-    await this.run('podman', ['--version']).catch(() => {
-      throw new Error('podman is required to run work units (sandbox unavailable)');
-    });
+    const { engine } = await this.engine();
 
     const dir = await mkdtemp(path.join(tmpdir(), 'givework-wu-'));
     const started = Date.now();
@@ -446,14 +590,15 @@ export class WorkUnitExecutor implements Executor {
         ...extra,
       });
 
-      // Name the container so a timeout can force-remove it: killing the podman
-      // client (SIGKILL on timeout) does NOT stop the container it launched, so
-      // without this a timed-out work unit leaks a running container.
+      // Name the container so a timeout can force-remove it: killing the
+      // container-engine client (SIGKILL on timeout) does NOT stop the
+      // container it launched, so without this a timed-out work unit leaks a
+      // running container.
       const containerName = `givework-wu-${path.basename(dir)}`;
       let out: string;
       try {
         out = await this.run(
-          'podman',
+          engine,
           [
             'run',
             '--rm',
@@ -478,8 +623,10 @@ export class WorkUnitExecutor implements Executor {
           { input: JSON.stringify(stdinInput), timeoutMs: this.timeoutMs },
         );
       } catch (err) {
-        // Best-effort reap of a container that outlived a killed client.
-        await this.run('podman', ['rm', '-f', containerName]).catch(() => {});
+        // Best-effort reap of a container that outlived a killed client. The
+        // resolved engine, not a hard-coded 'podman' — a docker-only host would
+        // otherwise leak the container it just failed on.
+        await this.run(engine, ['rm', '-f', containerName]).catch(() => {});
         // Runtimes that opted in (proof checking) salvage a timed-out run as a
         // recorded progress contribution: the donated CPU time was genuinely
         // burned, and "did not check within the window" is itself a finding
