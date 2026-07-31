@@ -58,6 +58,19 @@ routes = [
 # capture is a no-op, and the CLI sends nothing. Analytics off is a supported
 # state, not a broken deploy.
 
+# BROWSER analytics rides a PostHog managed reverse proxy on our own domain, so
+# ad-blockers that blanket-block *.posthog.com don't blank the funnel. Served to
+# browsers via GET /analytics-config.js only; the Worker's server-side capture
+# (src/posthog.ts) and the CLI's telemetry keep talking to POSTHOG_API_HOST
+# directly — nothing blocks server-to-server traffic, the proxy is for browsers.
+#
+# Deliberately a committed [vars] entry, not a secret: it's a public hostname
+# every page on the site hands to every visitor. Anything actually sensitive
+# stays `wrangler secret put` (see the list above). Unset (e.g. on a fork) the
+# browser simply uses the direct host.
+[vars]
+POSTHOG_PROXY_HOST = "https://v.givework.dev"
+
 # Optional tuning (plain var, not a secret):
 #   GITHUB_AUTOVERIFY_MIN_AGE_DAYS  # min GitHub account age (days) to auto-verify a
 #                                   # self-serve dev for sensitive work. Default 30.

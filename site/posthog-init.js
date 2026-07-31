@@ -6,7 +6,11 @@
 //
 // analytics-config.js is served by the Worker (src/app.ts) from the
 // POSTHOG_PROJECT_TOKEN / POSTHOG_API_HOST environment variables, so the token
-// never appears in committed code. With no token configured this file does
+// never appears in committed code. __POSTHOG_HOST__ is the BROWSER ingest host:
+// the managed reverse proxy (POSTHOG_PROXY_HOST, e.g. https://v.givework.dev)
+// when one is configured — first-party, so ad-blockers that blanket-block
+// *.posthog.com don't blank the funnel — and the direct PostHog host otherwise.
+// With no token configured this file does
 // nothing at all and `window.posthog` stays undefined — every capture site is
 // guarded, so an unconfigured deploy is a no-op rather than a broken page.
 //
@@ -28,14 +32,31 @@
     return;
   }
 
-  // PostHog snippet — loads posthog-js from CDN and initializes it.
+  // PostHog snippet — loads posthog-js and initializes it. The loader derives
+  // the script URL from api_host: on a *.i.posthog.com host the replace() below
+  // swaps in the -assets CDN subdomain; on a reverse-proxy host it no-ops and
+  // the script loads from <proxy>/static/array.js — which PostHog managed
+  // proxies serve (verified against https://v.givework.dev/static/array.js:
+  // 200, application/javascript). Either way the load path works unchanged.
   // biome-ignore format: vendored minified snippet, keep verbatim
   !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagResult isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
 
-  posthog.init(token, {
+  var options = {
     api_host: host,
     defaults: '2026-05-30',
-  });
+    // Anonymous visitors stay cheap anonymous events; only someone who is
+    // explicitly identify()'d (a signed-in contributor) gets a person profile.
+    person_profiles: 'identified_only',
+  };
+  // Behind the reverse proxy posthog-js cannot infer where the PostHog app
+  // lives from api_host, so every link it builds (toolbar, "view in PostHog")
+  // would point at the proxy. ui_host pins those links to the real app; on a
+  // direct *.i.posthog.com host the library infers it correctly by itself.
+  if (host.indexOf('.i.posthog.com') === -1) {
+    options.ui_host = 'https://us.posthog.com';
+  }
+
+  posthog.init(token, options);
 
   // ---------------------------------------------------------------------------
   // Shared CTA tracking

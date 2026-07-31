@@ -174,17 +174,26 @@ app.get('/version', (c) => {
 // With POSTHOG_PROJECT_TOKEN unset both routes still answer, with an empty
 // token, and every consumer treats that as "analytics off". An unconfigured
 // deploy is a no-op, never a broken page or a failing CLI.
-function analyticsConfig(): { token: string; host: string } {
+function analyticsConfig(): { token: string; host: string; browser_host: string } {
+  const host = process.env.POSTHOG_API_HOST ?? 'https://us.i.posthog.com';
   return {
     token: process.env.POSTHOG_PROJECT_TOKEN ?? '',
-    host: process.env.POSTHOG_API_HOST ?? 'https://us.i.posthog.com',
+    host,
+    // Browsers go through the managed reverse proxy when one is configured
+    // (POSTHOG_PROXY_HOST, a committed var in wrangler.toml): ad-blockers
+    // blanket-block *.posthog.com but not a first-party domain. Server-side
+    // capture (src/posthog.ts) and the CLI (src/cli/telemetry.ts) stay on the
+    // direct `host` — nothing blocks server-to-server traffic, and routing it
+    // through the proxy would only add a hop.
+    browser_host: process.env.POSTHOG_PROXY_HOST ?? host,
   };
 }
 
 // Browser form: sets the two window globals that site/posthog-init.js reads.
+// __POSTHOG_HOST__ is the BROWSER host — the reverse proxy when configured.
 app.get('/analytics-config.js', (_c) => {
-  const { token, host } = analyticsConfig();
-  const body = `window.__POSTHOG_TOKEN__=${JSON.stringify(token)};window.__POSTHOG_HOST__=${JSON.stringify(host)};`;
+  const { token, browser_host } = analyticsConfig();
+  const body = `window.__POSTHOG_TOKEN__=${JSON.stringify(token)};window.__POSTHOG_HOST__=${JSON.stringify(browser_host)};`;
   return new Response(body, {
     headers: {
       'content-type': 'application/javascript; charset=utf-8',
@@ -196,6 +205,8 @@ app.get('/analytics-config.js', (_c) => {
 // CLI form: the runner cannot be built with the token baked in (an `npx
 // github:…` install compiles from source on the volunteer's own machine, where
 // no token exists), so it asks the control plane for it and caches the answer.
+// The CLI reads `host` — the DIRECT PostHog host, never the browser proxy;
+// `browser_host` is included for completeness and ignored by the runner.
 // See src/cli/telemetry.ts.
 app.get('/analytics-config.json', (c) => {
   c.header('cache-control', 'public, max-age=300');
