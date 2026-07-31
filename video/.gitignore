@@ -1,3 +1,7 @@
 media/
 __pycache__/
 narration_*/
+*.mp4
+*.wav
+poster_*.png
+*-poster.jpg

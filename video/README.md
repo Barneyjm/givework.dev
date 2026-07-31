@@ -49,6 +49,24 @@ Narration rules that matter:
 
 Subclass `BeatScene` from [`viz.py`](./viz.py) and implement `build()`:
 
+Beyond `viz.py`, two module libraries are importable the same way (the render
+scripts put both this directory and `manim/` on `PYTHONPATH`):
+
+- [`manim/modules.py`](./manim/modules.py) — information design: `Timeline`,
+  `PortraitPlate`, `NumberExplorer`, `Descent`, `PaperDoc`, `QuoteCard`,
+  `ProgressMeter`, `ChapterCard`, `Counter`. Composable mobjects with a
+  `reveals()` generator; the caller owns pacing.
+- [`manim/mathviz.py`](./manim/mathviz.py) — mathematics you can watch happen:
+  `SieveGrid`, `DensityFlow`, `BrunStack`, `ParityField`, `AdmissibleWindow`,
+  `RandomGraph`. Every module computes its content from real arithmetic at
+  construction time, and a per-module `_selfcheck()` runs at import and raises
+  loudly if the arithmetic disagrees with known values. `manim/gaugeflow.py`
+  is the same idea for heat-flow numerics (spectral derivatives on the torus,
+  numpy only — it imports standalone, no Manim needed).
+
+Never hand-place data those modules can compute: the self-checks are the reason
+an on-screen claim can be trusted to be true of the exact frames.
+
 Import **manim first, `viz` second** — the order matters. `from manim import *`
 defines its own `RED`, `BLUE`, `YELLOW` and `GREEN`, so importing it last silently
 rebinds those names to Manim's stock palette (salmon `#FC6255`, sky `#58C4DD`) and
@@ -86,6 +104,10 @@ and copy their idioms. Each ships with the spec it was built against.
 
 - Palette from `viz.py` only: paper `#f4f1e6`, ink `#161310`, red `#e1342b`,
   blue `#21449c`, yellow `#f3c20a`, green `#1e7d46`. Bauhaus, flat, no gradients.
+- The logo is the real asset: `viz.logo()` loads `assets/givework-logo.png`
+  (a copy of `brand/givework-logo-512.png`). Never redraw the mark from
+  primitives, and remember an `ImageMobject` must live in a `Group`, not a
+  `VGroup`.
 - **The diagram is the explanation.** If a beat is a bulleted list of text, redo it.
   Draw the actual object: the trajectory, the graph, the curve, the distribution.
 - Captions are short and support the visual; they never replace it.
@@ -130,6 +152,94 @@ than hard-coding it (`sc_collatz.py` generates the real hailstone sequence;
 so the picture can't drift from the arithmetic. State honestly what is known versus
 conjectured: "checked to 2⁷¹, still unproven" is the interesting truth, and claiming
 more than that is the one thing we won't ship.
+
+## Production: from approved scene to shipped share
+
+Everything below is what "we take it from there" means. It is also a skill —
+`.claude/skills/conjecture-video/SKILL.md` — so an agent session in this repo
+can run the whole discipline. The 25+ shipped films were produced exactly this
+way. Reference spec: [`specs/firstproof-c4.json`](./specs/firstproof-c4.json).
+
+```
+spec.json ──(VoxCPM)──> narration_<slug>/*.wav + durations.json
+   │
+   └─(produce_video.sh)─> render (Manim container) ─> mux at starts.json
+                          ─> one continuous music bed ─> STATIC-GAIN mix
+                          ─> poster + 1s lead ─> <slug>-final.mp4
+   └─(assemble.sh)──────> same, for multi-act pieces from voice-muxed segments
+   └─(bolt_cta.sh)──────> + cta_outro.mp4 (built once by build_cta_outro.sh)
+                          = <slug>-share.mp4 + <slug>-poster.jpg
+   └─(gates)────────────> render_check.mjs PASS + inkdips.mjs two-dips-only
+```
+
+All scripts take their paths from env (`WORK`, `VOX_DIR`, `VOX_PY`, `ENGINE`,
+`MANIM_IMG`) with sane defaults; run them from a scratch working directory and
+outputs land there, never here.
+
+### The audio rule: static gain only
+
+The mix applies exactly two measured, constant gains — voice toward −16.5 LUFS
+integrated but capped by true-peak headroom to −1.5 dBTP (with high-crest
+VoxCPM takes the peak cap governs, landing near −21 LUFS — that is correct;
+going further would need a limiter), bed measured through its lowpass and set
+20 LU under the actual voice — plus a 3.5 kHz lowpass on the bed and a
+sidechain duck while the voice speaks. **No `loudnorm`, no `alimiter`, nothing
+adaptive.** This rule exists because it has been violated twice, and both times
+the result *shipped*:
+
+1. A bed generated hot and scaled by a guessed constant landed at speech level
+   — reported as "static", because a bed you can't hear under the voice is
+   just noise you turn up to follow the words.
+2. The poster-lead concat pinned sample rates and channel layouts but **not
+   `sample_fmts`**, so the `anullsrc` leg negotiated u8 and concat crushed the
+   whole main program to 8-bit audio (~−59 dBFS quantization hiss) — which a
+   `loudnorm` stage then amplified in every pause between sentences, exactly
+   where the ear listens for room tone.
+
+A dynamic normaliser cannot know which part of the signal is wanted; between
+sentences the "signal" is the noise floor, and it gets lifted. Measure once,
+apply constant gain, and the pauses stay as quiet as the mix left them. Two
+mechanical consequences, both wired into the committed scripts:
+
+- Every concat audio leg — `anullsrc` above all — pins
+  `aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo`.
+- `render_check.mjs` measures the hiss floor inside speech pauses (quietest
+  sustained 200 ms of the 4.5–15 kHz band, median across pauses — breaths
+  can't trip it) and fails above −70 dB. Calibrated on all 28 share cuts:
+  clean static-gain mixes measure −78…−87, the u8/loudnorm class −58.
+
+One more assembly invariant: **one continuous music bed per assembled piece**
+(`assemble.sh` generates it for the concatenated length). Mixing per act
+restarts the bed at every join and makes each seam audible.
+
+### Render discipline
+
+- Preview at 480p15 (`produce_video.sh spec.json l`), then **extract frames and
+  look at them** before paying for 1080p60. `ffmpeg -ss <t> -i … -frames:v 1`
+  on each beat midpoint; check composition, wrap widths, label collisions.
+- Run render subprocesses inline and poll them; detached watcher patterns have
+  silently stalled multi-hour renders twice.
+- Duration sanity before the gates: the assembled length must equal the sum of
+  segment durations plus the CTA (`ffprobe` each; drift means a concat ate a
+  stream).
+
+### Gates (on the FINAL share file, after bolt_cta.sh)
+
+```bash
+node render_check.mjs <slug>-share.mp4            # must PASS
+node inkdips.mjs <slug>-share.mp4                 # only the two boundary dips
+```
+
+`inkdips.mjs` watches the transitions render_check's midpoint sampling can't
+see. The acceptance signature is exactly two sub-floor stretches: the poster
+lead-in giving way to the opening beat, and the main piece handing over to the
+CTA. Any other dip is a hole in a beat.
+
+### Deliverables
+
+`<slug>-share.mp4` + `<slug>-poster.jpg` (frame 1, `-q:v 3` — bolt_cta.sh
+writes both). R2 layout: `givework-media/<slug>.mp4` and
+`givework-media/<slug>-poster.jpg`. **Never upload without owner review.**
 
 ## Vertical cuts for short-form
 
@@ -208,6 +318,7 @@ usually a cross-fade — an actually empty beat stays empty.
 | true peak above −0.5 dBFS | clipping on re-encode |
 | spectral centroid above 6.2 kHz | a harsh, hissy mix |
 | spectral flatness below 0.02 while loud | a pure tone — squeal or feedback |
+| speech-pause hiss floor above −70 dB (4.5–15 kHz) | a loudnorm or 8-bit-crushed mix — static between sentences |
 
 **Advises** (reported, not rejected): off-palette drift, mostly-silent runs, a very
 dark mix, and a scene whose beats all look identical.

@@ -86,10 +86,12 @@ class ConjectureVideo(BeatScene):
 
     def beat_background(self):
         self.narrate("background")
-        self.play(self._plot.animate.set_opacity(0.28), run_time=0.5)
         head = eyebrow("LOTHAR COLLATZ · 1937").to_edge(UP, buff=0.55)
         names = caption("3n+1 · hailstone · Syracuse problem", 0.44).next_to(head, DOWN, buff=0.25)
-        self.play(FadeIn(head), FadeIn(names, shift=UP * 0.15), run_time=0.6)
+        # The header arrives WITH the dimming, not after it: pushing the plot
+        # back to 28% first left the frame at 0.4% ink for a second and a half.
+        self.play(self._plot.animate.set_opacity(0.28), FadeIn(head),
+                  FadeIn(names, shift=UP * 0.15), run_time=0.7)
 
         # more hailstones converging to 1
         extras = VGroup()
