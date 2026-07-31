@@ -1,0 +1,20 @@
+{
+  "slug": "firstproof-c4",
+  "name": "Geodesic Triangles in the Giant Component",
+  "subtitle": "First Proof C4 — random triangles that refuse to stay thin",
+  "statement": "In a sparse random graph G(n, c/n) with c > 1, a random geodesic triangle in the giant component is, with high probability, fatter than an explicit (1/2 log n)/log c scale.",
+  "tex": "\\delta_n=\\Big\\lfloor\\tfrac{1}{\\log c}\\big(\\tfrac12\\log n-9\\log\\log n\\big)\\Big\\rfloor-M",
+  "source_ref": "https://1stproof.org/community-experiment.html#format-week2",
+  "narration": {
+    "coin_flips": "Start small enough to count. Six dots. For every pair of dots, flip a coin. Heads, draw a link. Tails, leave the gap. That is the entire recipe, a network built by pure chance. Now pick two dots and travel between them the shortest way, counting the links as you go. One. Two. Three. Three hops is the distance. Dots, links, and hops are all we need.",
+    "triangle_up_close": "Grow it a little. Twenty dots, same coin flips. Pick three dots and join each pair by a shortest route. That three sided shape is a geodesic triangle. Stand at any point on one side and count the hops to the nearest point on the other two sides. The worst count anywhere on the triangle is called the slimness. With these coins one side bulges two hops from the other two, so the slimness is two. A fat triangle. Now flip a fresh set of coins. Same recipe, different luck. This time chance builds it thin, the sides hugging so close they braid, and the slimness is one.",
+    "the_crystallization": "Now let the recipe run. Twenty dots become sixty. Sixty become one hundred eighty. When each dot averages more than one link, the fragments fuse into a single giant cluster holding most of the network. Zoom into any neighborhood and the giant looks almost exactly like a tree, and triangles in a tree are needle thin. The real question is global. Problem C four says as the network grows, a random geodesic triangle fattens, and with high probability its slimness beats a scale growing like one half log n over log c. It was posed by the First Proof project, working mathematicians testing whether AI can prove research grade theorems, and the authors published their proof in July of twenty twenty-six.",
+    "the_question": "Hold the two pictures side by side. Up close the giant looks like a tree, and tree triangles are needle thin. Yet the theorem says random triangles must fatten, with probability approaching one, at the one half log n over log c scale. Where does the fatness come from, if every neighborhood is thin. Somewhere past the hops you can count, thinness gives way. Finding where is worth thinking about.",
+    "the_invite": "The theorem's proof belongs to its authors. What stays open is the ground around it, simulations, lemmas, and unaided attempts graded against a known answer. The problem is live at givework dot dev slash conjectures slash first proof c four. Thinking about it is the contribution."
+  },
+  "pronounce": {
+    "geodesic": "jee oh dessik",
+    "C four": "see fore",
+    "c four": "see fore"
+  }
+}

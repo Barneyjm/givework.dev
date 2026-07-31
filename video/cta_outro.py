@@ -25,17 +25,9 @@ BODY_KW = dict(font="sans-serif", color=INK)
 MONO_KW = dict(font="monospace", color=INK)
 
 
-def logo(size=1.5):
-    u = size / 32.0
-
-    def p(sx, sy):
-        return np.array([(sx - 16) * u, (16 - sy) * u, 0.0])
-
-    bg = Square(side_length=size, color=INK, fill_opacity=1, stroke_width=0)
-    circ = Circle(radius=6 * u, color=RED, fill_opacity=1, stroke_width=0).move_to(p(9, 10))
-    sq = Square(side_length=12 * u, color=BLUE, fill_opacity=1, stroke_width=0).move_to(p(23, 10))
-    tri = Polygon(p(6, 28), p(16, 16), p(26, 28), color=YELLOW, fill_opacity=1, stroke_width=0)
-    return VGroup(bg, circ, sq, tri)
+# The real Givework mark, loaded from assets/givework-logo.png — never redrawn
+# from primitives. ImageMobject: group it with Group, not VGroup.
+from viz import logo  # noqa: E402
 
 
 class CTAOutro(Scene):
