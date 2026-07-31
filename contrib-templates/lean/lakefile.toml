@@ -1,0 +1,9 @@
+# v2 placeholder. v1 checking runs `lean` on one pinned file — no lake, no
+# packages, no mathlib (see README.md). When the mathlib-cached image lands,
+# checking becomes `lake build` against this file and contributions become
+# proper modules under GiveworkLean/.
+name = "givework-lean"
+defaultTargets = ["GiveworkLean"]
+
+[[lean_lib]]
+name = "GiveworkLean"

@@ -369,11 +369,12 @@ export interface ContributionSummary {
   summary: string;
   artifact_uri: string | null;
   /**
-   * Inline artifact, hydrated by checkoutTask ONLY for a salvaged invalid
-   * decomposition (artifact carries `validation_errors`) — the full proposal +
-   * exact errors the next agent needs to resubmit it corrected. Other
-   * contributions' artifacts stay out of the checkout payload: they default to
-   * the whole executor result and would bloat every prompt.
+   * Inline artifact, hydrated by checkoutTask ONLY when the next agent needs
+   * the full thing: a salvaged invalid decomposition (`validation_errors`), a
+   * peer review's rejection (`review_rejected`), or a failed Lean proof-check
+   * build (`compiler_output` — the exact errors a corrected .lean source must
+   * fix). Other contributions' artifacts stay out of the checkout payload:
+   * they default to the whole executor result and would bloat every prompt.
    */
   artifact?: unknown;
   cost_cents: number;
@@ -582,15 +583,19 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
     );
     //    A salvaged invalid decomposition additionally hydrates its inline
     //    artifact (the full proposal + validation_errors) so the next agent can
-    //    resubmit it corrected, and a peer review's rejection hydrates its
+    //    resubmit it corrected; a peer review's rejection hydrates its
     //    review_rejected artifact (the reviewer's reasons) so the next agent
     //    addresses the verdict instead of resubmitting the same proposal into
-    //    another burned review round; other artifacts stay out of the payload
-    //    (they default to the whole executor result), and a pathologically
-    //    large one is skipped rather than shipped.
+    //    another burned review round; and a failed Lean proof-check build
+    //    hydrates its compiler_output artifact (the exact compile errors) so
+    //    the corrected .lean source is written against them, not re-guessed.
+    //    Other artifacts stay out of the payload (they default to the whole
+    //    executor result), and a pathologically large one is skipped rather
+    //    than shipped.
     const prior = await client.query<ContributionSummary>(
       `SELECT id, outcome, summary, artifact_uri, cost_cents, created_at,
-              CASE WHEN (artifact ? 'validation_errors' OR artifact ? 'review_rejected')
+              CASE WHEN (artifact ? 'validation_errors' OR artifact ? 'review_rejected'
+                         OR artifact ? 'compiler_output')
                     AND octet_length(artifact::text) <= ${SALVAGED_ARTIFACT_HYDRATE_MAX_BYTES}
                    THEN artifact END AS artifact
          FROM contributions

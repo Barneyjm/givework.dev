@@ -1,6 +1,7 @@
 import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { signDevToken } from '../src/auth.js';
 import { pool } from '../src/db.js';
 import { buildContinuationSection, type Executor, reviewContextSection } from '../src/executor.js';
@@ -11,6 +12,7 @@ import {
   type SubmitArgs,
   type SubmitResult,
 } from '../src/run-loop.js';
+import { WorkUnitExecutor } from '../src/workunit.js';
 
 // The flow saga — the shared story driver behind scripts/flow-local.ts (the
 // pre-release rig) and test/flow-smoke.test.ts (the no-spend CI smoke). It
@@ -703,4 +705,136 @@ export async function runStubOutboxStage(
     if (prevOutbox === undefined) delete process.env.GIVEWORK_OUTBOX_DIR;
     else process.env.GIVEWORK_OUTBOX_DIR = prevOutbox;
   }
+}
+
+// ---------------------------------------------------------------------------
+// S9 — the formalization rail: proof_checker goes live
+// ---------------------------------------------------------------------------
+
+const LEAN_REPO = 'Barneyjm/givework-contrib';
+const LEAN_SHA = '7ec361511299227e007d8523b70c4554218a8531';
+const LEAN_ENTRYPOINT = 'lean/canary/Canary.lean';
+const LEAN_MARKER = '__GIVEWORK_LEAN_EXIT__';
+
+/** A WorkUnitExecutor whose git checkout plants the lean4 manifest and whose
+ * podman run replays a captured container transcript — the REAL runtime
+ * interpretation (exit marker, sorry guard, artifact shaping) runs on it, so
+ * the submitted shapes cannot drift from production. Deterministic, no
+ * podman, no spend. */
+function scriptedLeanExecutor(transcript: string): WorkUnitExecutor {
+  return new WorkUnitExecutor({
+    allowedRepo: LEAN_REPO,
+    run: async (cmd, args, opts) => {
+      if (cmd === 'git' && args[0] === 'checkout' && opts?.cwd) {
+        const entryDir = join(opts.cwd, dirname(LEAN_ENTRYPOINT));
+        await mkdir(entryDir, { recursive: true });
+        await writeFile(join(entryDir, 'manifest.json'), JSON.stringify({ runtime: 'lean4' }));
+        return '';
+      }
+      return cmd === 'podman' && args[0] === 'run' ? transcript : '';
+    },
+  });
+}
+
+async function seedLeanChunkTask(targetId: string, title: string): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO tasks (target_id, title, spec, est_cost_cents, max_cost_cents, model, effort,
+                        kind, verify_via, sensitivity)
+     VALUES ($1, $2, $3, 0, 20, 'by-effort', 'low'::task_effort,
+             'formalization'::task_kind, 'proof_checker'::verification_method,
+             'public'::data_sensitivity)
+     RETURNING id`,
+    [
+      targetId,
+      title,
+      JSON.stringify({
+        prompt: 'Work unit: compile the pinned .lean file; exit 0 is the verdict.',
+        code: { repo: LEAN_REPO, sha: LEAN_SHA, entrypoint: LEAN_ENTRYPOINT, input: {} },
+      }),
+    ],
+  );
+  return rows[0].id;
+}
+
+/**
+ * The formalization stage: a SHA-pinned lean4 chunk rides the SAME HTTP rail a
+ * volunteer's runner uses — checkout over HTTP, the real work-unit runtime
+ * interpretation on a captured container transcript, submit over HTTP — and
+ * the proof_checker verification decides it machine-side. Green: verified &
+ * accepted, target untouched (resolution stays an admin act). Red: verdict
+ * failed, task pooled, and the next checkout hydrates the compiler output as
+ * correction context.
+ */
+export async function runStubProofCheckerStage(
+  baseUrl: string,
+  fx: FlowFixture,
+  log: (line: string) => void = console.log,
+): Promise<void> {
+  const a = new HttpBackend(baseUrl, fx.tokenA);
+
+  const runChunk = async (taskId: string, transcript: string): Promise<SubmitResult> => {
+    const co = await a.checkout(taskId);
+    expectStage(co.task_id === taskId, 'S9-proof-checker', 'chunk checkout failed', co);
+    const exec = await scriptedLeanExecutor(transcript).execute(co);
+    return a.submit({
+      task_id: taskId,
+      result: exec.result,
+      actual_cost_cents: exec.actual_cost_cents,
+      raw_usage: exec.raw_usage,
+      outcome: exec.outcome,
+      summary: exec.summary,
+      artifact: exec.artifact,
+    });
+  };
+
+  // Green: the machine verdict accepts the chunk with no human in the loop.
+  const greenTask = await seedLeanChunkTask(fx.targetId, 'Proof-check the canary lemma (green)');
+  const green = await runChunk(greenTask, `\n${LEAN_MARKER} 0\n`);
+  expectStage(
+    green.status === 'accepted' && green.verification?.verdict === 'passed',
+    'S9-proof-checker',
+    'a green lean build must verify passed and auto-accept',
+    green,
+  );
+  const target = await pool.query(`SELECT status::text AS status FROM targets WHERE id = $1`, [
+    fx.targetId,
+  ]);
+  expectStage(
+    target.rows[0].status === 'open',
+    'S9-proof-checker',
+    'a green lemma must NOT resolve the conjecture (admin-gated)',
+    target.rows[0],
+  );
+
+  // Red: the verdict fails the claim, pools the task, and preserves the
+  // compiler output where the NEXT agent's checkout will surface it.
+  const redTask = await seedLeanChunkTask(fx.targetId, 'Proof-check the canary lemma (red)');
+  const diagnostics = `${LEAN_ENTRYPOINT}:1:42: error: unsolved goals\n⊢ False`;
+  const red = await runChunk(redTask, `${diagnostics}\n\n${LEAN_MARKER} 1\n`);
+  expectStage(
+    red.status === 'open' && red.verification?.verdict === 'failed',
+    'S9-proof-checker',
+    'a red lean build must verify failed and return the task to the pool',
+    red,
+  );
+  const co = await a.checkout(redTask);
+  const artifact = co.prior_contributions?.[0]?.artifact as { compiler_output?: string };
+  expectStage(
+    typeof artifact?.compiler_output === 'string' &&
+      artifact.compiler_output.includes('unsolved goals'),
+    'S9-proof-checker',
+    "the next checkout must hydrate the failed build's compiler output",
+    co.prior_contributions,
+  );
+  const rendered = buildContinuationSection(co.target_state, co.prior_contributions ?? []);
+  expectStage(
+    rendered.includes('proof checker REJECTED') && rendered.includes('unsolved goals'),
+    'S9-proof-checker',
+    'the continuation prompt must render the compiler errors as correction context',
+    rendered,
+  );
+  await a.release(redTask);
+  log(
+    '  ✓ S9 proof_checker: green verified & accepted (target untouched); red pooled with compiler errors flowing back',
+  );
 }

@@ -81,7 +81,27 @@ const LIMITS = {
   // Narration cut mid-word at the tail — the render ended before the voice did.
   tailWindow: 0.45, // seconds examined at the very end
   maxTailLevelDb: -34, // still this loud at the cut => speech was truncated
-
+  // Speech-pause noise floor, band-limited and breath-immune. Root cause of
+  // the shipped "static": the poster-lead concat pinned sample rate and layout
+  // but NOT sample_fmts, so the anullsrc leg negotiated u8 and concat crushed
+  // the whole main program to 8-bit (~-59 dBFS quantization hiss), which
+  // loudnorm then amplified in every pause. The metric: per speech pause, the
+  // quietest sustained 200 ms of the 4.5-15 kHz band, median across pauses.
+  // The min-window excludes breaths and decay tails; the band sits above the
+  // bed's 3.5 kHz lowpass and below AAC's ultrasonic framing spikes, so what
+  // remains is hiss. Calibrated on all 28 share cuts with THIS implementation
+  // (frame-hop windows, causal ffmpeg filters — it reads ~5 dB hotter than the
+  // zero-phase scipy reference, which puts clean mixes near -90): 26 clean
+  // static-gain mixes measure -78.4..-87.3, the u8/loudnorm class -57.8.
+  maxPauseFloorDb: -70, // >= 8 dB clear of clean, >= 12 dB clear of the defect
+  pauseHop: 0.05, // RMS frame size, seconds
+  pauseSpeechDb: -35, // full-band frame louder than this = speech
+  pauseMinDur: 0.3, // seconds a quiet run must last to count as a pause
+  pauseWinFrames: 4, // sustained window = 4 x 50 ms = 200 ms
+  pauseBandLow: 4500,
+  pauseBandHigh: 15000,
+  minPauseCount: 3, // a narrated piece breathes; none findable = floor too hot
+  minDurationForPauses: 45, // only insist on pauses for full-length pieces
 };
 
 const ff = (args) =>
@@ -285,6 +305,77 @@ function analyseAudio(video, duration) {
     silence_share: duration ? silence / duration : 0,
     spectral_centroid_hz: mean(centroidMatches),
     spectral_flatness: mean(flatnessMatches),
+  };
+}
+
+/**
+ * Noise floor inside speech pauses — band-limited and breath-immune.
+ *
+ * Two whole-file passes produce 50 ms RMS series: full-band (to find pauses:
+ * interior runs >= pauseMinDur below pauseSpeechDb) and 4.5-15 kHz bandpassed
+ * (to measure them). Per pause, take the quietest sustained 200 ms (min over a
+ * sliding 4-frame window) of the band series — a breath or a decay tail raises
+ * some windows but never the quietest one — and report the median across
+ * pauses. Whole-file filtering matters: per-pause decode puts the filter's
+ * warm-up transient inside every measurement. A static-gain mix leaves only
+ * the bed's lowpass skirt here; a lifted floor means a dynamic normaliser or
+ * an 8-bit sample-format crush upstream.
+ */
+function analysePauseFloor(video) {
+  const sr =
+    Number(
+      probe(['-select_streams', 'a:0', '-show_entries', 'stream=sample_rate', '-of', 'csv=p=0', video]),
+    ) || 48000;
+  const series = (band) => {
+    const filters = ['aformat=channel_layouts=mono'];
+    if (band) {
+      filters.push(
+        `highpass=f=${LIMITS.pauseBandLow}`,
+        `highpass=f=${LIMITS.pauseBandLow}`,
+        `lowpass=f=${LIMITS.pauseBandHigh}`,
+      );
+    }
+    filters.push(
+      `asetnsamples=n=${Math.round(sr * LIMITS.pauseHop)}:p=0`,
+      'astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level',
+      'ametadata=print:file=-',
+    );
+    const txt = ffText(['-i', video, '-af', filters.join(','), '-f', 'null', '-']);
+    return [...txt.matchAll(/lavfi\.astats\.Overall\.RMS_level=(-?\d+(?:\.\d+)?|-inf)/g)].map((m) =>
+      m[1] === '-inf' ? -120 : Number(m[1]),
+    );
+  };
+  const full = series(false);
+  const band = series(true);
+  const n = Math.min(full.length, band.length);
+  const minFrames = Math.max(LIMITS.pauseWinFrames, Math.round(LIMITS.pauseMinDur / LIMITS.pauseHop));
+  const floors = [];
+  let i = 0;
+  while (i < n) {
+    if (full[i] > LIMITS.pauseSpeechDb) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && full[j] <= LIMITS.pauseSpeechDb) j++;
+    // interior pauses only — the lead-in and the tail are silent by design
+    if (i > 0 && j < n && j - i >= minFrames) {
+      let minWin = Infinity;
+      for (let k = i; k + LIMITS.pauseWinFrames <= j; k++) {
+        let p = 0;
+        for (let w = 0; w < LIMITS.pauseWinFrames; w++) p += 10 ** (band[k + w] / 10);
+        const db = 10 * Math.log10(p / LIMITS.pauseWinFrames);
+        if (db < minWin) minWin = db;
+      }
+      if (minWin < Infinity) floors.push(minWin);
+    }
+    i = j;
+  }
+  floors.sort((a, b) => a - b);
+  const median = floors.length ? floors[Math.floor(floors.length / 2)] : null;
+  return {
+    pause_count: floors.length,
+    pause_floor_db: median == null ? null : Number(median.toFixed(1)),
   };
 }
 
@@ -535,6 +626,29 @@ function main() {
         `spectral flatness ${a.spectral_flatness} at ${a.integrated_lufs} LUFS — a loud pure tone (squeal/feedback)`,
       );
     }
+    // Speech-pause noise floor — the check the static incident slipped past.
+    // Only meaningful on a narrated mix; a scene-only render has no audio and a
+    // too-quiet track is already failed by the loudness gate.
+    if ((a.integrated_lufs ?? -99) > LIMITS.lufsMin) {
+      const pf = analysePauseFloor(video);
+      a.pause_count = pf.pause_count;
+      a.pause_floor_db = pf.pause_floor_db;
+      if (pf.pause_floor_db != null && pf.pause_floor_db > LIMITS.maxPauseFloorDb) {
+        failures.push(
+          `hiss floor in speech pauses is ${pf.pause_floor_db} dB in the 4.5-15 kHz band (limit ${LIMITS.maxPauseFloorDb}) — ` +
+            `a dynamic normaliser or an 8-bit sample-format crush lifted the floor between sentences; ` +
+            `use the static-gain mix and pin aformat=sample_fmts=fltp on every concat audio leg`,
+        );
+      } else if (
+        pf.pause_count < LIMITS.minPauseCount &&
+        duration > LIMITS.minDurationForPauses
+      ) {
+        failures.push(
+          `only ${pf.pause_count} speech pauses drop below ${LIMITS.pauseSpeechDb} dBFS in ${Math.round(duration)}s — ` +
+            `the track never gets quiet between sentences, so the floor is sitting at speech level`,
+        );
+      }
+    }
   }
 
   const report = {
@@ -560,7 +674,8 @@ function main() {
         `  audio: ${audio.integrated_lufs} LUFS, peak ${audio.true_peak_dbfs} dBFS, ` +
           `centroid ${Math.round(audio.spectral_centroid_hz ?? 0)} Hz, ` +
           `mono -${audio.mono_drop_lu ?? 0} LU, ` +
-          `silence ${(audio.silence_share * 100).toFixed(0)}%`,
+          `silence ${(audio.silence_share * 100).toFixed(0)}%, ` +
+          `pause floor ${audio.pause_floor_db ?? 'n/a'} dB (${audio.pause_count ?? 0} pauses)`,
       );
       console.log(
         `  motion: ${motion.flashes_per_sec}/s flashes, longest hold ${motion.longest_freeze_s}s ` +

@@ -77,14 +77,34 @@ programs, reducers) that other agents can later execute — the
 - **Runtime dispatch**: after checkout, `WorkUnitExecutor.resolveRuntime`
   reads the `manifest.json` sitting next to the entrypoint and picks the
   matching sandbox image + invocation from a small in-repo registry
-  (`python3-stdlib`, `c11-gcc`) — an unreadable/unrecognized manifest falls
-  back to `python3-stdlib`, so every contribution merged before a runtime
-  existed keeps behaving exactly as it always did. Both images are pinned by
-  digest, and both run inside the identical container flags (`--network=none`,
-  capped memory/cpus/pids, read-only source mount) — the sandbox, not the
-  language, is what makes a runtime safe to add. Every flag is argument-compatible
-  across podman and docker, so which engine actually ran it never changes the
-  invocation.
+  (`python3-stdlib`, `c11-gcc`, `lean4`) — an unreadable/unrecognized
+  manifest falls back to `python3-stdlib`, so every contribution merged
+  before a runtime existed keeps behaving exactly as it always did. All
+  images are pinned by digest, and all run inside the identical container
+  flags (`--network=none`, capped memory/cpus/pids, read-only source mount) —
+  the sandbox, not the language, is what makes a runtime safe to add. Every
+  flag is argument-compatible across podman and docker, so which engine
+  actually ran it never changes the invocation.
+- **Proof checking (`lean4`)**: the runtime that makes `verify_via:
+  proof_checker` live. A formalization chunk pins a merged `.lean` file;
+  the sandbox runs `lean <entrypoint>` (Lean 4.10.0, core prelude only — no
+  mathlib in v1) and the exit code is the verdict: 0 records a
+  `proof_checker: passed` verification and auto-accepts the chunk (the
+  TARGET does not flip — resolving a conjecture stays an admin act); nonzero
+  — or a `declaration uses 'sorry'` warning, which lean "passes" with exit 0
+  — records `failed`, returns the task to the pool, and preserves the full
+  compiler output as a `compiler_output` artifact that checkout hydrates
+  into the next agent's prompt (same channel as a salvaged invalid
+  decomposition). A timed-out check is salvaged as a progress contribution,
+  never silently released. Unlike the JSON-driver runtimes, the lean4
+  container's stdout is compiler diagnostics, not a result object — the
+  executor interprets it. **v2 (mathlib)**: needs a purpose-built,
+  digest-pinned image with a pinned mathlib checkout and its `.olean` cache
+  baked in at image build time (`lake exe cache get` with network on, then
+  `--network=none` at run time), and `lake build` instead of single-file
+  `lean` — the image is multi-GB, which is why v1 ships without it. The
+  upstream image is linux/amd64 only; arm64 hosts run it under the engine's
+  emulation (the canary checks in ~2 s emulated under podman).
 
 ## Next phases — not yet wired
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`
@@ -95,7 +115,9 @@ programs, reducers) that other agents can later execute — the
 ## Constraints
 
 Deterministic, no network, ≤ 20 files / ≤ 200 KB per file per contribution
-(enforced in extractCodeContribution). Two accepted runtimes: Python 3
-stdlib only, or a single C11 file (stdlib-only, no external libs) compiled
-with `cc -O2 -std=c11`. Loosened via pinned-by-digest base images, never via
-"trust me" — see givework-contrib's README for the manifest-level contract.
+(enforced in extractCodeContribution). Three accepted runtimes: Python 3
+stdlib only; a single C11 file (stdlib-only, no external libs) compiled
+with `cc -O2 -std=c11`; or a single Lean 4 file (core prelude only, no
+mathlib) checked with `lean`. Loosened via pinned-by-digest base images,
+never via "trust me" — see givework-contrib's README (and
+contrib-templates/lean/ here) for the manifest-level contract.

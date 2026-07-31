@@ -68,9 +68,11 @@ export interface PriorContribution {
   artifact_uri?: string | null;
   /**
    * Inline artifact, present only when the control plane decided the next
-   * agent needs the full thing — today that is a salvaged invalid
-   * decomposition ({proposed_decomposition, validation_errors}), preserved so
-   * the proposal can be corrected and resubmitted instead of re-derived.
+   * agent needs the full thing: a salvaged invalid decomposition
+   * ({proposed_decomposition, validation_errors}), a peer review's rejection
+   * ({review_rejected}), or a failed Lean proof-check build
+   * ({compiler_output}) — each preserved so the next attempt corrects the
+   * recorded failure instead of re-deriving it.
    */
   artifact?: unknown;
   cost_cents?: number;
@@ -468,12 +470,19 @@ export function buildContinuationSection(
         const reviewRejected =
           typeof p.artifact === 'object' &&
           (p.artifact as { review_rejected?: unknown }).review_rejected === true;
+        const compilerFailure =
+          typeof p.artifact === 'object' &&
+          (p.artifact as { compiler_output?: unknown }).compiler_output !== undefined;
         line += reviewRejected
           ? `\n  Preserved artifact from this attempt (a peer reviewer REJECTED the previous ` +
             `decomposition proposal for the reasons recorded here — address them and resubmit ` +
             `an improved proposal, or take a different approach entirely):\n  ${json}`
-          : `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
-            `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
+          : compilerFailure
+            ? `\n  Preserved artifact from this attempt (the proof checker REJECTED the previous ` +
+              `build — the compiler output below is the exact failure; a corrected source must ` +
+              `fix these errors, shipped as a new code contribution at a new SHA):\n  ${json}`
+            : `\n  Preserved artifact from this attempt (if it is a decomposition proposal with ` +
+              `validation_errors, fix exactly those errors and resubmit the corrected proposal):\n  ${json}`;
       }
       // Reserve room for the truncation note so appending it can never push
       // the section past the cap (the pre-note budget must leave it space).
@@ -633,6 +642,8 @@ CODE CONTRIBUTIONS — when the task's deliverable is code (a search program, a 
   "code_contribution": {"title": "<short title>", "description": "<what it does and how to check it>",
     "files": [{"path": "<repo-relative path>", "content": "<full file content>"}]}
 The platform opens a pull request with exactly these files to the public contrib repo; the PR URL becomes your contribution's artifact, and the code also stays inline in your result so nothing is lost. Hard limits: at most ${MAX_CODE_FILES} files, each at most ${MAX_CODE_FILE_BYTES} bytes (~${Math.round(MAX_CODE_FILE_BYTES / 1000)} KB); every path must be a safe repo-relative path (no leading "/", no "..", no ".git" or ".github" segments) — a contribution breaking any of these is dropped. You cannot run this code (see EXECUTION REALITY): say what it should do, never what it "did".
+
+FORMALIZATION (Lean 4) — when the task asks for a formal proof, the deliverable is Lean 4 SOURCE, shipped exactly like any code contribution: a "code_contribution" whose files live under "lean/<topic>/..." in the contrib repo, with the .lean entrypoint accompanied by a manifest.json of {"runtime": "lean4"} in the same directory. Target CORE Lean 4 only (the checking sandbox pins Lean 4.10.0 with NO mathlib — prove from the core prelude, or state the mathlib-dependent step as an explicit hypothesis). You cannot run lean (see EXECUTION REALITY): never claim the proof "compiles" or "type-checks" — checking happens ONLY after review+merge, via a SHA-pinned chunk subtask on the lean4 sandbox runtime, where \`lean\` exiting 0 IS the verification (method proof_checker; a green check accepts that chunk automatically). A proof containing "sorry" can NEVER verify — the checker treats the sorry warning as a failure — so prove a smaller true statement completely rather than a grand one with holes. A red build is not a dead end: the compiler's exact errors come back as correction context in the next attempt's prompt, so a corrected source (a new code contribution at a new SHA) picks up precisely where the failure was recorded.
 
 BUDGET HONESTY — decomposition as a deliverable. Each task has a hard cost cap and a bounded time window. If, once you understand the task, it plainly cannot fit its budget or window, do NOT grind at it until the clock kills the run — that burns the donation and records nothing. The CORRECT deliverable for an oversized task is a decomposition proposal. Add a "decomposition" key to your JSON object:
   "decomposition": {

@@ -1,0 +1,45 @@
+# Copy to .github/workflows/lean-check.yml in Barneyjm/givework-contrib.
+#
+# Checks every Lean source on PRs that touch lean/ — the same verdict the
+# work-unit sandbox will later reach on the merged SHA, so a PR that is red
+# here would be a guaranteed-failed chunk task. The toolchain is pinned by
+# lean/lean-toolchain (keep it in lockstep with the platform's lean4 runtime
+# image — Lean 4.10.0 for v1).
+name: Lean proof check
+on:
+  pull_request:
+    paths:
+      - 'lean/**'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan with the pinned toolchain
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Check every Lean source under lean/
+        run: |
+          set -uo pipefail
+          status=0
+          while IFS= read -r -d '' f; do
+            echo "::group::lean $f"
+            out=$(lean "$f" 2>&1); code=$?
+            printf '%s\n' "$out"
+            # `sorry` compiles with exit 0 (warning only) — an incomplete
+            # proof must fail here exactly as it fails the platform's check.
+            if [ "$code" -ne 0 ] || printf '%s' "$out" | grep -q "declaration uses 'sorry'"; then
+              status=1
+            fi
+            echo "::endgroup::"
+          done < <(find lean -name '*.lean' -print0 | sort -z)
+          exit "$status"
