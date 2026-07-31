@@ -25,10 +25,12 @@ const bearer = (t: string) => ({
 
 const TOKEN_VAR = 'POSTHOG_PROJECT_TOKEN';
 const HOST_VAR = 'POSTHOG_API_HOST';
+const PROXY_VAR = 'POSTHOG_PROXY_HOST';
 
 afterEach(() => {
   delete process.env[TOKEN_VAR];
   delete process.env[HOST_VAR];
+  delete process.env[PROXY_VAR];
   vi.restoreAllMocks();
 });
 
@@ -51,7 +53,11 @@ describe('analytics config routes', () => {
   it('serves the CLI form as JSON, with an empty token when unset', async () => {
     const res = await req('/analytics-config.json');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ token: '', host: 'https://us.i.posthog.com' });
+    expect(await res.json()).toEqual({
+      token: '',
+      host: 'https://us.i.posthog.com',
+      browser_host: 'https://us.i.posthog.com',
+    });
   });
 
   it('reflects the configured token and host into both forms', async () => {
@@ -65,7 +71,45 @@ describe('analytics config routes', () => {
     expect(await (await req('/analytics-config.json')).json()).toEqual({
       token: 'phc_test_token',
       host: 'https://eu.i.posthog.com',
+      browser_host: 'https://eu.i.posthog.com',
     });
+  });
+
+  // The browser rides the managed reverse proxy (first-party domain, so
+  // ad-blockers that blanket-block *.posthog.com don't blank the funnel); the
+  // CLI and the Worker's server-side capture keep talking to PostHog directly.
+  // The split lives in analyticsConfig(): `browser_host` vs `host`.
+  it('serves the proxy host to the browser when POSTHOG_PROXY_HOST is set', async () => {
+    process.env[TOKEN_VAR] = 'phc_test_token';
+    process.env[HOST_VAR] = 'https://us.i.posthog.com';
+    process.env[PROXY_VAR] = 'https://v.givework.dev';
+
+    const js = await (await req('/analytics-config.js')).text();
+    expect(js).toContain('window.__POSTHOG_HOST__="https://v.givework.dev"');
+    expect(js).not.toContain('window.__POSTHOG_HOST__="https://us.i.posthog.com"');
+  });
+
+  it('serves the direct host to the browser when no proxy is configured', async () => {
+    process.env[TOKEN_VAR] = 'phc_test_token';
+    process.env[HOST_VAR] = 'https://us.i.posthog.com';
+
+    const js = await (await req('/analytics-config.js')).text();
+    expect(js).toContain('window.__POSTHOG_HOST__="https://us.i.posthog.com"');
+  });
+
+  it('always serves the direct host to the CLI, even with the proxy configured', async () => {
+    process.env[TOKEN_VAR] = 'phc_test_token';
+    process.env[HOST_VAR] = 'https://us.i.posthog.com';
+    process.env[PROXY_VAR] = 'https://v.givework.dev';
+
+    const body = (await (await req('/analytics-config.json')).json()) as {
+      host: string;
+      browser_host: string;
+    };
+    // src/cli/telemetry.ts posts to `${host}/i/v0/e/` — the direct PostHog
+    // ingest host. The proxy is browser-only; the CLI must never switch to it.
+    expect(body.host).toBe('https://us.i.posthog.com');
+    expect(body.browser_host).toBe('https://v.givework.dev');
   });
 
   // The values are interpolated into a <script> body. JSON.stringify is what
