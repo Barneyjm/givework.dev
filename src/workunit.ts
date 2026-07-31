@@ -100,6 +100,47 @@ export function mergeWorkUnitInput(specInput: unknown, targetState: unknown): un
   return { ...base, ...overlay };
 }
 
+// Caps for a synthesized work-unit summary. Production incident: 14 CPU chunk
+// contributions rendered "(no summary)" on the public feed because the executed
+// program's JSON carried results but no `summary` string, and the feed needed a
+// manual DB repair. A work unit's submit now always carries a summary.
+const SUMMARY_MAX_CHARS = 200;
+const SUMMARY_MAX_FIELDS = 4;
+const SUMMARY_MAX_VALUE_CHARS = 40;
+/** Continuation/envelope keys are routing metadata, not headline results. */
+const SUMMARY_SKIP_KEYS = new Set(['summary', 'outcome', 'state_update', 'artifact_uri']);
+
+/**
+ * Build a compact human summary from a work unit's JSON result: the task title
+ * plus up to a few headline scalar fields. Deterministic and generic — shallow
+ * numeric/boolean/short-string values in the object's own key order, skipping
+ * arrays, nested objects, and huge strings — so any driver's output produces a
+ * readable feed line without the platform knowing its schema. Used only when
+ * the executed program supplied no `summary` of its own.
+ */
+export function synthesizeWorkUnitSummary(title: string, result: unknown): string {
+  const fields: string[] = [];
+  if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+    for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+      if (fields.length >= SUMMARY_MAX_FIELDS) break;
+      if (SUMMARY_SKIP_KEYS.has(key)) continue;
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        fields.push(`${key}: ${value}`);
+      } else if (typeof value === 'boolean') {
+        fields.push(`${key}: ${value}`);
+      } else if (typeof value === 'string') {
+        const v = value.trim();
+        if (v.length > 0 && v.length <= SUMMARY_MAX_VALUE_CHARS && !v.includes('\n')) {
+          fields.push(`${key}: ${v}`);
+        }
+      }
+      // arrays, nested objects, and huge strings are never headline material
+    }
+  }
+  const s = fields.length > 0 ? `${title} — ${fields.join(', ')}` : title;
+  return s.length > SUMMARY_MAX_CHARS ? `${s.slice(0, SUMMARY_MAX_CHARS - 1)}…` : s;
+}
+
 /** Pull a well-formed work-unit spec out of a task spec, or null. */
 export function extractWorkUnit(spec: unknown): WorkUnitSpec | null {
   const code = (spec as { code?: unknown } | null)?.code as WorkUnitSpec | undefined;
@@ -293,7 +334,13 @@ export class WorkUnitExecutor implements Executor {
       return {
         result,
         outcome: r.outcome,
-        summary: typeof r.summary === 'string' ? r.summary.slice(0, 500) : undefined,
+        // The driver's own summary wins; a driver that emitted none gets a
+        // synthesized headline (title + top scalar fields) so the public feed
+        // never renders "(no summary)" for a completed CPU chunk.
+        summary:
+          typeof r.summary === 'string' && r.summary.trim().length > 0
+            ? r.summary.slice(0, 500)
+            : synthesizeWorkUnitSummary(task.title, result),
         state_update: r.state_update,
         actual_cost_cents: 0, // CPU donation — no token spend to book
         raw_usage: {

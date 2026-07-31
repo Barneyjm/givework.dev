@@ -107,6 +107,43 @@ export function isDefinitiveReject(err: unknown): boolean {
 /** How long one submit attempt may hang before the spool-and-replay path takes over. */
 export const SUBMIT_TIMEOUT_MS = 60_000;
 
+/** Hostnames that count as a local control plane for the stub-executor guard. */
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * Guard for the runner's wiring step: a STUB executor pointed at a REMOTE
+ * control plane submits fabricated results as if they were real donated work.
+ * Production incident: a stub run against api.givework.dev submitted 7
+ * fabricated results and booked 1028¢ of fake spend, repaired by hand.
+ *
+ * Returns the refusal message when the combination is unsafe, or null when it
+ * is fine: a real executor (EXECUTOR=claude), a local control plane
+ * (localhost / 127.0.0.1 / [::1]), or the deliberate escape hatch
+ * (GIVEWORK_ALLOW_STUB_REMOTE=1). An unparseable base URL counts as remote —
+ * when in doubt, refuse. Called BEFORE any network traffic; tests that inject
+ * executors into runLoop directly never pass through it.
+ */
+export function stubExecutorRemoteRefusal(
+  baseUrl: string,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  if (env.EXECUTOR === 'claude') return null;
+  if (env.GIVEWORK_ALLOW_STUB_REMOTE === '1') return null;
+  let hostname = '';
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch {
+    // unparseable -> treat as remote
+  }
+  if (LOCAL_HOSTNAMES.has(hostname)) return null;
+  return (
+    `Refusing to start: the stub executor against a remote control plane (${baseUrl}) ` +
+    'would submit fabricated results and book fake spend. Set EXECUTOR=claude to donate ' +
+    'real capacity, or point at a local server; override deliberately with ' +
+    'GIVEWORK_ALLOW_STUB_REMOTE=1.'
+  );
+}
+
 // The runner drives a Backend that exposes the five dev operations. Both
 // transports normalize platform errors to ToolError(code), so the loop's
 // race/budget handling is identical regardless of transport.

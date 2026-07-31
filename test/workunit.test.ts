@@ -2,7 +2,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ExecTask } from '../src/executor.js';
-import { extractWorkUnit, mergeWorkUnitInput, WorkUnitExecutor } from '../src/workunit.js';
+import {
+  extractWorkUnit,
+  mergeWorkUnitInput,
+  synthesizeWorkUnitSummary,
+  WorkUnitExecutor,
+} from '../src/workunit.js';
 
 // Sandbox-orchestration tests with an injected process runner: no podman, no
 // git, no network.
@@ -129,6 +134,89 @@ describe('WorkUnitExecutor', () => {
       run: async (cmd, args) => (cmd === 'podman' && args[0] === 'run' ? 'garbage' : ''),
     });
     await expect(ex.execute(task({ code: CODE }))).rejects.toThrow(/non-JSON/);
+  });
+});
+
+// Incident: 14 CPU chunk contributions rendered "(no summary)" on the public
+// feed — the driver's JSON had the numbers but no `summary` string — and the
+// rows needed a manual DB repair. A work-unit submit now always carries one.
+describe('work-unit summary synthesis', () => {
+  it('builds title + up to 4 shallow scalar fields, deterministically, in key order', () => {
+    const result = {
+      giant_fraction: 0.8,
+      slimness_mean: 2.458,
+      delta_n: -21,
+      p_slim_gt_delta_n: 1,
+      fifth_field: 99, // beyond the 4-field cap — never included
+    };
+    expect(synthesizeWorkUnitSummary('slim_sim n=1000 c=2', result)).toBe(
+      'slim_sim n=1000 c=2 — giant_fraction: 0.8, slimness_mean: 2.458, delta_n: -21, p_slim_gt_delta_n: 1',
+    );
+  });
+
+  it('skips arrays, nested objects, huge strings, and envelope keys', () => {
+    const result = {
+      outcome: 'progress', // envelope routing, not a headline
+      state_update: { cursor: 5 },
+      witnesses: [1, 2, 3],
+      detail: { nested: true },
+      blob: 'x'.repeat(500),
+      status: 'ok',
+      count: 7,
+    };
+    expect(synthesizeWorkUnitSummary('sweep', result)).toBe('sweep — status: ok, count: 7');
+  });
+
+  it('falls back to the bare title when the result has no headline scalars', () => {
+    expect(synthesizeWorkUnitSummary('chunk 3/64', { rows: [[1]], deep: { a: 1 } })).toBe(
+      'chunk 3/64',
+    );
+    expect(synthesizeWorkUnitSummary('chunk 3/64', 'not an object')).toBe('chunk 3/64');
+    expect(synthesizeWorkUnitSummary('chunk 3/64', null)).toBe('chunk 3/64');
+  });
+
+  it('truncates cleanly at the cap', () => {
+    const result = Object.fromEntries(
+      Array.from({ length: 4 }, (_, i) => [`really_long_field_name_number_${i}`, 1e15 + i]),
+    );
+    const s = synthesizeWorkUnitSummary(`a long chunk title ${'x'.repeat(120)}`, result);
+    expect(s.length).toBeLessThanOrEqual(200);
+    expect(s.endsWith('…')).toBe(true);
+  });
+
+  it('the executor synthesizes a summary when the driver emitted none', async () => {
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) =>
+        cmd === 'podman' && args[0] === 'run'
+          ? '{"giant_fraction": 0.8, "slimness_mean": 2.458, "delta_n": -21, "p_slim_gt_delta_n": 1}'
+          : '',
+    });
+    const t = { ...task({ code: CODE }), title: 'slim_sim n=1000 c=2' };
+    const res = await ex.execute(t);
+    expect(res.summary).toBe(
+      'slim_sim n=1000 c=2 — giant_fraction: 0.8, slimness_mean: 2.458, delta_n: -21, p_slim_gt_delta_n: 1',
+    );
+  });
+
+  it('never overwrites a summary the driver produced itself', async () => {
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) =>
+        cmd === 'podman' && args[0] === 'run' ? '{"summary": "driver said so", "gap": 1.1}' : '',
+    });
+    const res = await ex.execute(task({ code: CODE }));
+    expect(res.summary).toBe('driver said so');
+  });
+
+  it('treats a whitespace-only driver summary as absent', async () => {
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) =>
+        cmd === 'podman' && args[0] === 'run' ? '{"summary": "  ", "gap": 1.1}' : '',
+    });
+    const res = await ex.execute(task({ code: CODE }));
+    expect(res.summary).toBe('wu — gap: 1.1');
   });
 });
 

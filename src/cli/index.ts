@@ -2,6 +2,7 @@ import { ApiError } from './api.js';
 import {
   admin,
   budget,
+  flagCheckFor,
   history,
   onboard,
   run,
@@ -75,6 +76,25 @@ Tip: 'start --watch' uses your own claude -p by default; set EXECUTOR to overrid
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
+  // Validate flags BEFORE dispatch: an unknown flag errors out with usage
+  // instead of being silently ignored, and `--help`/`-h` on any subcommand
+  // prints usage and exits 0. (Incident: `givework run --help` fell through to
+  // a full pool run.) A null check means the command itself is unknown — the
+  // switch default (or the admin router) reports that.
+  const check = flagCheckFor(cmd, args);
+  if (check) {
+    if (check.help) {
+      console.log(USAGE);
+      return;
+    }
+    if (check.unknown.length > 0) {
+      console.error(
+        `Unknown flag${check.unknown.length === 1 ? '' : 's'} for 'givework ${cmd}': ${check.unknown.join(', ')}\n`,
+      );
+      console.log(USAGE);
+      process.exit(1);
+    }
+  }
   switch (cmd) {
     case 'start':
       return start(args);

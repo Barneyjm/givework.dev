@@ -10,6 +10,7 @@ import {
   runLoop,
   type SubmitArgs,
   type SubmitResult,
+  stubExecutorRemoteRefusal,
   ToolError,
 } from './run-loop.js';
 
@@ -94,6 +95,14 @@ class McpBackend implements Backend {
 async function createBackend(token: string): Promise<Backend> {
   const apiUrl = flag('--url') ?? process.env.GIVEWORK_API_URL;
   if (apiUrl) {
+    // A stub executor against a remote control plane would submit fabricated
+    // results — refuse before any network call. (The MCP branch below is local
+    // by definition: it spawns src/mcp.ts against the local DB.)
+    const refusal = stubExecutorRemoteRefusal(apiUrl);
+    if (refusal) {
+      console.error(refusal);
+      process.exit(1);
+    }
     console.log(`Using HTTP backend → ${apiUrl}`);
     const backend = new HttpBackend(apiUrl, token);
     // Report which control-plane build we're talking to, so volunteers can see an
