@@ -13,15 +13,24 @@ import {
 import { acceptTaskAndNotify } from './review.js';
 
 // Verification core. Replaces the subjective accept/reject with a recorded
-// verification step. Phase 5 wires the two methods that need no external
-// toolchain:
+// verification step.
 //   - auto_rerun    — re-evaluate a claimed counterexample with a built-in,
 //                     safe, deterministic checker. A pass flips the target to
 //                     'disproven'. (Sandboxed/arbitrary checkers are Phase 6.)
-//   - human_review  — deferred to the existing admin accept/reject, which now
+//   - human_review  — deferred to the existing admin accept/reject, which
 //                     records a verification row.
-// proof_checker and replication record a 'pending' verification and wait for
-// Phase 6 (the trusted sandbox + K-of-N replication).
+//   - proof_checker — LIVE for the lean4 work-unit rail: a SHA-pinned chunk
+//                     task ran `lean` on the pinned .lean source in the
+//                     sandbox, and the result carries the machine verdict
+//                     (proof_checked + compiler output). Green auto-accepts
+//                     the task — it does NOT flip the target: a checked lemma
+//                     is not a resolved conjecture, so resolution stays
+//                     admin-gated (adminVerify's kind→resolution mapping is
+//                     unchanged). Any other proof_checker submission (an LLM
+//                     task claiming a proof) still records 'pending' for a
+//                     human.
+//   - replication   — records a 'pending' verification and waits for Phase 6
+//                     (K-of-N replication).
 
 export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'pending';
 
@@ -306,6 +315,71 @@ async function flipTargetStatus(
 }
 
 // ---------------------------------------------------------------------------
+// proof_checker — the lean4 machine verdict
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this task's spec is a platform-authored, SHA-pinned work-unit chunk.
+ * Mirrors extractWorkUnit's validation (src/workunit.ts) but is deliberately
+ * import-free: verify.ts ships in the Worker bundle, and workunit.ts pulls
+ * node:child_process, which must never ride along.
+ *
+ * This is the trust gate for the machine verdict below: only a task whose spec
+ * the PLATFORM pinned to merged, reviewed code can auto-accept on
+ * `proof_checked: true` — an LLM-path agent (no spec.code) that fabricates the
+ * same keys in its result stays 'pending' for a human. (A malicious RUNNER
+ * could still fabricate a chunk result; that is the work-unit rail's existing
+ * trust level, and K-of-N replication is the v2 answer.)
+ */
+function isPinnedChunkSpec(spec: unknown): boolean {
+  const code = (spec as { code?: unknown } | null | undefined)?.code as
+    | { repo?: unknown; sha?: unknown; entrypoint?: unknown }
+    | undefined;
+  if (!code || typeof code !== 'object') return false;
+  if (typeof code.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(code.repo)) return false;
+  if (typeof code.sha !== 'string' || !/^[0-9a-f]{40}$/.test(code.sha)) return false;
+  return typeof code.entrypoint === 'string' && code.entrypoint.length > 0;
+}
+
+/** Tail of the compiler output kept in a failed verification's detail. */
+const PROOF_CHECK_DETAIL_TAIL_CHARS = 2_000;
+
+/**
+ * The machine verdict a lean4 work-unit run wrote into the task result
+ * (src/workunit.ts interpretLeanOutput), or null when this submission did not
+ * come off that rail — null means "hold for a human", never a failure.
+ */
+function leanProofVerdict(
+  result: unknown,
+  spec: unknown,
+): { passed: boolean; detail: Record<string, unknown> } | null {
+  if (!isPinnedChunkSpec(spec)) return null;
+  const r = result as {
+    proof_checker?: unknown;
+    proof_checked?: unknown;
+    exit_code?: unknown;
+    compiler_output?: unknown;
+    entrypoint?: unknown;
+  } | null;
+  if (r?.proof_checker !== 'lean4' || typeof r.proof_checked !== 'boolean') return null;
+  const compilerTail =
+    typeof r.compiler_output === 'string'
+      ? r.compiler_output.slice(-PROOF_CHECK_DETAIL_TAIL_CHARS)
+      : undefined;
+  return {
+    passed: r.proof_checked,
+    detail: {
+      runtime: 'lean4',
+      exit_code: r.exit_code,
+      entrypoint: r.entrypoint,
+      // On a red build the tail is the next agent's correction context —
+      // recorded on the verification as well as on the contribution.
+      ...(compilerTail !== undefined ? { compiler_tail: compilerTail } : {}),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The verification entry points
 // ---------------------------------------------------------------------------
 
@@ -340,7 +414,15 @@ interface TaskVerifyRow {
  *     passed  -> accept the task + flip the target to 'disproven'.
  *     failed  -> reject the task back to the pool (the claim didn't check out).
  *     no checker / inconclusive -> record + leave 'submitted' for a human.
- * - proof_checker / replication -> record 'pending' (Phase 6), leave 'submitted'.
+ * - proof_checker       -> honor the lean4 sandbox's machine verdict when the
+ *     task is a SHA-pinned chunk (see leanProofVerdict):
+ *     green build -> record 'passed' + accept (like auto_rerun's confirmed
+ *                    branch — the target does NOT flip; resolution stays with
+ *                    the admin).
+ *     red build   -> record 'failed' with the compiler tail + reject back to
+ *                    the pool (spend already booked by the submit).
+ *     anything else (an LLM-path claim) -> record 'pending' for a human.
+ * - replication -> record 'pending' (Phase 6), leave 'submitted'.
  */
 export async function runAutoVerification(
   taskId: string,
@@ -452,7 +534,58 @@ export async function runAutoVerification(
     return { handled: true, method, verdict: 'failed', target_status: null, verification_id: id };
   }
 
-  // proof_checker / replication — not automatable yet (Phase 6). Hold for a human.
+  if (method === 'proof_checker') {
+    const machine = leanProofVerdict(row.result, row.spec);
+    if (machine?.passed) {
+      const id = await recordVerification({
+        taskId,
+        contributionId,
+        targetId: row.target_id,
+        method,
+        verdict: 'passed',
+        verifier: 'platform',
+        detail: machine.detail,
+      });
+      // The proof compiled in the pinned sandbox: accept the deliverable —
+      // exactly the auto_rerun `confirmed` shape. The target is NOT flipped:
+      // a green lemma is not a resolved conjecture; adminVerify still owns
+      // the formalization→resolved mapping.
+      await acceptTaskAndNotify(taskId, binding);
+      return {
+        handled: true,
+        method,
+        verdict: 'passed',
+        target_status: null,
+        verification_id: id,
+      };
+    }
+    if (machine) {
+      // Red build: the claim is objectively wrong as submitted. Reject back to
+      // the pool — the spend is already booked (never lost), the compiler tail
+      // is on the verification AND on the contribution for the next attempt.
+      const id = await recordVerification({
+        taskId,
+        contributionId,
+        targetId: row.target_id,
+        method,
+        verdict: 'failed',
+        verifier: 'platform',
+        detail: machine.detail,
+      });
+      await rejectTask(taskId);
+      return {
+        handled: true,
+        method,
+        verdict: 'failed',
+        target_status: null,
+        verification_id: id,
+      };
+    }
+    // Not a machine result off the lean4 rail (an LLM-path proof claim, or a
+    // malformed chunk result) — record 'pending' and hold for a human below.
+  }
+
+  // proof_checker (non-machine) / replication — hold for a human.
   const id = await recordVerification({
     taskId,
     contributionId,
@@ -460,7 +593,12 @@ export async function runAutoVerification(
     method,
     verdict: 'pending',
     verifier: 'platform',
-    detail: { reason: `${method} verification is not yet automated` },
+    detail: {
+      reason:
+        method === 'proof_checker'
+          ? 'no machine proof-check verdict on this submission (not a pinned lean4 chunk result); held for a human'
+          : `${method} verification is not yet automated`,
+    },
   });
   return { handled: true, method, verdict: 'pending', target_status: null, verification_id: id };
 }
@@ -506,7 +644,8 @@ async function trustAcceptAllowed(taskId: string): Promise<boolean> {
  * submit_result tool): book the contribution, then verify a terminal
  * (candidate_solution) submission. A progress/dead-end contribution returned
  * the task to the pool, so there's nothing to verify. Machine verification
- * decides auto_rerun (holding proof_checker/replication for Phase 6);
+ * decides auto_rerun and pinned-chunk proof_checker (holding non-machine
+ * proof_checker claims and replication for a human / Phase 6);
  * human_review is NOT handled here — fall back to the verified-dev trust
  * auto-accept, but ONLY where acceptance is subjective (org_request): on a
  * conjecture/research_question a candidate_solution stays 'submitted' until a

@@ -4,6 +4,7 @@ import {
   correctedProposal,
   type FlowFixture,
   runStubOutboxStage,
+  runStubProofCheckerStage,
   runStubSaga,
   seedFlowFixture,
 } from '../scripts/flow-saga.js';
@@ -60,5 +61,9 @@ describe('flow smoke (real HTTP server, scripted results)', () => {
 
   it('loss-proofing: a dropped submit spools, survives, and replays to exactly one booking', async () => {
     await runStubOutboxStage(baseUrl, fx, quiet);
+  });
+
+  it('proof_checker: a lean4 chunk verdict rides the same HTTP rail (green accepts, red pools with correction context)', async () => {
+    await runStubProofCheckerStage(baseUrl, fx, quiet);
   });
 });
