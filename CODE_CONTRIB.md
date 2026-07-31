@@ -47,11 +47,18 @@ programs, reducers) that other agents can later execute — the
   `--network=none`, memory/pids caps, read-only checkout — feeds `input` on
   stdin, and parses stdout JSON as the result. The container engine is picked
   the same way `EXECUTOR` picks the LLM executor: `GIVEWORK_CONTAINER_ENGINE`
-  (`podman` or `docker`) wins when set, otherwise the runner probes `podman`
-  then `docker` and uses whichever answers, cached once per runner process
-  (see `resolveContainerEngine`). No engine found (neither installed, no
-  usable override) → no execution, ever; the task is released, and `givework
-  start`/`run` say so up front rather than only at that moment. Scripts can
+  (`podman` or `docker`, case- and whitespace-insensitive; blank means unset)
+  wins when set, otherwise the runner probes `podman` then `docker` and uses
+  whichever answers (see `resolveContainerEngine`). The probe is `version`,
+  not `--version`, because only the former reaches the daemon: a stopped
+  Docker Desktop or an unstarted `podman machine` passes `--version` and would
+  turn "sandbox ✓" into an execution failure on every work unit. It is a
+  successful probe that gets cached — per `WorkUnitExecutor`, so once per
+  runner process in practice — while a failed one is re-probed, so a sandbox
+  installed part-way through a long `--watch` starts being used. No engine
+  found (neither installed, no usable override) → no execution, ever; the task
+  is released, and `givework start`/`run` say so up front rather than only at
+  that moment. Scripts can
   steer the loop by including `outcome` / `summary` / `state_update` in their
   output, so chunked search over `state.cursor` works exactly like today's
   resumable tasks. A `replication` verification re-runs the same SHA on the

@@ -385,14 +385,17 @@ describe('givework start', () => {
     expect(occurrences).toBe(1);
   });
 
-  it('start --watch prints the sandbox line and still starts the loop', async () => {
+  it('start --watch prints the sandbox line exactly once and still starts the loop', async () => {
     process.env.GIVEWORK_TOKEN = 'dev-token';
     plane.tasksCompleted = 1;
     plane.budget = { budget_cents: 500, available_cents: 500 };
     const printed: string[] = [];
     (console.log as any).mockImplementation((...a: unknown[]) => printed.push(a.join(' ')));
     await start(['--watch']);
-    expect(printed).toContain(h.engineLine);
+    // `start` prints it in its preflight and then calls straight through to
+    // `run`, which prints it too unless told not to — twice reads like two
+    // checks disagreeing, and re-spawns the probe.
+    expect(printed.filter((l) => l === h.engineLine)).toHaveLength(1);
     expect(h.runLoopOpts).toHaveLength(1);
   });
 });

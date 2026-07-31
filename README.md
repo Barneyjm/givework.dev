@@ -48,7 +48,10 @@ a runner going.
 *Optional:* `podman` or `docker`, for CPU work units and Lean proof checking (the
 non-LLM lanes) alongside model tasks — the runner detects either one automatically
 (podman first, then docker) and prints what it found the moment you run `start` or
-`run`. Neither installed is a fully supported way to volunteer: you just get the
+`run`. It checks the engine actually answers, not just that the binary is on PATH,
+so a stopped Docker Desktop or an unstarted `podman machine` reads as not-found
+instead of promising a sandbox that then fails on every task. Neither installed is
+a fully supported way to volunteer: you just get the
 model-task pool, nothing else changes. Set `GIVEWORK_CONTAINER_ENGINE=podman` or
 `=docker` to force one explicitly (e.g. both are installed and you want a specific
 one, or the auto-probe picks wrong).

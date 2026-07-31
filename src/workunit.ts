@@ -32,11 +32,29 @@ export type ContainerEngine = 'podman' | 'docker';
 const CONTAINER_ENGINES: readonly ContainerEngine[] = ['podman', 'docker'];
 export const CONTAINER_ENGINE_ENV = 'GIVEWORK_CONTAINER_ENGINE';
 
+// `version`, NOT `--version`. The two are not the same test: `--version`
+// prints the client banner and exits 0 without ever contacting the daemon, so
+// it answers "is the CLI on PATH" — a stopped Docker Desktop, a user not in
+// the `docker` group, an unstarted `podman machine` all pass it. `version`
+// reaches the server and exits non-zero when it can't, which is the question
+// that actually matters here: a probe that says yes and then can't run a
+// container turns "sandbox ✓" into three straight execution failures, and
+// MAX_CONSECUTIVE_FAILURES in the run loop then takes model tasks down with
+// it. It also makes the probe order self-correcting — podman installed but
+// its machine stopped now falls through to a working docker instead of
+// claiming the slot. Both CLIs still print a parseable version banner for it.
+const PROBE_ARGS: readonly string[] = ['version'];
+// The probe sits on the CLI start-up path for *every* volunteer, including
+// model-only ones who never run a work unit, so it must be unable to hang:
+// a wrapper script or a binary on a wedged network mount would otherwise
+// block `givework start` before it prints anything at all.
+const PROBE_TIMEOUT_MS = 5000;
+
 function isContainerEngine(v: string): v is ContainerEngine {
   return v === 'podman' || v === 'docker';
 }
 
-/** First "\d+.\d+" in a `--version` banner (e.g. "podman version 5.3.1" -> "5.3"). */
+/** First "\d+.\d+" in a version banner (e.g. "podman version 5.3.1" -> "5.3"). */
 function parseEngineVersion(versionOutput: string): string {
   const m = versionOutput.match(/(\d+\.\d+)/);
   return m ? m[1] : versionOutput.trim().split('\n')[0].slice(0, 20) || 'unknown';
@@ -224,17 +242,23 @@ function execProc(cmd: string, args: string[], opts: ProcOpts = {}): Promise<str
  * picks the LLM executor: GIVEWORK_CONTAINER_ENGINE wins outright when set
  * (podman or docker; anything else is a configuration error naming both
  * accepted values, thrown immediately rather than silently ignored).
- * Otherwise probe `podman --version` then `docker --version`, in that order,
- * and use whichever answers first. Resolves to null (never throws for this
- * case) when nothing answers — the caller decides what "no sandbox" means
- * for it.
+ * Otherwise probe `podman version` then `docker version`, in that order, and
+ * use whichever *answers from its daemon* (see PROBE_ARGS). Resolves to null
+ * (never throws for this case) when nothing answers — the caller decides what
+ * "no sandbox" means for it.
  */
 export async function resolveContainerEngine(
   run: RunProc = execProc,
 ): Promise<ResolvedContainerEngine | null> {
-  const override = process.env[CONTAINER_ENGINE_ENV];
+  // Trimmed and lower-cased before the check, so the shapes that mean "I did
+  // not choose an engine" are treated as unset rather than as a fatal
+  // misconfiguration: `GIVEWORK_CONTAINER_ENGINE=` (the normal way to blank a
+  // var in a profile, a .env, or a compose `environment:` entry), and a value
+  // carrying a trailing newline from `$(cat …)`. `Docker` is a typo, not a
+  // different engine, so it is accepted rather than punished.
+  const override = process.env[CONTAINER_ENGINE_ENV]?.trim().toLowerCase();
   let candidates: readonly ContainerEngine[];
-  if (override !== undefined) {
+  if (override) {
     if (!isContainerEngine(override)) {
       throw new Error(
         `${CONTAINER_ENGINE_ENV} must be "podman" or "docker" (got ${JSON.stringify(override)})`,
@@ -245,7 +269,9 @@ export async function resolveContainerEngine(
     candidates = CONTAINER_ENGINES;
   }
   for (const engine of candidates) {
-    const out = await run(engine, ['--version']).catch(() => null);
+    const out = await run(engine, [...PROBE_ARGS], { timeoutMs: PROBE_TIMEOUT_MS }).catch(
+      () => null,
+    );
     if (out !== null) return { engine, version: parseEngineVersion(out) };
   }
   return null;
@@ -253,16 +279,20 @@ export async function resolveContainerEngine(
 
 /**
  * The one-line sandbox status `givework start`/`run` print at start-up.
- * Never throws — an invalid override or nothing installed both render as
- * "not found" rather than blocking the CLI, because model-only volunteering
- * is first-class and this is advisory, not a gate.
+ * Never throws — model-only volunteering is first-class and this is advisory,
+ * not a gate. But a bad override and nothing installed are different problems
+ * with different fixes, so they get different lines: telling someone who set
+ * GIVEWORK_CONTAINER_ENGINE=Docker to "install podman or docker (or set
+ * GIVEWORK_CONTAINER_ENGINE)" sends them to fix the one thing that is already
+ * the cause.
  */
 export async function containerEngineStatusLine(run: RunProc = execProc): Promise<string> {
   let resolved: ResolvedContainerEngine | null;
   try {
     resolved = await resolveContainerEngine(run);
-  } catch {
-    resolved = null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `sandbox: ${msg} — model tasks only until that is fixed or unset.`;
   }
   return resolved
     ? `sandbox: ${resolved.engine} ${resolved.version} ✓ — CPU work units and Lean proof checking enabled`
@@ -280,13 +310,15 @@ export class WorkUnitExecutor implements Executor {
   private timeoutMs: number;
   private allowedRepo: string;
   private runtimeOverrides: Partial<Record<string, string>>;
-  // Resolved (or refused) once per instance and reused for every task it
-  // executes — a long-lived runner should not re-spawn `podman --version` /
-  // `docker --version` before every single checkout. Caching the promise
-  // itself (not just its resolved value) means a rejection — no engine found,
-  // or a bad GIVEWORK_CONTAINER_ENGINE — is cached too, so a broken sandbox
-  // fails exactly the same way, exactly as fast, for every task this instance
-  // is ever asked to run.
+  // Resolved once per instance and reused for every task it executes — a
+  // long-lived runner should not re-spawn `podman version` / `docker version`
+  // before every single checkout. Successes only: a failed probe is cleared
+  // so the next task re-probes. `getExecutor()` builds one executor per
+  // runLoop, which under `start --watch` lives for days, and the failures are
+  // the transient kind — a volunteer who installs podman (or starts Docker
+  // Desktop) five minutes after seeing the "no container engine" line should
+  // get work units for the rest of that run, not have the first probe's
+  // answer frozen in for it.
   private enginePromise?: Promise<ResolvedContainerEngine>;
 
   constructor(
@@ -341,10 +373,10 @@ export class WorkUnitExecutor implements Executor {
     return override ? { ...base, image: override } : base;
   }
 
-  /** Resolved once (see enginePromise above), then reused for every task. */
+  /** Resolved once on success (see enginePromise above), re-probed on failure. */
   private engine(): Promise<ResolvedContainerEngine> {
     if (!this.enginePromise) {
-      this.enginePromise = resolveContainerEngine(this.run).then((resolved) => {
+      const probe = resolveContainerEngine(this.run).then((resolved) => {
         if (!resolved) {
           throw new Error(
             `no container engine found — install podman or docker (or set ${CONTAINER_ENGINE_ENV}) ` +
@@ -352,6 +384,13 @@ export class WorkUnitExecutor implements Executor {
           );
         }
         return resolved;
+      });
+      this.enginePromise = probe;
+      // Uncache a rejection so the next task probes again. The caller still
+      // sees this rejection — this handler only clears the slot, it does not
+      // swallow anything.
+      probe.catch(() => {
+        if (this.enginePromise === probe) this.enginePromise = undefined;
       });
     }
     return this.enginePromise;

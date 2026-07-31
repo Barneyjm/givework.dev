@@ -76,6 +76,33 @@ describe('resolveContainerEngine', () => {
     expect(calls).toEqual(['podman', 'docker']);
   });
 
+  it('probes the daemon (`version`), not just the binary (`--version`), under a timeout', async () => {
+    const calls: [string, string[], number | undefined][] = [];
+    const run = async (cmd: string, args: string[], opts?: { timeoutMs?: number }) => {
+      calls.push([cmd, args, opts?.timeoutMs]);
+      return 'podman version 5.3.1';
+    };
+    await resolveContainerEngine(run);
+    // `--version` never contacts the daemon: it exits 0 with Docker Desktop
+    // stopped or podman's machine unstarted, which is exactly the false ✓.
+    expect(calls[0][1]).toEqual(['version']);
+    expect(calls[0][1]).not.toContain('--version');
+    // And it must be unable to hang the CLI's start-up path.
+    expect(calls[0][2]).toBeGreaterThan(0);
+  });
+
+  it('falls through to docker when podman is installed but its daemon is not reachable', async () => {
+    const calls: string[] = [];
+    const run = async (cmd: string) => {
+      calls.push(cmd);
+      // What `podman version` does with the machine stopped on macOS.
+      if (cmd === 'podman') throw new Error('podman exited 125: Cannot connect to Podman');
+      return 'Docker version 27.5.1, build 9f9e405';
+    };
+    expect(await resolveContainerEngine(run)).toEqual({ engine: 'docker', version: '27.5' });
+    expect(calls).toEqual(['podman', 'docker']);
+  });
+
   it('never probes docker once podman answers', async () => {
     const calls: string[] = [];
     const run = async (cmd: string) => {
@@ -121,6 +148,34 @@ describe('resolveContainerEngine', () => {
       /"podman" or "docker".*lxc/,
     );
   });
+
+  // The shapes that mean "unset", not "misconfigured" — a blank var is how a
+  // shell profile / .env / compose file turns an override off, and neither
+  // that nor a capitalized typo should refuse every work unit.
+  for (const [label, value] of [
+    ['empty', ''],
+    ['whitespace', '  '],
+    ['trailing newline from $(cat …)', 'podman\n'],
+    ['capitalized', 'Docker'],
+    ['upper-case', 'PODMAN'],
+  ] as const) {
+    it(`treats a ${label} GIVEWORK_CONTAINER_ENGINE as unset-or-typo, never as fatal`, async () => {
+      process.env[CONTAINER_ENGINE_ENV] = value;
+      const resolved = await resolveContainerEngine(async () => 'podman version 5.3.1');
+      expect(resolved).not.toBeNull();
+    });
+  }
+
+  it('honors a capitalized override as that engine, not as auto-detect', async () => {
+    process.env[CONTAINER_ENGINE_ENV] = 'Docker';
+    const calls: string[] = [];
+    const run = async (cmd: string) => {
+      calls.push(cmd);
+      return 'Docker version 24.0.7, build afdd53b';
+    };
+    expect(await resolveContainerEngine(run)).toEqual({ engine: 'docker', version: '24.0' });
+    expect(calls).toEqual(['docker']); // podman never probed
+  });
 });
 
 describe('containerEngineStatusLine', () => {
@@ -139,10 +194,14 @@ describe('containerEngineStatusLine', () => {
     );
   });
 
-  it('never throws on a garbage env override — reports as not found instead', async () => {
+  it('never throws on a garbage env override — reports the bad value, not "not found"', async () => {
     process.env[CONTAINER_ENGINE_ENV] = 'lxc';
     const line = await containerEngineStatusLine(async () => 'lxc version 1.0');
-    expect(line).toContain('sandbox: no container engine found');
+    // "install podman or docker (or set GIVEWORK_CONTAINER_ENGINE)" would send
+    // someone to fix the one thing that is already the cause. Name it instead.
+    expect(line).toContain('lxc');
+    expect(line).toContain(CONTAINER_ENGINE_ENV);
+    expect(line).not.toContain('no container engine found');
   });
 });
 
@@ -181,8 +240,8 @@ describe('WorkUnitExecutor', () => {
       },
     });
     await ex.execute(task({ code: CODE }));
-    expect(calls.some((c) => c[0] === 'podman' && c[1] === '--version')).toBe(true);
-    expect(calls.some((c) => c[0] === 'docker' && c[1] === '--version')).toBe(true);
+    expect(calls.some((c) => c[0] === 'podman' && c[1] === 'version')).toBe(true);
+    expect(calls.some((c) => c[0] === 'docker' && c[1] === 'version')).toBe(true);
     const run = calls.find((c) => c[0] === 'docker' && c[1] === 'run');
     expect(run).toBeDefined();
     expect(calls.some((c) => c[0] === 'podman' && c[1] === 'run')).toBe(false);
@@ -215,14 +274,37 @@ describe('WorkUnitExecutor', () => {
     const ex = new WorkUnitExecutor({
       allowedRepo: REPO,
       run: async (cmd, args) => {
-        if (args[0] === '--version') probes++;
+        if (args[0] === 'version') probes++;
         return cmd === 'podman' && args[0] === 'run' ? '{"outcome":"progress"}' : '';
       },
     });
     await ex.execute(task({ code: CODE }));
     await ex.execute(task({ code: CODE }));
     await ex.execute(task({ code: CODE }));
-    expect(probes).toBe(1); // one --version call total, not one per task
+    expect(probes).toBe(1); // one probe total, not one per task
+  });
+
+  // The cache is for successes only. `getExecutor()` builds one executor per
+  // runLoop and `start --watch` runs for days: a volunteer who installs podman
+  // five minutes in must get work units for the rest of that run.
+  it('re-probes after a failed probe, so a sandbox that appears mid-run is picked up', async () => {
+    let engineUp = false;
+    let probes = 0;
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) => {
+        if (args[0] === 'version') {
+          probes++;
+          if (!engineUp) throw new Error('not found');
+          return 'podman version 5.3.1';
+        }
+        return cmd === 'podman' && args[0] === 'run' ? '{"outcome":"progress"}' : '';
+      },
+    });
+    await expect(ex.execute(task({ code: CODE }))).rejects.toThrow(/sandbox unavailable/);
+    engineUp = true;
+    await expect(ex.execute(task({ code: CODE }))).resolves.toBeDefined();
+    expect(probes).toBeGreaterThan(2); // both engines on the failed round, then again
   });
 
   it('fetches the pinned SHA and runs sandboxed, booking 0 cents', async () => {

@@ -315,7 +315,11 @@ async function warnIfStale(args: string[]): Promise<void> {
   }
 }
 
-export async function run(args: string[]): Promise<void> {
+export async function run(
+  args: string[],
+  /** `sandboxLine: false` when the caller (`start`) already printed it. */
+  opts: { sandboxLine?: boolean } = {},
+): Promise<void> {
   const base = apiUrl();
   // FIRST, before any network call: a stub executor (EXECUTOR unset or not
   // 'claude') pointed at a remote control plane would submit fabricated
@@ -365,8 +369,11 @@ export async function run(args: string[]): Promise<void> {
   // (whether narrowed by --target/--task or not — we don't know a task's kind
   // until checkout), so report the sandbox once, up front, rather than
   // letting a volunteer without podman/docker discover it only when one of
-  // those tasks gets released back to the pool.
-  console.log(await containerEngineStatusLine());
+  // those tasks gets released back to the pool. Once: `start --watch` prints
+  // it during its own preflight and then calls straight through to here, and
+  // saying the same thing twice reads like two different checks disagreeing —
+  // it also re-spawns the probe.
+  if (opts.sandboxLine !== false) console.log(await containerEngineStatusLine());
   if (targetSlug) console.log(`Working on ${targetSlug} only (drop --target for the whole pool)`);
   try {
     const v = await backend.version().catch(() => null);
@@ -908,7 +915,7 @@ export async function start(args: string[]): Promise<void> {
   // donate nothing while looking like it worked.
   if (!process.env.EXECUTOR) process.env.EXECUTOR = 'claude';
   console.log('\n--watch: starting the work loop. Ctrl-C to stop.\n');
-  await run(args);
+  await run(args, { sandboxLine: false }); // step 0 above already printed it
 }
 
 // --- admin commands ---
