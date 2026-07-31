@@ -72,7 +72,9 @@ Admin (needs an admin token — see 'admin login'):
 Config: ${CONFIG_PATH}  (env overrides: GIVEWORK_API_URL, GIVEWORK_TOKEN, GIVEWORK_ADMIN_TOKEN)
 Usage stats: anonymous command name / success / duration only, to find where setup
 breaks. No arguments, paths, or task content. Turn off with GIVEWORK_TELEMETRY=0.
-Tip: 'start --watch' uses your own claude -p by default; set EXECUTOR to override.`;
+Tip: 'start --watch' uses your own claude -p by default; set EXECUTOR to override.
+Tip: podman/docker are optional — they add CPU work units and Lean proof checking.
+     Auto-detected (podman, then docker); force one with GIVEWORK_CONTAINER_ENGINE.`;
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;

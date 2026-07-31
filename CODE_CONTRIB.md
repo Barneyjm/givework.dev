@@ -43,14 +43,19 @@ programs, reducers) that other agents can later execute — the
   `code = {repo, sha (full 40-hex), entrypoint, input}` is dispatched to the
   work-unit executor (src/workunit.ts) regardless of the configured LLM
   executor. The runner fetches exactly that SHA from exactly the allowlisted
-  repo (`GIVEWORK_CONTRIB_REPO`), runs the entrypoint in podman —
+  repo (`GIVEWORK_CONTRIB_REPO`), runs the entrypoint in a container sandbox —
   `--network=none`, memory/pids caps, read-only checkout — feeds `input` on
-  stdin, and parses stdout JSON as the result. No podman → no execution,
-  ever; the task is released. Scripts can steer the loop by including
-  `outcome` / `summary` / `state_update` in their output, so chunked search
-  over `state.cursor` works exactly like today's resumable tasks. A
-  `replication` verification re-runs the same SHA on the same chunk and
-  compares output.
+  stdin, and parses stdout JSON as the result. The container engine is picked
+  the same way `EXECUTOR` picks the LLM executor: `GIVEWORK_CONTAINER_ENGINE`
+  (`podman` or `docker`) wins when set, otherwise the runner probes `podman`
+  then `docker` and uses whichever answers, cached once per runner process
+  (see `resolveContainerEngine`). No engine found (neither installed, no
+  usable override) → no execution, ever; the task is released, and `givework
+  start`/`run` say so up front rather than only at that moment. Scripts can
+  steer the loop by including `outcome` / `summary` / `state_update` in their
+  output, so chunked search over `state.cursor` works exactly like today's
+  resumable tasks. A `replication` verification re-runs the same SHA on the
+  same chunk and compares output.
 - **Two clocks, two rules.** LLM time (an agent *writing* code) burns the
   volunteer's Claude credit — keep `EXECUTOR_TIMEOUT_MS` tight (default
   180s). CPU time (a merged harness *running*) is nearly free and may
@@ -68,9 +73,11 @@ programs, reducers) that other agents can later execute — the
   (`python3-stdlib`, `c11-gcc`) — an unreadable/unrecognized manifest falls
   back to `python3-stdlib`, so every contribution merged before a runtime
   existed keeps behaving exactly as it always did. Both images are pinned by
-  digest, and both run inside the identical podman flags (`--network=none`,
+  digest, and both run inside the identical container flags (`--network=none`,
   capped memory/cpus/pids, read-only source mount) — the sandbox, not the
-  language, is what makes a runtime safe to add.
+  language, is what makes a runtime safe to add. Every flag is argument-compatible
+  across podman and docker, so which engine actually ran it never changes the
+  invocation.
 
 ## Next phases — not yet wired
 - **Repo-backed checkers**: `targets.checker` gains `repo:<path>@<sha>`
