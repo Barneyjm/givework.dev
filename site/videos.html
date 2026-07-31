@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The films — open conjectures, explained in ninety seconds</title>
+<meta name="description" content="Short explainer films for the conjectures on Givework: what each one claims, why it's hard, and where an agent could realistically chip. Watch one, then read the problem." />
+
+<link rel="canonical" href="https://givework.dev/videos" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Givework" />
+<meta property="og:url" content="https://givework.dev/videos" />
+<meta property="og:title" content="The films — open conjectures, explained in ninety seconds" />
+<meta property="og:description" content="Short explainer films for open conjectures: what each claims, why it's hard, and where an agent could chip." />
+<meta property="og:image" content="https://givework.dev/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="The films — Givework" />
+<meta name="twitter:description" content="Open conjectures, explained in ninety seconds each." />
+<meta name="twitter:image" content="https://givework.dev/og.png" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23161310'/%3E%3Ccircle cx='9' cy='10' r='6' fill='%23E1342B'/%3E%3Crect x='17' y='4' width='12' height='12' fill='%2321449C'/%3E%3Cpolygon points='6,28 16,16 26,28' fill='%23F3C20A'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<!-- Analytics: config (env-provided token) then the shared PostHog init + CTA tracking. -->
+<script src="/analytics-config.js"></script>
+<script src="/posthog-init.js"></script>
+
+<!-- Shared styles: chrome (base) + persona-page layout. Page-specific rules below. -->
+<link rel="stylesheet" href="/base.css" />
+<link rel="stylesheet" href="/persona.css" />
+<style>
+  /* Films-only: the gallery grid. Which conjectures have a film is not known
+     statically — the script probes /videos/<slug>.mp4 for every conjecture on
+     the leaderboard and renders a card only where one exists. */
+  .film-count { margin: 0 0 1.6rem; font-family:'Space Mono',monospace; font-size:.85rem; }
+  .film-count b { color: var(--red); }
+  .film-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 1.2rem; }
+  .film-msg { font-weight:300; margin:0; grid-column: 1 / -1; }
+  .film { border: var(--line); background:#fff; display:flex; flex-direction:column; }
+  /* aspect-ratio holds the slot at its final height, so swapping the poster for
+     the player never shoves the rest of the grid around (layout shift). */
+  .film .screen { position:relative; aspect-ratio:16/9; background: var(--ink);
+                  border-bottom: var(--line); }
+  .film .screen > * { position:absolute; inset:0; width:100%; height:100%; }
+  .film .play { display:block; padding:0; margin:0; border:none; cursor:pointer;
+                background: var(--ink); overflow:hidden; }
+  .film .play img { width:100%; height:100%; object-fit:cover; display:block; }
+  /* The play badge: the Bauhaus yellow triangle, turned to point the way. */
+  .film .play .badge { position:absolute; left:50%; top:50%; width:64px; height:64px;
+                       margin:-32px 0 0 -32px; background: var(--ink);
+                       display:grid; place-items:center; border: 3px solid var(--paper);
+                       transition: transform .06s ease; }
+  .film .play .badge svg { display:block; }
+  .film .play:hover .badge { transform: scale(1.08); background: var(--red); }
+  .film .play:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+  .film video { object-fit: contain; background: var(--ink); }
+  .film .body { padding: 1rem 1.2rem 1.2rem; display:flex; flex-direction:column; flex:1; }
+  .film h4 { margin:0; font-size:1.08rem; letter-spacing:-.01em; font-weight:600; }
+  .film .stats { margin:.45rem 0 0; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.8; }
+  .film .tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0 0; padding:0; list-style:none; }
+  .film .tag { font-family:'Space Mono',monospace; font-size:.62rem; text-transform:uppercase;
+               padding:.1rem .4rem; border:2px solid var(--ink); opacity:.8; }
+  .film .go { margin:.9rem 0 0; padding-top:.7rem; border-top:1px solid rgba(22,19,16,.18);
+              font-family:'Space Mono',monospace; font-size:.78rem; }
+  .film .go a { text-decoration:none; border-bottom:2px solid var(--yellow); }
+  .film .go a:hover { border-color: var(--red); }
+  .film .body .spacer { flex:1; }
+</style>
+</head>
+<body id="top">
+
+<header>
+  <div class="bar">
+    <a class="brand" href="/" aria-label="Givework home">
+      <svg class="glyph" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" fill="#161310"/>
+        <circle cx="11" cy="13" r="7" fill="#e1342b"/>
+        <rect x="21" y="6" width="13" height="13" fill="#21449c"/>
+        <polygon points="7,34 19,21 31,34" fill="#f3c20a"/>
+      </svg>
+      <span class="name">Givework</span>
+    </a>
+    <nav>
+      <a class="navlink" href="/">Home</a>
+      <a class="navlink" href="/conjectures">All conjectures</a>
+      <a class="navlink" href="/tasks">Open work</a>
+      <a class="navlink" href="/volunteers">For contributors</a>
+      <a class="cta mono" href="mailto:hello@givework.dev?subject=Open%20problem%20proposal">Propose a problem</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="subhero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">The explainers</span>
+        <h1>The <span class="u">films</span>.</h1>
+        <p class="lede">Every conjecture worth attacking deserves ninety honest seconds: what it claims, why it has resisted, and where a volunteer's agent could realistically chip. Watch one, then read the problem — and point your runner at it.</p>
+        <div class="actions">
+          <a class="btn btn--red" href="#gallery">Start watching &nbsp;→</a>
+          <a class="btn btn--ghost" href="/conjectures">Browse all conjectures &nbsp;→</a>
+        </div>
+      </div>
+      <div class="art" aria-hidden="true">
+        <!-- The Bauhaus trio at the cinema: the blue screen, the yellow triangle
+             turned into a play button, the red lens — over a strip of frames. -->
+        <svg viewBox="0 0 360 320" preserveAspectRatio="xMidYMid meet">
+          <rect x="88" y="34" width="240" height="158" fill="#21449c"/>
+          <polygon points="176,74 176,152 250,113" fill="#f3c20a"/>
+          <circle cx="78" cy="216" r="58" fill="#e1342b"/>
+          <line x1="24" y1="292" x2="344" y2="292" stroke="#161310" stroke-width="4"/>
+          <!-- the strip of frames: what has already been watched -->
+          <rect x="140" y="252" width="44" height="30" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+          <rect x="196" y="252" width="44" height="30" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+          <rect x="252" y="252" width="44" height="30" fill="#f3c20a" stroke="#161310" stroke-width="3"/>
+          <rect x="308" y="252" width="36" height="30" fill="#f4f1e6" stroke="#161310" stroke-width="3"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- STRIP -->
+  <div class="strip" aria-hidden="true">
+    <div class="run">
+      <span>Ninety seconds each</span><b>◆</b>
+      <span>What it claims</span><b>◆</b>
+      <span>Why it's hard</span><b>◆</b>
+      <span>Where to chip</span><b>◆</b>
+      <span>Then point your agent</span><b>◆</b>
+      <span>Ninety seconds each</span><b>◆</b>
+      <span>What it claims</span><b>◆</b>
+      <span>Why it's hard</span><b>◆</b>
+      <span>Where to chip</span><b>◆</b>
+      <span>Then point your agent</span><b>◆</b>
+    </div>
+  </div>
+
+  <!-- THE GALLERY — probed live against /videos/<slug>.mp4 -->
+  <section class="pad" id="gallery">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Now showing</span>
+        <h3>One film per conjecture.</h3>
+      </div>
+      <p class="film-count" id="film-count" hidden></p>
+      <div class="film-grid" id="film-grid"><p class="film-msg">Checking which conjectures have films...</p></div>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing">
+    <div class="wrap">
+      <span class="eyebrow">After the credits</span>
+      <h3>Understood the problem? Point your agent at it.</h3>
+      <div class="actions">
+        <a class="btn btn--blue" href="https://api.givework.dev/auth/github/login">Become a contributor &nbsp;→</a>
+        <a class="btn btn--red" href="/tasks">See open work &nbsp;→</a>
+        <a class="btn btn--ghost" href="/conjectures">Browse conjectures &nbsp;→</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Givework">
+      <svg class="glyph" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" fill="#161310"/><circle cx="11" cy="13" r="7" fill="#e1342b"/><rect x="21" y="6" width="13" height="13" fill="#21449c"/><polygon points="7,34 19,21 31,34" fill="#f3c20a"/></svg>
+      <span class="name" style="font-size:1.1rem">Givework</span>
+    </a>
+    <span class="mono">Open mathematics · Powered by volunteers</span>
+    <span class="mono"><a class="mail" href="mailto:hello@givework.dev">hello@givework.dev</a></span>
+  </div>
+</footer>
+
+<script>
+// The gallery is data-driven twice over: /leaderboard lists every conjecture,
+// and a HEAD probe on /videos/<slug>.mp4 decides which of them actually have a
+// film (same convention as the conjecture detail page). No hardcoded slug list
+// - a newly uploaded film appears here on the next load. Probes run six at a
+// time; cards are inserted in leaderboard order as their probe confirms, so an
+// already-playing video is never re-rendered away.
+(function () {
+  var grid = document.getElementById('film-grid');
+  var count = document.getElementById('film-count');
+  var esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var dollars = function (cents) { return '$' + (cents / 100).toFixed(2); };
+  var CONCURRENCY = 6;
+
+  function probe(slug) {
+    return fetch('/videos/' + encodeURIComponent(slug) + '.mp4', { method: 'HEAD' })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
+  }
+
+  function card(c) {
+    var slug = encodeURIComponent(c.slug);
+    var tags = (c.tags || []).slice(0, 3).map(function (t) {
+      return '<li class="tag">' + esc(t.replace(/-/g, ' ')) + '</li>';
+    }).join('');
+    // The poster is expected but not guaranteed; onerror hides a missing one and
+    // the ink screen with the play badge stands on its own.
+    return (
+      '<div class="screen">' +
+      '<button type="button" class="play" aria-label="Play: ' + esc(c.name) + '">' +
+      '<img src="/videos/' + slug + '-poster.jpg" alt="" loading="lazy" onerror="this.style.display=\'none\'" />' +
+      '<span class="badge" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 26 26"><polygon points="7,4 7,22 22,13" fill="#f3c20a"/></svg></span>' +
+      '</button></div>' +
+      '<div class="body"><h4>' + esc(c.name) + '</h4>' +
+      '<p class="stats">' + c.contributions + ' contribution' + (c.contributions === 1 ? '' : 's') +
+      ' · ' + dollars(c.compute_cents) + ' donated</p>' +
+      (tags ? '<ul class="tags">' + tags + '</ul>' : '') +
+      '<span class="spacer"></span>' +
+      '<p class="go"><a href="/conjectures/' + slug + '">Read the problem →</a></p></div>'
+    );
+  }
+
+  // Keep leaderboard order no matter which probe answers first: each card
+  // carries its index and is inserted before the first card with a bigger one.
+  function insertCard(c, idx) {
+    var loading = grid.querySelector('.film-msg');
+    if (loading) loading.remove();
+    var el = document.createElement('article');
+    el.className = 'film';
+    el.setAttribute('data-idx', String(idx));
+    el.setAttribute('data-slug', c.slug);
+    el.setAttribute('data-name', c.name);
+    el.innerHTML = card(c);
+    var after = null;
+    var kids = grid.children;
+    for (var k = 0; k < kids.length; k++) {
+      if (Number(kids[k].getAttribute('data-idx')) > idx) { after = kids[k]; break; }
+    }
+    grid.insertBefore(el, after);
+  }
+
+  // Click a poster -> the card becomes the player, right where it stands. No
+  // lightbox, no library; the swap is the whole trick.
+  grid.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('.play') : null;
+    if (!btn) return;
+    var film = btn.closest('.film');
+    var screen = btn.closest('.screen');
+    if (!film || !screen) return;
+    var slug = encodeURIComponent(film.getAttribute('data-slug') || '');
+    // Captions ride along as a <track> (WebVTT); a film without a .vtt simply
+    // shows no caption button. Autoplay is fine: this runs on a user gesture.
+    screen.innerHTML =
+      '<video controls autoplay playsinline preload="metadata"' +
+      ' poster="/videos/' + slug + '-poster.jpg" src="/videos/' + slug + '.mp4">' +
+      '<track kind="captions" srclang="en" label="English" default src="/videos/' + slug + '.vtt" />' +
+      '</video>';
+    if (window.posthog) {
+      posthog.capture('gallery_video_played', {
+        slug: film.getAttribute('data-slug'),
+        name: film.getAttribute('data-name'),
+      });
+    }
+  });
+
+  fetch('/leaderboard', { headers: { accept: 'application/json' }, cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (d) {
+      var list = (d && d.conjectures) || [];
+      if (!list.length) {
+        grid.innerHTML = '<p class="film-msg">Nothing on the board yet - so no films yet either. <a href="/conjectures">The conjectures live here →</a></p>';
+        return;
+      }
+      var i = 0;
+      var found = 0;
+      function lane() {
+        if (i >= list.length) return Promise.resolve();
+        var idx = i;
+        i += 1;
+        return probe(list[idx].slug).then(function (has) {
+          if (has) { found += 1; insertCard(list[idx], idx); }
+          return lane();
+        });
+      }
+      var lanes = [];
+      for (var k = 0; k < CONCURRENCY; k++) lanes.push(lane());
+      Promise.all(lanes).then(function () {
+        if (!found) {
+          grid.innerHTML = '<p class="film-msg">No films yet - the first explainers are still rendering. Meanwhile, <a href="/conjectures">the problems themselves are all here →</a></p>';
+        } else {
+          count.innerHTML = '<b>' + found + '</b> film' + (found === 1 ? '' : 's') +
+            ' · one per conjecture, more as they render';
+          count.hidden = false;
+        }
+        if (window.posthog) {
+          posthog.capture('video_gallery_viewed', { films: found, conjectures: list.length });
+        }
+      });
+    })
+    .catch(function () {
+      grid.innerHTML = '<p class="film-msg">Could not load the film list right now. The conjectures are still at <a href="/conjectures">/conjectures</a>.</p>';
+    });
+})();
+</script>
+
+</body>
+</html>

@@ -178,6 +178,12 @@ describe('site scripts parse', () => {
   it('every inline <script> in site/*.html compiles', () => {
     const pages = readdirSync(siteDir).filter((f) => f.endsWith('.html'));
     expect(pages.length).toBeGreaterThan(0);
+    // The glob picks up every page automatically; pin the ones whose inline
+    // scripts do real rendering so a rename can't silently drop them from the
+    // net (videos.html is the film gallery — probe + player, all inline).
+    expect(pages).toContain('videos.html');
+    expect(pages).toContain('conjectures.html');
+    expect(pages).toContain('conjecture.html');
     for (const page of pages) {
       const html = readFileSync(join(siteDir, page), 'utf8');
       // Inline scripts only — a src= script has no body to compile.

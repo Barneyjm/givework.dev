@@ -52,6 +52,7 @@
     if (p.indexOf('/contributors/') === 0) return 'contributor_page';
     if (p === '/conjectures' || p === '/conjectures.html') return 'conjectures_page';
     if (p.indexOf('/conjectures/') === 0) return 'conjecture_page';
+    if (p === '/videos' || p === '/videos.html') return 'videos_page';
     return p;
   }
 
