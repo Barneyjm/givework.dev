@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ExecTask } from '../src/executor.js';
 import {
   extractWorkUnit,
+  LEAN4_IMAGE,
   mergeWorkUnitInput,
   synthesizeWorkUnitSummary,
   WorkUnitExecutor,
@@ -331,6 +332,26 @@ describe('WorkUnitExecutor runtime dispatch', () => {
     expect(run).toContain(`docker.io/example/pinned-gcc@sha256:${'ab'.repeat(32)}`);
   });
 
+  it('single-quote-escapes an entrypoint path for the lean4 shell command too', async () => {
+    const tricky = "lean/it's a dir/Check.lean";
+    const calls: string[][] = [];
+    const run = async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      calls.push([cmd, ...args]);
+      if (cmd === 'git' && args[0] === 'checkout' && opts?.cwd) {
+        const entryDir = path.join(opts.cwd, path.dirname(tricky));
+        await mkdir(entryDir, { recursive: true });
+        await writeFile(path.join(entryDir, 'manifest.json'), JSON.stringify({ runtime: 'lean4' }));
+        return '';
+      }
+      return cmd === 'podman' && args[0] === 'run' ? 'ok\n__GIVEWORK_LEAN_EXIT__ 0\n' : '';
+    };
+    const ex = new WorkUnitExecutor({ allowedRepo: REPO, run });
+    await ex.execute(task({ code: { ...CODE, entrypoint: tricky } }));
+    const podmanRun = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    const shCmd = podmanRun?.at(-1) ?? '';
+    expect(shCmd).toContain(`'lean/it'\\''s a dir/Check.lean'`);
+  });
+
   it('single-quote-escapes an entrypoint path for the c11-gcc shell command', async () => {
     // isSafeRelPath already forbids '..', leading '/', backslashes and NUL, but a
     // segment may still contain shell metacharacters (spaces, quotes) — the sh -c
@@ -355,5 +376,172 @@ describe('WorkUnitExecutor runtime dispatch', () => {
     const podmanRun = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
     const shCmd = podmanRun?.at(-1) ?? '';
     expect(shCmd).toContain(`'example-conjecture/it'\\''s a dir/check.c'`);
+  });
+});
+
+describe('lean4 runtime (the proof-checking rail)', () => {
+  const ENTRYPOINT = 'lean/canary/Canary.lean';
+  const MARKER = '__GIVEWORK_LEAN_EXIT__';
+
+  /** Fake checkout that plants a lean4 manifest, and a podman run that prints
+   * `transcript` — the compiler diagnostics plus the exit marker the real
+   * container command emits. */
+  function leanRun(transcript: string, calls: string[][]) {
+    return async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      calls.push([cmd, ...args]);
+      if (cmd === 'git' && args[0] === 'checkout' && opts?.cwd) {
+        const entryDir = path.join(opts.cwd, path.dirname(ENTRYPOINT));
+        await mkdir(entryDir, { recursive: true });
+        await writeFile(path.join(entryDir, 'manifest.json'), JSON.stringify({ runtime: 'lean4' }));
+        return '';
+      }
+      return cmd === 'podman' && args[0] === 'run' ? transcript : '';
+    };
+  }
+
+  it('dispatches to the pinned lean image with the ENTRYPOINT reset and a lean command', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({ allowedRepo: REPO, run: leanRun(`\n${MARKER} 0\n`, calls) });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain(LEAN4_IMAGE);
+    expect(LEAN4_IMAGE).toMatch(/^docker\.io\/leanprovercommunity\/lean4@sha256:[0-9a-f]{64}$/); // digest-pinned, never a tag
+    // The image bakes ENTRYPOINT ["/bin/bash","-l"], which would swallow our
+    // `sh` — the invocation must reset it.
+    const entryFlag = run?.indexOf('--entrypoint') ?? -1;
+    expect(entryFlag).toBeGreaterThan(-1);
+    expect(run?.[entryFlag + 1]).toBe('');
+    // Same sandbox as every other runtime.
+    expect(run).toContain('--network=none');
+    expect(run?.some((a) => a.endsWith(':/work:ro'))).toBe(true);
+    // Single-file `lean` on the pinned entrypoint, diagnostics captured, exit
+    // code carried by the marker (the sh must exit 0 on a red build).
+    const shCmd = run?.at(-1) ?? '';
+    expect(run).toContain('sh');
+    expect(shCmd).toContain(`lean '${ENTRYPOINT}' 2>&1`);
+    expect(shCmd).toContain(MARKER);
+  });
+
+  it('green build: terminal candidate_solution carrying the machine verdict, 0 cents', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({ allowedRepo: REPO, run: leanRun(`\n${MARKER} 0\n`, calls) });
+    const res = await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    expect(res.outcome).toBe('candidate_solution');
+    expect(res.result).toMatchObject({
+      proof_checker: 'lean4',
+      proof_checked: true,
+      exit_code: 0,
+      entrypoint: ENTRYPOINT,
+    });
+    expect(res.summary).toMatch(/PASSED/);
+    expect(res.actual_cost_cents).toBe(0); // CPU donation
+    expect(res.raw_usage).toMatchObject({ workunit: true, runtime: 'lean4' });
+    expect(res.artifact).toBeUndefined(); // nothing to correct
+  });
+
+  it('red build: verdict false, compiler output preserved in result AND hydration artifact', async () => {
+    const diagnostics =
+      `${ENTRYPOINT}:1:42: error: tactic 'decide' proved that the proposition\n` +
+      `  1 + 1 = 3\nis false`;
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: leanRun(`${diagnostics}\n\n${MARKER} 1\n`, calls),
+    });
+    const res = await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    expect(res.outcome).toBe('candidate_solution'); // terminal: verification records the failure
+    expect(res.result).toMatchObject({
+      proof_checker: 'lean4',
+      proof_checked: false,
+      exit_code: 1,
+    });
+    expect((res.result as { compiler_output: string }).compiler_output).toContain(
+      "tactic 'decide' proved",
+    );
+    // The correction-context channel: `compiler_output` is the key checkoutTask
+    // hydrates (like validation_errors), so the next agent sees the exact errors.
+    expect(res.artifact).toMatchObject({ proof_checker: 'lean4', exit_code: 1 });
+    expect((res.artifact as { compiler_output: string }).compiler_output).toContain('error:');
+    expect(res.summary).toMatch(/FAILED/);
+    expect(res.summary).toContain("error: tactic 'decide'");
+    expect(res.actual_cost_cents).toBe(0);
+  });
+
+  it('a sorried proof can NEVER pass, even though lean exits 0 on the warning', async () => {
+    // Verified against the pinned image: `sorry` is a warning, exit code 0 —
+    // without this check a one-line `by sorry` would auto-accept the claim.
+    const transcript = `${ENTRYPOINT}:1:8: warning: declaration uses 'sorry'\n\n${MARKER} 0\n`;
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({ allowedRepo: REPO, run: leanRun(transcript, calls) });
+    const res = await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    expect(res.result).toMatchObject({ proof_checked: false, exit_code: 0, incomplete: 'sorry' });
+    expect(res.summary).toMatch(/sorry/);
+    expect(res.artifact).toMatchObject({ proof_checker: 'lean4' }); // still correction context
+  });
+
+  it('a transcript with no exit marker is a process failure, not a red build', async () => {
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: leanRun('half a line and then', calls),
+    });
+    await expect(ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }))).rejects.toThrow(
+      /no exit marker/,
+    );
+  });
+
+  it('a timed-out check is salvaged as a progress contribution, never silently released', async () => {
+    const calls: string[][] = [];
+    const base = leanRun('', calls);
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args, opts) => {
+        if (cmd === 'podman' && args[0] === 'run') {
+          calls.push([cmd, ...args]);
+          throw new Error('podman timed out after 100ms'); // execProc's timeout shape
+        }
+        return base(cmd, args, opts);
+      },
+    });
+    const res = await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+
+    // The donated CPU time ends in a recorded artifact — the invariant.
+    expect(res.outcome).toBe('progress');
+    expect(res.timed_out).toBe(true);
+    expect(res.result).toMatchObject({ timed_out: true, runtime: 'lean4' });
+    expect(res.summary).toMatch(/timed out/);
+    expect(res.actual_cost_cents).toBe(0);
+    expect(res.raw_usage).toMatchObject({ workunit: true, runtime: 'lean4', timed_out: true });
+    // The container that outlived the killed client is still reaped.
+    expect(calls.some((c) => c[0] === 'podman' && c[1] === 'rm' && c[2] === '-f')).toBe(true);
+  });
+
+  it('a timed-out python work unit still throws (salvage is per-runtime opt-in)', async () => {
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      run: async (cmd, args) => {
+        if (cmd === 'podman' && args[0] === 'run') throw new Error('podman timed out after 100ms');
+        return '';
+      },
+    });
+    // No manifest -> python3-stdlib: the long-standing release-on-failure path.
+    await expect(ex.execute(task({ code: CODE }))).rejects.toThrow(/timed out/);
+  });
+
+  it('honors a per-runtime image override for lean4', async () => {
+    const override = `docker.io/example/pinned-lean@sha256:${'cd'.repeat(32)}`;
+    const calls: string[][] = [];
+    const ex = new WorkUnitExecutor({
+      allowedRepo: REPO,
+      runtimeImages: { lean4: override },
+      run: leanRun(`\n${MARKER} 0\n`, calls),
+    });
+    await ex.execute(task({ code: { ...CODE, entrypoint: ENTRYPOINT } }));
+    const run = calls.find((c) => c[0] === 'podman' && c[1] === 'run');
+    expect(run).toContain(override);
   });
 });
