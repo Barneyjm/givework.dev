@@ -62,8 +62,33 @@
   .metric .v { font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700; display:block; }
   .metric .k { font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
   .frontier { margin:2rem 0 0; border: var(--line); background: var(--ink); color: var(--paper);
-              padding:1rem 1.2rem; font-family:'Space Mono',monospace; font-size:.82rem; overflow-x:auto; }
-  .frontier .k { color: var(--yellow); text-transform:uppercase; font-size:.7rem; display:block; margin-bottom:.4rem; }
+              padding:1rem 1.2rem; font-size:.82rem; }
+  .frontier .k { color: var(--yellow); text-transform:uppercase; font-size:.7rem; display:block;
+                 font-family:'Space Mono',monospace; letter-spacing:.05em; }
+  .frontier .khead { display:flex; align-items:baseline; justify-content:space-between; gap:1rem;
+                     margin-bottom:.7rem; }
+  /* The compacted working set is free-form JSON an agent wrote, so the keys are
+     unknowable — render the STRUCTURE (keys as labels, values as prose) rather
+     than dumping stringify output. The old version passed indent-1 JSON through
+     without a <pre>, so every newline collapsed and the whole state arrived as
+     one unbroken wall of monospace. */
+  .frontier .fk { color: var(--yellow); font-family:'Space Mono',monospace; font-size:.7rem;
+                  text-transform:uppercase; letter-spacing:.04em; margin:.9rem 0 .2rem;
+                  overflow-wrap:anywhere; }
+  .frontier .fk:first-child { margin-top:0; }
+  .frontier .fk--sub { font-size:.63rem; opacity:.75; margin-top:.6rem; }
+  .frontier .fv { font-weight:300; line-height:1.5; overflow-wrap:anywhere;
+                  white-space:pre-wrap; max-width:70ch; }
+  /* Scalars keep the terminal register; long prose gets the readable face. */
+  .frontier .fv--scalar { font-family:'Space Mono',monospace; font-size:.78rem; opacity:.9; }
+  .frontier .fnest { border-left:2px solid #f3c20a55; padding-left:.8rem; margin-top:.3rem; }
+  .frontier .fempty { opacity:.55; font-style:italic; }
+  .frontier .raw { display:block; white-space:pre; overflow-x:auto; font-family:'Space Mono',monospace;
+                   font-size:.75rem; margin:0; }
+  .frontier .rawbtn { font-family:'Space Mono',monospace; font-size:.62rem; text-transform:uppercase;
+                      background:none; color:var(--paper); border:2px solid #fdfaf288; padding:.15rem .45rem;
+                      cursor:pointer; opacity:.7; white-space:nowrap; }
+  .frontier .rawbtn:hover { opacity:1; border-color: var(--yellow); color: var(--yellow); }
   .feed-head { margin:2.6rem 0 0; }
   .feed { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
   /* flex-wrap + a shrinkable summary keep the nowrap date from overflowing the
@@ -241,8 +266,12 @@
       '<div class="metric"><span class="v">' + dollars(m.compute_cents) + '</span><span class="k">compute donated</span></div>' +
       '</div>';
     if (d.state && Object.keys(d.state).length) {
-      h += '<div class="frontier"><span class="k">Current frontier</span>' +
-        esc(JSON.stringify(d.state, null, 1)) + '</div>';
+      h += '<div class="frontier" id="cj-frontier">' +
+        '<div class="khead"><span class="k">Current frontier</span>' +
+        '<button class="rawbtn" id="cj-raw" type="button" aria-pressed="false">Raw JSON</button></div>' +
+        '<div id="cj-state">' + stateHtml(d.state) + '</div>' +
+        '<pre class="raw" id="cj-state-raw" hidden>' + esc(JSON.stringify(d.state, null, 2)) + '</pre>' +
+        '</div>';
     }
     h += '<div id="cj-tasks"></div>';
     h += '<div id="cj-tree"></div>';
@@ -270,6 +299,7 @@
         : '<p class="mono src">' + esc(d.source_ref) + '</p>';
     }
     page.innerHTML = h;
+    wireRaw();
     maybeAddVideo(slug);
     maybeAddTasks(slug);
     maybeAddTree(slug);
@@ -402,6 +432,62 @@
       btn.textContent = open ? '▸' : '▾';
       btn.setAttribute('aria-label', (open ? 'Expand' : 'Collapse') + ' subtasks');
       apply();
+    });
+  }
+
+  /**
+   * Render the compacted working set as structure instead of a JSON dump.
+   *
+   * `state` is free-form — an agent writes it via state_update, so the keys are
+   * whatever the work needed — which is exactly why it has to be rendered
+   * generically: keys become labels, scalars keep the terminal face, and long
+   * prose values get a readable one. Depth is bounded because a cyclic or
+   * pathologically nested state should degrade to raw text, not hang the page.
+   */
+  function stateHtml(v, depth) {
+    depth = depth || 0;
+    if (v === null || v === undefined) return '<div class="fv fv--scalar fempty">null</div>';
+    if (Array.isArray(v)) {
+      if (!v.length) return '<div class="fv fempty">(empty)</div>';
+      // Arrays of scalars read better as one comma-joined line than as a
+      // numbered list of one-word rows.
+      var scalars = v.every(function (x) { return x === null || typeof x !== 'object'; });
+      if (scalars) return '<div class="fv fv--scalar">' + esc(v.join(', ')) + '</div>';
+      if (depth > 5) return '<pre class="raw">' + esc(JSON.stringify(v, null, 2)) + '</pre>';
+      return '<div class="fnest">' + v.map(function (x, i) {
+        return '<div class="fk fk--sub">' + (i + 1) + '</div>' + stateHtml(x, depth + 1);
+      }).join('') + '</div>';
+    }
+    if (typeof v === 'object') {
+      var keys = Object.keys(v);
+      if (!keys.length) return '<div class="fv fempty">(empty)</div>';
+      if (depth > 5) return '<pre class="raw">' + esc(JSON.stringify(v, null, 2)) + '</pre>';
+      // Nested keys are subordinate to their parent, so they read smaller —
+      // the indent rail alone left every level looking equally important.
+      var kc = depth === 0 ? 'fk' : 'fk fk--sub';
+      var body = keys.map(function (k) {
+        return '<div class="' + kc + '">' + esc(k.replace(/_/g, ' ')) + '</div>' + stateHtml(v[k], depth + 1);
+      }).join('');
+      return depth === 0 ? body : '<div class="fnest">' + body + '</div>';
+    }
+    // A scalar. Long strings are prose an agent wrote — set them in the reading
+    // face; short ones (ids, numbers, flags) stay monospace.
+    var s = String(v);
+    return '<div class="fv' + (s.length > 60 ? '' : ' fv--scalar') + '">' + esc(s) + '</div>';
+  }
+
+  /** Toggle between the rendered state and the exact JSON behind it. */
+  function wireRaw() {
+    var btn = document.getElementById('cj-raw');
+    if (!btn) return;
+    var pretty = document.getElementById('cj-state');
+    var raw = document.getElementById('cj-state-raw');
+    btn.addEventListener('click', function () {
+      var showingRaw = btn.getAttribute('aria-pressed') === 'true';
+      btn.setAttribute('aria-pressed', String(!showingRaw));
+      btn.textContent = showingRaw ? 'Raw JSON' : 'Formatted';
+      pretty.hidden = !showingRaw;
+      raw.hidden = showingRaw;
     });
   }
 
