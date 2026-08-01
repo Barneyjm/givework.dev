@@ -15,6 +15,7 @@ import {
   getLeaderboard,
   getPublicTransparency,
   getTargetProgress,
+  getTargetTaskTree,
   heartbeatTask,
   isDevVerified,
   listAvailableTasks,
@@ -327,6 +328,17 @@ app.get('/conjectures/:slug', (c) => {
 // head of. Always JSON — there is no HTML view of a bare page, and the detail
 // page appends these rows under the ten it already rendered. Public, like the
 // progress payload it extends.
+// The decomposition forest for one conjecture: which task each task was split
+// out of, and who proposed the split. Flat nodes with parent_id; the page draws
+// the tree. Public, like everything else about a conjecture.
+app.get('/conjectures/:slug/tree', (c) =>
+  handle(async () => {
+    const tree = await getTargetTaskTree(c.req.param('slug'));
+    if (!tree) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return tree;
+  })(c),
+);
+
 app.get('/conjectures/:slug/contributions', (c) =>
   handle(async () => {
     const page = await listTargetContributions(c.req.param('slug'), {

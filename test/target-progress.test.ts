@@ -197,6 +197,95 @@ describe('paging the contribution feed', () => {
   });
 });
 
+describe('decomposition tree', () => {
+  it('reports each task’s parent and the split that produced it, roots first', async () => {
+    const create = await createTargetVia({ name: 'Tree', slug: 'tree', kind: 'conjecture' });
+    const conj: any = await create.json();
+    const dev = await createDev('splitter');
+    await setBudget(dev, 100_000);
+
+    // An impetus task, split by a proposal that a peer approves.
+    const root = await createTask(conj.id, { max: 800 });
+    await checkoutTask(dev, root);
+    const sub: any = await submitResult(
+      dev,
+      root,
+      {
+        decomposition: {
+          subtasks: [
+            { title: 'Half one', prompt: 'do the first half', max_cost_cents: 400 },
+            { title: 'Half two', prompt: 'do the second half', max_cost_cents: 400 },
+          ],
+        },
+      },
+      20,
+      null,
+      { outcome: 'decomposition', summary: 'too big for one run — splitting into two' },
+    );
+    // Approve the split via the auto-minted review task, which is what
+    // publishes the children.
+    expect(sub.review_task_id).toBeDefined();
+    const reviewer = await createDev('approver');
+    await setBudget(reviewer, 100_000);
+    await checkoutTask(reviewer, sub.review_task_id);
+    await submitResult(reviewer, sub.review_task_id, { approve: true }, 5, null);
+
+    const res = await req('/conjectures/tree/tree');
+    expect(res.status).toBe(200);
+    const t: any = await res.json();
+    const byTitle: any = Object.fromEntries(t.nodes.map((n: any) => [n.title, n]));
+    const children = t.nodes.filter((n: any) => n.parent_id === root);
+    expect(children).toHaveLength(2);
+    expect(children.map((c: any) => c.title).sort()).toEqual(['Half one', 'Half two']);
+    // The edge names who proposed the split — the "why this task exists".
+    expect(byTitle['Half one'].via).toMatchObject({ proposed_by: 'splitter' });
+    // The impetus task is a root, and carries the decomposition contribution.
+    const rootNode = t.nodes.find((n: any) => n.id === root);
+    expect(rootNode.parent_id).toBeNull();
+    expect(rootNode.via).toBeNull();
+    expect(rootNode.contributions).toBeGreaterThan(0);
+    // Roots sort before their children (ordered by decomposition depth).
+    expect(t.nodes.findIndex((n: any) => n.id === root)).toBeLessThan(
+      t.nodes.findIndex((n: any) => n.title === 'Half one'),
+    );
+  });
+
+  it('keeps peer-review tasks out of the tree, and says how many it dropped', async () => {
+    const create = await createTargetVia({ name: 'Tree2', slug: 'tree2', kind: 'conjecture' });
+    const conj: any = await create.json();
+    const dev = await createDev('splitter2');
+    await setBudget(dev, 100_000);
+    const root = await createTask(conj.id, { max: 800 });
+    await checkoutTask(dev, root);
+    await submitResult(
+      dev,
+      root,
+      { decomposition: { subtasks: [{ title: 'Piece', prompt: 'p', max_cost_cents: 400 }] } },
+      20,
+      null,
+      { outcome: 'decomposition', summary: 'split' },
+    );
+    const t: any = await (await req('/conjectures/tree2/tree')).json();
+    // A review task exists, but it has no decomposed_from and would otherwise
+    // render as a second impetus task nobody proposed.
+    expect(t.review_excluded).toBe(1);
+    expect(t.nodes.every((n: any) => !/^Review /.test(n.title))).toBe(true);
+  });
+
+  it('404s for an unknown slug and for a non-public kind', async () => {
+    expect((await req('/conjectures/nope/tree')).status).toBe(404);
+    await createTargetVia({ name: 'Org', slug: 'org-t', kind: 'org_request' });
+    expect((await req('/conjectures/org-t/tree')).status).toBe(404);
+  });
+
+  it('returns an empty forest for a conjecture with no tasks', async () => {
+    await createTargetVia({ name: 'Bare', slug: 'bare', kind: 'conjecture' });
+    const t: any = await (await req('/conjectures/bare/tree')).json();
+    expect(t.nodes).toEqual([]);
+    expect(t.review_excluded).toBe(0);
+  });
+});
+
 describe('contributor attribution + profile', () => {
   it('attributes contributions to the handle and serves a shareable profile', async () => {
     const create = await createTargetVia({

@@ -2652,6 +2652,113 @@ export async function listTargetContributions(
   return { contributions, total, has_more: offset + contributions.length < total };
 }
 
+/** One task in a conjecture's decomposition forest. */
+export interface TaskTreeNode {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  max_cost_cents: number;
+  created_at: string;
+  /** How many contributions have landed on this task. */
+  contributions: number;
+  /** The task this one was split out of, or null for a root ("impetus") task. */
+  parent_id: string | null;
+  /**
+   * The decomposition proposal that produced this task — the *reason* it
+   * exists. Null on roots. Publication only happens after a peer agent
+   * approves the proposal, so a present `via` implies it was peer-approved.
+   */
+  via: {
+    /** The proposal contribution. Siblings from one split share it, so the UI can caption the split once. */
+    id: string;
+    proposed_by: string | null;
+    proposed_at: string;
+  } | null;
+}
+
+/**
+ * The decomposition forest for one conjecture: every task, plus the edge back
+ * to the task it was split out of. Flat, with `parent_id` — the caller builds
+ * the tree, which keeps the payload shallow and the recursion out of Postgres.
+ *
+ * The edge is deliberately two hops. `tasks.decomposed_from` points at the
+ * *contribution* that proposed the split, and that contribution points at the
+ * parent task, so the lineage carries who proposed the split as well as what
+ * came of it.
+ *
+ * Auto-minted peer-review tasks are excluded: their `decomposed_from` is null,
+ * so they would render as extra roots and read as impetus tasks that nobody
+ * ever proposed. They are process around an edge, not structure in the tree —
+ * `review_excluded` reports how many were dropped so the count is never a
+ * silent truncation.
+ */
+export async function getTargetTaskTree(
+  slug: string,
+): Promise<{ nodes: TaskTreeNode[]; review_excluded: number } | null> {
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM targets WHERE slug = $1 AND kind::text = ANY($2::text[])`,
+    [slug, PUBLIC_TARGET_KINDS],
+  );
+  const t = rows[0];
+  if (!t) return null;
+  const { rows: nodes } = await query<{
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+    max_cost_cents: number;
+    created_at: string | Date;
+    contributions: number;
+    parent_id: string | null;
+    proposed_by: string | null;
+    proposed_at: string | Date | null;
+    via_id: string | null;
+    is_review: boolean;
+  }>(
+    `SELECT t.id, t.title, t.kind::text AS kind, t.status::text AS status,
+            t.max_cost_cents, t.created_at,
+            (SELECT count(*)::int FROM contributions c WHERE c.task_id = t.id) AS contributions,
+            p.task_id AS parent_id,
+            d.github_handle AS proposed_by,
+            p.created_at AS proposed_at,
+            p.id::text AS via_id,
+            (t.spec ? 'review_of') AS is_review
+       FROM tasks t
+       LEFT JOIN contributions p ON p.id = t.decomposed_from
+       LEFT JOIN devs d ON d.id = p.dev_id
+      WHERE t.target_id = $1
+      -- title breaks the tie: subtasks from one split are inserted in a single
+      -- transaction and therefore share created_at exactly, so without it the
+      -- sibling order is unspecified and the tree can reshuffle between loads.
+      -- (The proposer's own ordering isn't recoverable — nothing records it.)
+      ORDER BY t.decomposition_depth, t.created_at, t.title`,
+    [t.id],
+  );
+  const kept = nodes.filter((n) => !n.is_review);
+  return {
+    review_excluded: nodes.length - kept.length,
+    nodes: kept.map((n) => ({
+      id: n.id,
+      title: n.title,
+      kind: n.kind,
+      status: n.status,
+      max_cost_cents: Number(n.max_cost_cents),
+      created_at: new Date(n.created_at).toISOString(),
+      contributions: n.contributions,
+      parent_id: n.parent_id,
+      via:
+        n.proposed_at && n.via_id
+          ? {
+              id: n.via_id,
+              proposed_by: n.proposed_by,
+              proposed_at: new Date(n.proposed_at).toISOString(),
+            }
+          : null,
+    })),
+  };
+}
+
 /** Coerce a caller-supplied paging number into range; anything unparseable → fallback. */
 function clampInt(v: unknown, fallback: number, min: number, max: number): number {
   const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : Number.NaN;
