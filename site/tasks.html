@@ -48,7 +48,29 @@
   .tag--video { background: var(--blue); color:#fff; border-color: var(--blue); }
   .tag--math { background:#fff; }
   .tasks .main { grid-column:1; grid-row:2; min-width:0; }
-  .tasks .t { font-weight:600; overflow-wrap:anywhere; }
+  /* The title is the disclosure control. A <button> rather than a clickable
+     <li> so it is keyboard-reachable and announced as expandable — and so it
+     doesn't swallow the conjecture <a> underneath it into a nested control. */
+  .tasks .t { font-weight:600; overflow-wrap:anywhere; display:block; width:100%;
+              text-align:left; background:none; border:0; padding:0; margin:0;
+              font:inherit; font-weight:600; color:inherit; cursor:pointer; }
+  .tasks .t:hover, .tasks .t:focus-visible { text-decoration:underline;
+              text-decoration-color: var(--yellow); text-decoration-thickness:2px;
+              text-underline-offset:3px; }
+  .tasks .t .caret { font-family:'Space Mono',monospace; font-size:.75em; opacity:.55;
+              margin-left:.4rem; display:inline-block; }
+  .tasks .t[aria-expanded="true"] .caret { transform: rotate(180deg); }
+  .tasks .det { grid-column:1 / -1; grid-row:3; margin:.6rem 0 0; padding:.7rem .9rem;
+              border: var(--line); background:#fff; }
+  .tasks .det[hidden] { display:none; }
+  .tasks .det dl { display:grid; grid-template-columns:auto 1fr; gap:.25rem .9rem;
+              margin:0; font-family:'Space Mono',monospace; font-size:.75rem; }
+  .tasks .det dt { text-transform:uppercase; opacity:.6; }
+  .tasks .det dd { margin:0; overflow-wrap:anywhere; }
+  .tasks .det .brief { font-family:inherit; font-size:.9rem; font-weight:300;
+              margin:.7rem 0 0; opacity:.85; }
+  .tasks .det .brief code { font-family:'Space Mono',monospace; font-size:.85em;
+              background: var(--yellow); padding:.05rem .3rem; }
   .tasks .angle { font-weight:300; opacity:.75; font-size:.92rem; margin-top:.15rem; overflow-wrap:anywhere; }
   .tasks .on { font-size:.85rem; margin-top:.3rem; }
   .tasks .on a { color:inherit; text-decoration:underline; text-decoration-color:var(--yellow);
@@ -153,20 +175,67 @@
     var nVid = all.filter(function (t) { return t.deliverable === 'explainer_video'; }).length;
     count.textContent = list.length + ' open · ' + (all.length - nVid) + ' math · ' + nVid + ' video';
     var h = '<ul class="tasks">';
-    list.forEach(function (t) {
+    list.forEach(function (t, i) {
       var isVid = t.deliverable === 'explainer_video';
+      var did = 'det-' + i;
       h += '<li>' +
         '<span class="tag ' + (isVid ? 'tag--video' : 'tag--math') + '">' +
           (isVid ? 'video' : esc(kindLabel(t.kind))) + '</span>' +
-        '<span class="main"><span class="t">' + esc(t.title) + '</span>' +
+        '<span class="main">' +
+        '<button class="t" type="button" aria-expanded="false" aria-controls="' + did + '">' +
+          esc(t.title) + '<span class="caret" aria-hidden="true">▾</span></button>' +
         (t.angle ? '<div class="angle">' + esc(t.angle) + '</div>' : '') +
         '<div class="on">on <a href="/conjectures/' + encodeURIComponent(t.conjecture_slug) + '">' +
           esc(t.conjecture_name) + '</a></div></span>' +
         '<span class="cap">up to $' + (t.max_cost_cents / 100).toFixed(2) + '</span>' +
+        detail(t, did) +
         '</li>';
     });
     board.innerHTML = h + '</ul>';
   }
+
+  /**
+   * The expandable per-task panel. Everything here is already public on
+   * /tasks/available — this only stops it being invisible. The full brief is
+   * deliberately NOT here: it ships with the task at checkout, and the panel
+   * says so rather than leaving a reader wondering what they'd be signing up for.
+   */
+  function detail(t, id) {
+    var rows = [
+      ['Kind', kindLabel(t.kind)],
+      ['Deliverable', String(t.deliverable || '').replace(/_/g, ' ')],
+      ['Verified by', String(t.verify_via || 'human review').replace(/_/g, ' ')],
+      ['Budget cap', '$' + (t.max_cost_cents / 100).toFixed(2)],
+      ['Posted', fmtDate(t.created_at)],
+      ['Task id', String(t.id || '').slice(0, 8)],
+    ];
+    return '<div class="det" id="' + id + '" hidden>' +
+      '<dl>' + rows.map(function (r) {
+        return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
+      }).join('') + '</dl>' +
+      '<p class="brief">The full brief — statement, prior attempts, and the current ' +
+      'frontier — arrives with the task when your runner claims it: ' +
+      '<code>npx givework start</code></p>' +
+      '</div>';
+  }
+
+  function fmtDate(s) {
+    var d = new Date(s);
+    return isNaN(d) ? '—' : d.toISOString().slice(0, 10);
+  }
+
+  // Delegated: rows are re-rendered on every filter change, so binding per-row
+  // listeners would leak and go stale.
+  document.getElementById('board').addEventListener('click', function (e) {
+    var btn = e.target.closest('.t[aria-controls]');
+    if (!btn) return;
+    var panel = document.getElementById(btn.getAttribute('aria-controls'));
+    if (!panel) return;
+    var open = btn.getAttribute('aria-expanded') === 'true';
+    btn.setAttribute('aria-expanded', String(!open));
+    panel.hidden = open;
+    if (!open && window.posthog) posthog.capture('task_details_opened');
+  });
 
   document.getElementById('filters').addEventListener('click', function (e) {
     var b = e.target.closest('.chip');

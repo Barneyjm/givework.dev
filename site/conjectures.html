@@ -55,11 +55,30 @@
   .cj .tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0 0; padding:0; list-style:none; }
   .cj .tag { font-family:'Space Mono',monospace; font-size:.62rem; text-transform:uppercase;
              padding:.1rem .4rem; border:2px solid var(--ink); opacity:.8; }
-  .board-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 .8rem; }
+  .board-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin:.8rem 0 0; }
+  .board-filters[hidden] { display:none; }
   .bf { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
         padding:.3rem .7rem; border: var(--line); background:#fff; cursor:pointer; }
   .bf:hover { background: var(--yellow); }
   .bf[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  /* Search. The board is fully client-side (all conjectures arrive in one
+     /leaderboard payload), so filtering is instant and needs no endpoint. */
+  .board-search { display:flex; gap:.5rem; align-items:center; margin:0 0 .8rem; }
+  .board-search input { flex:1 1 auto; min-width:0; font-family:'Space Mono',monospace;
+        font-size:.85rem; padding:.55rem .7rem; border: var(--line); background:#fff;
+        color:inherit; }
+  .board-search input::placeholder { color:inherit; opacity:.45; text-transform:none; }
+  .board-search .clear { font-family:'Space Mono',monospace; font-size:.72rem;
+        text-transform:uppercase; padding:.3rem .6rem; border: var(--line);
+        background:#fff; cursor:pointer; }
+  .board-search .clear:hover { background: var(--red); color:#fff; }
+  /* Topic filters collapse behind a disclosure: 27 tag chips filled an entire
+     phone screen before a single conjecture card, which is what this page is
+     for. Collapsed by default; the toggle names the active topic so a filtered
+     board is never silently filtered. */
+  .bf--toggle[aria-expanded="true"] { background: var(--yellow); }
+  .bf--toggle .caret { display:inline-block; margin-left:.35rem; }
+  .bf--toggle[aria-expanded="true"] .caret { transform: rotate(180deg); }
   .board-controls { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:0 0 1.4rem; }
   .board-controls .lbl { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase; opacity:.7; }
   .bf-select { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
@@ -154,7 +173,11 @@
         <h3>On the board now.</h3>
       </div>
       <p class="board-totals" id="board-totals"></p>
-      <div class="board-filters" id="board-filters"></div>
+      <div class="board-search" id="board-search" hidden>
+        <input type="search" id="board-q" autocomplete="off" spellcheck="false"
+               placeholder="Search conjectures — name or topic" aria-label="Search conjectures" />
+        <button class="clear" id="board-clear" type="button" hidden>Clear</button>
+      </div>
       <div class="board-controls" id="board-controls" hidden>
         <span class="lbl">Status</span>
         <button class="bf" data-status="" aria-pressed="true">All</button>
@@ -167,7 +190,12 @@
           <option value="tasks">Most tasks</option>
           <option value="name">Name A–Z</option>
         </select>
+        <button class="bf bf--toggle" id="board-topics" type="button"
+                aria-expanded="false" aria-controls="board-filters">
+          <span id="board-topics-label">Topics</span><span class="caret" aria-hidden="true">▾</span>
+        </button>
       </div>
+      <div class="board-filters" id="board-filters" hidden></div>
       <div class="board-grid" id="board-grid"><p class="board-msg">Loading the board…</p></div>
     </div>
   </section>
@@ -308,6 +336,22 @@
   var controls = document.getElementById('board-controls');
   var sortSel = document.getElementById('board-sort');
   var activeStatus = null; // null | 'open' | 'settled'
+  var search = document.getElementById('board-search');
+  var qInput = document.getElementById('board-q');
+  var clearBtn = document.getElementById('board-clear');
+  var topicsBtn = document.getElementById('board-topics');
+  var topicsLabel = document.getElementById('board-topics-label');
+  var q = ''; // normalized search query
+  var norm = function (s) { return String(s == null ? '' : s).toLowerCase(); };
+  // A conjecture matches if every whitespace-separated term appears somewhere in
+  // its name, slug, or tags. Term-wise AND (not substring-of-the-whole) so
+  // "erdos graph" finds the Erdős graph-theory problems rather than nothing.
+  function matches(c, terms) {
+    var hay = norm(c.name) + ' ' + norm(c.slug).replace(/-/g, ' ') + ' ' +
+      (c.tags || []).map(function (t) { return norm(t).replace(/-/g, ' '); }).join(' ');
+    for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) === -1) return false;
+    return true;
+  }
   var SORTS = {
     donated: function (a, b) { return b.compute_cents - a.compute_cents || a.name.localeCompare(b.name); },
     contributions: function (a, b) { return b.contributions - a.contributions || a.name.localeCompare(b.name); },
@@ -334,23 +378,54 @@
   }
 
   function renderCards() {
+    // Split on hyphens as well as spaces: slugs are hyphenated and the haystack
+    // flattens them, so a pasted "firstproof-c4" has to become ["firstproof","c4"]
+    // or it matches nothing — the one query a user is most likely to paste.
+    var terms = q ? q.split(/[\s-]+/).filter(Boolean) : [];
     var shown = all.filter(function (c) {
       if (active && (c.tags || []).indexOf(active) === -1) return false;
       if (activeStatus === 'open' && !OPEN[c.status]) return false;
       if (activeStatus === 'settled' && OPEN[c.status]) return false;
+      if (terms.length && !matches(c, terms)) return false;
       return true;
     });
     shown = shown.slice().sort(SORTS[sortSel.value] || SORTS.donated);
-    grid.innerHTML = shown.length
-      ? shown.map(card).join('')
-      : '<p class="board-msg">Nothing on the board matches these filters.</p>';
+    if (shown.length) {
+      grid.innerHTML = shown.map(card).join('');
+      return;
+    }
+    // Say which constraint emptied the board, and offer the way out — a dead
+    // end that doesn't name its cause reads as "the site is broken".
+    var why = q
+      ? 'No conjecture matches “' + esc(q) + '”' + (active || activeStatus ? ' with these filters' : '') + '.'
+      : 'Nothing on the board matches these filters.';
+    grid.innerHTML = '<p class="board-msg">' + why +
+      ' <button class="bf" id="board-reset" type="button">Reset</button></p>';
+    var reset = document.getElementById('board-reset');
+    if (reset) reset.addEventListener('click', function () {
+      q = ''; qInput.value = ''; active = null; activeStatus = null;
+      clearBtn.hidden = true;
+      controls.querySelectorAll('.bf[data-status]').forEach(function (b) {
+        b.setAttribute('aria-pressed', String(!b.getAttribute('data-status')));
+      });
+      syncTopics(); renderFilters(); renderCards();
+    });
+  }
+
+  /** The collapsed toggle has to carry the active topic, or a filtered board looks empty for no reason. */
+  function syncTopics() {
+    topicsLabel.textContent = active ? active.replace(/-/g, ' ') : 'Topics';
+    topicsBtn.setAttribute('aria-pressed', String(!!active));
   }
 
   function renderFilters() {
     var counts = {};
     all.forEach(function (c) { (c.tags || []).forEach(function (t) { counts[t] = (counts[t] || 0) + 1; }); });
     var tags = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); });
-    if (!tags.length) { filters.innerHTML = ''; return; }
+    // No tags anywhere -> no disclosure at all, rather than a toggle that opens
+    // an empty box.
+    topicsBtn.hidden = !tags.length;
+    if (!tags.length) { filters.innerHTML = ''; filters.hidden = true; return; }
     filters.innerHTML =
       '<button class="bf" data-tag="" aria-pressed="' + (active === null) + '">All (' + all.length + ')</button>' +
       tags.map(function (t) {
@@ -364,7 +439,37 @@
     if (!btn) return;
     active = btn.getAttribute('data-tag') || null;
     if (window.posthog) posthog.capture('conjecture_board_filtered', { filter_type: 'tag', tag: active });
+    // Picking a topic is the end of picking a topic: collapse back so the
+    // result is on screen instead of below another screenful of chips.
+    filters.hidden = true;
+    topicsBtn.setAttribute('aria-expanded', 'false');
+    syncTopics();
     renderFilters();
+    renderCards();
+  });
+
+  topicsBtn.addEventListener('click', function () {
+    var open = topicsBtn.getAttribute('aria-expanded') === 'true';
+    topicsBtn.setAttribute('aria-expanded', String(!open));
+    filters.hidden = open;
+    if (!open && window.posthog) posthog.capture('conjecture_board_topics_opened');
+  });
+
+  // Search is instant — everything is already in memory, so there is nothing to
+  // debounce against and no request to spare.
+  qInput.addEventListener('input', function () {
+    q = qInput.value.trim().toLowerCase();
+    clearBtn.hidden = !q;
+    renderCards();
+  });
+  qInput.addEventListener('search', function () { // native ✕ in the search field
+    q = qInput.value.trim().toLowerCase();
+    clearBtn.hidden = !q;
+    renderCards();
+  });
+  clearBtn.addEventListener('click', function () {
+    qInput.value = ''; q = ''; clearBtn.hidden = true;
+    qInput.focus();
     renderCards();
   });
 
@@ -392,6 +497,8 @@
         dollars(t.compute_cents) + '</b> of compute donated';
       all = d.conjectures || [];
       controls.hidden = !all.length;
+      search.hidden = !all.length;
+      syncTopics();
       renderFilters();
       renderCards();
       if (!all.length) grid.innerHTML = '<p class="board-msg">Nothing on the board yet — propose the first problem.</p>';

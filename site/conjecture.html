@@ -106,6 +106,12 @@
                     opacity:.85; }
   .feed .src-code:hover { opacity:1; border-color: var(--red); }
   .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
+  .feed-more { display:flex; gap:.7rem; align-items:center; margin:.9rem 0 0; flex-wrap:wrap; }
+  .more-btn { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
+              padding:.4rem .9rem; border: var(--line); background:#fff; cursor:pointer; color:inherit; }
+  .more-btn:hover:not(:disabled) { background: var(--yellow); }
+  .more-btn:disabled { opacity:.55; cursor:default; }
+  .more-count { font-family:'Space Mono',monospace; font-size:.72rem; opacity:.6; }
   .board-msg { font-weight:300; }
 </style>
 </head>
@@ -211,8 +217,35 @@
     h += '<div id="cj-tasks"></div>';
     h += '<div class="section-head feed-head"><span class="eyebrow">Every attempt, logged</span><h3>Recent contributions.</h3></div>';
     if (d.recent_contributions && d.recent_contributions.length) {
-      h += '<ul class="feed">';
-      d.recent_contributions.forEach(function (r) {
+      h += '<ul class="feed" id="cj-feed">' + d.recent_contributions.map(feedRow).join('') + '</ul>';
+      // "Every attempt, logged" has to be true: the payload carries only the
+      // newest 10, so anything beyond that is paged in on demand rather than
+      // silently dropped. Count from metrics, which is the full total.
+      if (m.contributions > d.recent_contributions.length) {
+        h += '<div class="feed-more">' +
+          '<button class="more-btn" id="cj-more" type="button">Load more</button>' +
+          '<span class="more-count" id="cj-more-count">' +
+          d.recent_contributions.length + ' of ' + m.contributions + '</span></div>';
+      }
+    } else {
+      h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
+    }
+    if (d.source_ref) {
+      // External references open in a new tab so the long URL can't hijack the
+      // page (and can't overflow the layout as raw text).
+      h += /^https?:\/\//.test(d.source_ref)
+        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
+        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    }
+    page.innerHTML = h;
+    maybeAddVideo(slug);
+    maybeAddTasks(slug);
+    wireMore(slug, m.contributions);
+  }
+
+  /** One feed row. Shared by the embedded first page and every paged-in row. */
+  function feedRow(r) {
         // The feed is a work ledger, and the badge says only what actually
         // happened. Green "machine-verified" is reserved for a checker-confirmed
         // result; work a human reviewer accepted says just that; a failed check
@@ -253,26 +286,51 @@
             ' title="' + esc(r.code.repo) + ' @ ' + esc(r.code.sha) + '">⌘ ' +
             esc(file) + '@' + esc(r.code.sha.slice(0, 7)) + '</a>';
         }
-        h += '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
-          '<span class="sum">' + who + esc(r.summary || '(no summary)') + code + '</span>' +
-          '<span class="when">' + when(r.created_at) + '</span></li>';
-      });
-      h += '</ul>';
-    } else {
-      h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
-    }
-    if (d.source_ref) {
-      // External references open in a new tab so the long URL can't hijack the
-      // page (and can't overflow the layout as raw text).
-      h += /^https?:\/\//.test(d.source_ref)
-        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
-          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
-        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
-    }
+    return '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
+      '<span class="sum">' + who + esc(r.summary || '(no summary)') + code + '</span>' +
+      '<span class="when">' + when(r.created_at) + '</span></li>';
+  }
 
-    page.innerHTML = h;
-    maybeAddVideo(slug);
-    maybeAddTasks(slug);
+  /**
+   * "Load more" pages the rest of the feed from /conjectures/:slug/contributions,
+   * appending under what is already there. Offset is driven by how many rows we
+   * have rendered, so a contribution submitted mid-browse cannot make the walk
+   * skip a row — the server orders by id, which is monotonic.
+   */
+  function wireMore(slug, total) {
+    var btn = document.getElementById('cj-more');
+    if (!btn) return;
+    var feed = document.getElementById('cj-feed');
+    var count = document.getElementById('cj-more-count');
+    var loading = false;
+    btn.addEventListener('click', function () {
+      if (loading) return;
+      loading = true;
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      var offset = feed.children.length;
+      fetch('/conjectures/' + encodeURIComponent(slug) + '/contributions?limit=25&offset=' + offset,
+            { headers: { accept: 'application/json' }, cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (p) {
+          feed.insertAdjacentHTML('beforeend', (p.contributions || []).map(feedRow).join(''));
+          count.textContent = feed.children.length + ' of ' + (p.total || total);
+          if (p.has_more) {
+            btn.disabled = false;
+            btn.textContent = 'Load more';
+          } else {
+            btn.remove(); // nothing left to ask for
+          }
+          loading = false;
+        })
+        .catch(function () {
+          // Never strand the reader on a dead button: say so and let them retry.
+          btn.disabled = false;
+          btn.textContent = 'Retry';
+          count.textContent = 'Couldn’t load more just now.';
+          loading = false;
+        });
+    });
   }
 
   // Show the explainer only if /videos/<slug>.mp4 exists (HEAD probe avoids a

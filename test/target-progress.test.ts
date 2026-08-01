@@ -113,6 +113,90 @@ describe('conjecture progress page', () => {
   });
 });
 
+describe('paging the contribution feed', () => {
+  // The progress payload carries only the newest 10. A conjecture with 39
+  // contributions (firstproof-c4's real shape) must be able to show the rest.
+  async function seedContributions(n: number) {
+    const create = await createTargetVia({ name: 'Paged', slug: 'paged', kind: 'conjecture' });
+    const conj: any = await create.json();
+    const dev = await createDev('pager');
+    await setBudget(dev, 100_000);
+    for (let i = 0; i < n; i++) {
+      const task = await createTask(conj.id, { max: 500 });
+      await checkoutTask(dev, task);
+      await submitResult(dev, task, { i }, 1, null, {
+        outcome: 'progress',
+        summary: `contribution ${i}`,
+      });
+    }
+    return conj;
+  }
+
+  it('embeds the newest 10 and pages the remainder, newest first, without gaps or repeats', async () => {
+    await seedContributions(23);
+
+    const p: any = await (await req('/conjectures/paged')).json();
+    expect(p.recent_contributions).toHaveLength(10);
+    expect(p.metrics.contributions).toBe(23);
+    expect(p.recent_contributions[0].summary).toBe('contribution 22'); // newest first
+
+    const seen: string[] = p.recent_contributions.map((r: any) => r.summary);
+    let offset = 10;
+    for (;;) {
+      const page: any = await (
+        await req(`/conjectures/paged/contributions?limit=10&offset=${offset}`)
+      ).json();
+      expect(page.total).toBe(23);
+      seen.push(...page.contributions.map((r: any) => r.summary));
+      if (!page.has_more) break;
+      offset += page.contributions.length;
+    }
+    // Every contribution exactly once, in strict newest-first order.
+    expect(seen).toHaveLength(23);
+    expect(new Set(seen).size).toBe(23);
+    expect(seen).toEqual(Array.from({ length: 23 }, (_, i) => `contribution ${22 - i}`));
+  });
+
+  it('serves a paged row identically to the embedded one', async () => {
+    await seedContributions(11);
+    const p: any = await (await req('/conjectures/paged')).json();
+    const page: any = await (
+      await req('/conjectures/paged/contributions?limit=10&offset=0')
+    ).json();
+    // Same shape and same values — "load more" must not render differently.
+    expect(page.contributions.slice(0, 10)).toEqual(p.recent_contributions);
+  });
+
+  it('clamps junk paging input instead of erroring or dumping the table', async () => {
+    await seedContributions(3);
+    const bad: any = await (
+      await req('/conjectures/paged/contributions?limit=abc&offset=-5')
+    ).json();
+    expect(bad.contributions).toHaveLength(3); // default page, offset floored to 0
+    expect(bad.has_more).toBe(false);
+
+    const huge: any = await (await req('/conjectures/paged/contributions?limit=99999')).json();
+    expect(huge.contributions).toHaveLength(3); // capped, and only 3 exist
+
+    const past: any = await (await req('/conjectures/paged/contributions?offset=999')).json();
+    expect(past.contributions).toEqual([]);
+    expect(past.total).toBe(3);
+    expect(past.has_more).toBe(false);
+  });
+
+  it('404s for an unknown slug, like the progress payload it extends', async () => {
+    const res = await req('/conjectures/no-such-thing/contributions');
+    expect(res.status).toBe(404);
+  });
+
+  it('does not page a non-public target kind', async () => {
+    const create = await createTargetVia({ name: 'Org', slug: 'org-x', kind: 'org_request' });
+    expect(create.status).toBe(200);
+    const res = await req('/conjectures/org-x/contributions');
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('contributor attribution + profile', () => {
   it('attributes contributions to the handle and serves a shareable profile', async () => {
     const create = await createTargetVia({

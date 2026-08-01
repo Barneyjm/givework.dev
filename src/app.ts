@@ -19,6 +19,7 @@ import {
   isDevVerified,
   listAvailableTasks,
   listOpenTasks,
+  listTargetContributions,
   OpError,
   releaseTask,
 } from './operations.js';
@@ -321,6 +322,21 @@ app.get('/conjectures/:slug', (c) => {
     return p;
   })(c);
 });
+
+// Page the contribution feed a conjecture's progress payload only sends the
+// head of. Always JSON — there is no HTML view of a bare page, and the detail
+// page appends these rows under the ten it already rendered. Public, like the
+// progress payload it extends.
+app.get('/conjectures/:slug/contributions', (c) =>
+  handle(async () => {
+    const page = await listTargetContributions(c.req.param('slug'), {
+      limit: c.req.query('limit'),
+      offset: c.req.query('offset'),
+    });
+    if (!page) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return page;
+  })(c),
+);
 
 // Minimal embeddable video player for twitter:player cards — the conjecture's
 // explainer, full-bleed. Only serves when the video exists in R2.
