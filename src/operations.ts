@@ -2444,25 +2444,35 @@ export interface TargetProgress {
   state: unknown; // compacted working set (current frontier, next steps)
   created_at: string;
   metrics: TargetProgressMetrics;
-  recent_contributions: {
-    outcome: string;
-    summary: string;
-    /** Unambiguous state of this contribution — see ContributionStatus. */
-    status: ContributionStatus;
-    verdict: string | null;
-    /** How the verdict was reached (auto_rerun, human_review, …), if verified. */
-    verified_via: string | null;
-    /** The contributor's GitHub handle (public, as on the leaderboard), or null. */
-    contributor: string | null;
-    /**
-     * For a work-unit contribution, the exact code that produced it, pinned by
-     * commit SHA — the provenance that makes a result reproducible and
-     * tamper-evident. Null for LLM/other contributions.
-     */
-    code: { repo: string; sha: string; entrypoint: string } | null;
-    created_at: string;
-  }[];
+  /** The newest page of the feed; page the rest via listTargetContributions. */
+  recent_contributions: TargetContribution[];
 }
+
+/** One row of a conjecture's public contribution feed. */
+export interface TargetContribution {
+  outcome: string;
+  summary: string;
+  /** Unambiguous state of this contribution — see ContributionStatus. */
+  status: ContributionStatus;
+  verdict: string | null;
+  /** How the verdict was reached (auto_rerun, human_review, …), if verified. */
+  verified_via: string | null;
+  /** The contributor's GitHub handle (public, as on the leaderboard), or null. */
+  contributor: string | null;
+  /**
+   * For a work-unit contribution, the exact code that produced it, pinned by
+   * commit SHA — the provenance that makes a result reproducible and
+   * tamper-evident. Null for LLM/other contributions.
+   */
+  code: { repo: string; sha: string; entrypoint: string } | null;
+  created_at: string;
+}
+
+/** How many contributions ride along in the progress payload itself. */
+const PROGRESS_FEED_PAGE = 10;
+/** Paging bounds for GET /conjectures/:slug/contributions. */
+const CONTRIB_PAGE_DEFAULT = 25;
+const CONTRIB_PAGE_MAX = 100;
 
 // Only inherently-public kinds are exposed by slug. org_request work (the future
 // vetted-org path) is never served on the public progress page.
@@ -2518,9 +2528,47 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
         (SELECT max(created_at) FROM contributions WHERE target_id = $1) AS last_activity_at`,
     [t.id],
   );
+  const recent = await contributionPage(t.id, PROGRESS_FEED_PAGE, 0);
+  const mr = m.rows[0];
+  return {
+    slug: t.slug,
+    name: t.name,
+    kind: t.kind,
+    status: t.status,
+    statement_plain: t.statement_plain,
+    statement_formal: t.statement_formal,
+    source_ref: t.source_ref,
+    significance: t.significance,
+    tags: t.tags,
+    state: t.state,
+    created_at: new Date(t.created_at).toISOString(),
+    metrics: {
+      tasks_total: mr.tasks_total,
+      tasks_open: mr.tasks_open,
+      tasks_resolved: mr.tasks_resolved,
+      contributions: mr.contributions,
+      contributors: mr.contributors,
+      compute_cents: mr.compute_cents,
+      last_activity_at: mr.last_activity_at ? new Date(mr.last_activity_at).toISOString() : null,
+    },
+    recent_contributions: recent,
+  };
+}
+
+/**
+ * One page of a target's contribution feed, newest first. Backs both the first
+ * page embedded in getTargetProgress and GET /conjectures/:slug/contributions,
+ * so the paged rows are byte-identical to the embedded ones — a "load more" can
+ * never render a contribution differently from the ten above it.
+ */
+async function contributionPage(
+  targetId: string,
+  limit: number,
+  offset: number,
+): Promise<TargetContribution[]> {
   // Each contribution carries its latest verification verdict (if any) so the
   // public feed can distinguish a machine-verified solution from a mere claim.
-  const recent = await query<{
+  const { rows } = await query<{
     outcome: string;
     summary: string;
     verdict: string | null;
@@ -2551,45 +2599,171 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
        ) v ON true
       WHERE c.target_id = $1
       ORDER BY c.id DESC
-      LIMIT 10`,
+      LIMIT $2 OFFSET $3`,
+    [targetId, limit, offset],
+  );
+  return rows.map((r) => ({
+    outcome: r.outcome,
+    summary: r.summary,
+    status: contributionStatus(r.outcome, r.verdict),
+    verdict: r.verdict,
+    verified_via: r.verified_via,
+    contributor: r.contributor,
+    code:
+      r.code_repo && r.code_sha && r.code_entrypoint
+        ? { repo: r.code_repo, sha: r.code_sha, entrypoint: r.code_entrypoint }
+        : null,
+    created_at: new Date(r.created_at).toISOString(),
+  }));
+}
+
+/**
+ * A page of the public contribution feed for one conjecture, by slug. Same
+ * ordering (newest first) and same row shape as the feed embedded in
+ * getTargetProgress, so the page can append without re-fetching what it has.
+ * `total` is the full count, so a caller knows when to stop asking. Returns
+ * null for an unknown slug or a non-public kind — identical to
+ * getTargetProgress, so an unknown conjecture 404s the same way on both.
+ *
+ * Ordering is by `c.id DESC`, not `created_at DESC`: ids are monotonic, so a
+ * paged walk can't repeat or skip a row when two contributions share a
+ * timestamp — the classic OFFSET-with-ties bug.
+ */
+export async function listTargetContributions(
+  slug: string,
+  // Strings as well as numbers: these come straight off the query string, and
+  // clampInt is what turns `?limit=abc` / `?offset=-5` into something safe.
+  opts: { limit?: number | string; offset?: number | string } = {},
+): Promise<{ contributions: TargetContribution[]; total: number; has_more: boolean } | null> {
+  const limit = clampInt(opts.limit, CONTRIB_PAGE_DEFAULT, 1, CONTRIB_PAGE_MAX);
+  const offset = clampInt(opts.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM targets WHERE slug = $1 AND kind::text = ANY($2::text[])`,
+    [slug, PUBLIC_TARGET_KINDS],
+  );
+  const t = rows[0];
+  if (!t) return null;
+  const { rows: cnt } = await query<{ total: number }>(
+    'SELECT count(*)::int AS total FROM contributions WHERE target_id = $1',
     [t.id],
   );
-  const mr = m.rows[0];
+  const total = cnt[0].total;
+  const contributions = await contributionPage(t.id, limit, offset);
+  return { contributions, total, has_more: offset + contributions.length < total };
+}
+
+/** One task in a conjecture's decomposition forest. */
+export interface TaskTreeNode {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  max_cost_cents: number;
+  created_at: string;
+  /** How many contributions have landed on this task. */
+  contributions: number;
+  /** The task this one was split out of, or null for a root ("impetus") task. */
+  parent_id: string | null;
+  /**
+   * The decomposition proposal that produced this task — the *reason* it
+   * exists. Null on roots. Publication only happens after a peer agent
+   * approves the proposal, so a present `via` implies it was peer-approved.
+   */
+  via: {
+    /** The proposal contribution. Siblings from one split share it, so the UI can caption the split once. */
+    id: string;
+    proposed_by: string | null;
+    proposed_at: string;
+  } | null;
+}
+
+/**
+ * The decomposition forest for one conjecture: every task, plus the edge back
+ * to the task it was split out of. Flat, with `parent_id` — the caller builds
+ * the tree, which keeps the payload shallow and the recursion out of Postgres.
+ *
+ * The edge is deliberately two hops. `tasks.decomposed_from` points at the
+ * *contribution* that proposed the split, and that contribution points at the
+ * parent task, so the lineage carries who proposed the split as well as what
+ * came of it.
+ *
+ * Auto-minted peer-review tasks are excluded: their `decomposed_from` is null,
+ * so they would render as extra roots and read as impetus tasks that nobody
+ * ever proposed. They are process around an edge, not structure in the tree —
+ * `review_excluded` reports how many were dropped so the count is never a
+ * silent truncation.
+ */
+export async function getTargetTaskTree(
+  slug: string,
+): Promise<{ nodes: TaskTreeNode[]; review_excluded: number } | null> {
+  const { rows } = await query<{ id: string }>(
+    `SELECT id FROM targets WHERE slug = $1 AND kind::text = ANY($2::text[])`,
+    [slug, PUBLIC_TARGET_KINDS],
+  );
+  const t = rows[0];
+  if (!t) return null;
+  const { rows: nodes } = await query<{
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+    max_cost_cents: number;
+    created_at: string | Date;
+    contributions: number;
+    parent_id: string | null;
+    proposed_by: string | null;
+    proposed_at: string | Date | null;
+    via_id: string | null;
+    is_review: boolean;
+  }>(
+    `SELECT t.id, t.title, t.kind::text AS kind, t.status::text AS status,
+            t.max_cost_cents, t.created_at,
+            (SELECT count(*)::int FROM contributions c WHERE c.task_id = t.id) AS contributions,
+            p.task_id AS parent_id,
+            d.github_handle AS proposed_by,
+            p.created_at AS proposed_at,
+            p.id::text AS via_id,
+            (t.spec ? 'review_of') AS is_review
+       FROM tasks t
+       LEFT JOIN contributions p ON p.id = t.decomposed_from
+       LEFT JOIN devs d ON d.id = p.dev_id
+      WHERE t.target_id = $1
+      -- title breaks the tie: subtasks from one split are inserted in a single
+      -- transaction and therefore share created_at exactly, so without it the
+      -- sibling order is unspecified and the tree can reshuffle between loads.
+      -- (The proposer's own ordering isn't recoverable — nothing records it.)
+      ORDER BY t.decomposition_depth, t.created_at, t.title`,
+    [t.id],
+  );
+  const kept = nodes.filter((n) => !n.is_review);
   return {
-    slug: t.slug,
-    name: t.name,
-    kind: t.kind,
-    status: t.status,
-    statement_plain: t.statement_plain,
-    statement_formal: t.statement_formal,
-    source_ref: t.source_ref,
-    significance: t.significance,
-    tags: t.tags,
-    state: t.state,
-    created_at: new Date(t.created_at).toISOString(),
-    metrics: {
-      tasks_total: mr.tasks_total,
-      tasks_open: mr.tasks_open,
-      tasks_resolved: mr.tasks_resolved,
-      contributions: mr.contributions,
-      contributors: mr.contributors,
-      compute_cents: mr.compute_cents,
-      last_activity_at: mr.last_activity_at ? new Date(mr.last_activity_at).toISOString() : null,
-    },
-    recent_contributions: recent.rows.map((r) => ({
-      outcome: r.outcome,
-      summary: r.summary,
-      status: contributionStatus(r.outcome, r.verdict),
-      verdict: r.verdict,
-      verified_via: r.verified_via,
-      contributor: r.contributor,
-      code:
-        r.code_repo && r.code_sha && r.code_entrypoint
-          ? { repo: r.code_repo, sha: r.code_sha, entrypoint: r.code_entrypoint }
+    review_excluded: nodes.length - kept.length,
+    nodes: kept.map((n) => ({
+      id: n.id,
+      title: n.title,
+      kind: n.kind,
+      status: n.status,
+      max_cost_cents: Number(n.max_cost_cents),
+      created_at: new Date(n.created_at).toISOString(),
+      contributions: n.contributions,
+      parent_id: n.parent_id,
+      via:
+        n.proposed_at && n.via_id
+          ? {
+              id: n.via_id,
+              proposed_by: n.proposed_by,
+              proposed_at: new Date(n.proposed_at).toISOString(),
+            }
           : null,
-      created_at: new Date(r.created_at).toISOString(),
     })),
   };
+}
+
+/** Coerce a caller-supplied paging number into range; anything unparseable → fallback. */
+function clampInt(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : Number.NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
 // ---------------------------------------------------------------------------

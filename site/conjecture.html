@@ -106,6 +106,42 @@
                     opacity:.85; }
   .feed .src-code:hover { opacity:1; border-color: var(--red); }
   .feed .when { margin-left:auto; font-family:'Space Mono',monospace; font-size:.75rem; opacity:.6; white-space:nowrap; }
+  /* Decomposition tree. Rows are flat DOM with an indent variable rather than
+     nested <ul>s: depth can grow, and nesting would run the deepest rows off a
+     phone screen. The rail is drawn with a border on the indent spacer. */
+  .tree { list-style:none; margin:.8rem 0 0; padding:0; border-top: var(--line); }
+  .tree li { border-bottom:1px solid #16131033; }
+  .tree .node { display:flex; align-items:baseline; gap:.5rem; padding:.7rem .2rem;
+                padding-left: calc(.2rem + var(--d) * 1.1rem); }
+  .tree .tw { flex:0 0 auto; width:1.1rem; font-family:'Space Mono',monospace;
+              font-size:.8rem; opacity:.5; background:none; border:0; padding:0;
+              color:inherit; cursor:pointer; text-align:left; }
+  .tree .tw[hidden] { visibility:hidden; display:inline-block; }
+  .tree .tt { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; font-weight:600;
+              font-size:.95rem; }
+  .tree .tt .kindb { font-family:'Space Mono',monospace; font-size:.62rem;
+              text-transform:uppercase; border:2px solid var(--ink); padding:.05rem .35rem;
+              margin-right:.4rem; font-weight:400; white-space:nowrap; }
+  .tree .st { font-family:'Space Mono',monospace; font-size:.66rem; text-transform:uppercase;
+              padding:.1rem .4rem; border:2px solid var(--ink); white-space:nowrap; }
+  .tree .st--open { background: var(--yellow); }
+  .tree .st--accepted { background:#1e7d46; color:#fff; border-color:#1e7d46; }
+  .tree .st--locked, .tree .st--submitted { background:#fff; }
+  .tree .st--rejected, .tree .st--expired { background: var(--red); color:#fff; }
+  .tree .cap2 { font-family:'Space Mono',monospace; font-size:.72rem; opacity:.55;
+                white-space:nowrap; }
+  /* The edge caption: why this task exists at all. */
+  .tree .via { font-weight:300; font-size:.8rem; opacity:.7; margin:0 0 .5rem 0;
+               padding-left: calc(1.5rem + var(--d) * 1.1rem); }
+  .tree .via a { color:inherit; }
+  .tree-note { font-weight:300; font-size:.85rem; opacity:.7; margin:.7rem 0 0; }
+  .tree-roots { font-family:'Space Mono',monospace; font-size:.72rem; opacity:.6; margin:.6rem 0 0; }
+  .feed-more { display:flex; gap:.7rem; align-items:center; margin:.9rem 0 0; flex-wrap:wrap; }
+  .more-btn { font-family:'Space Mono',monospace; font-size:.72rem; text-transform:uppercase;
+              padding:.4rem .9rem; border: var(--line); background:#fff; cursor:pointer; color:inherit; }
+  .more-btn:hover:not(:disabled) { background: var(--yellow); }
+  .more-btn:disabled { opacity:.55; cursor:default; }
+  .more-count { font-family:'Space Mono',monospace; font-size:.72rem; opacity:.6; }
   .board-msg { font-weight:300; }
 </style>
 </head>
@@ -209,10 +245,168 @@
         esc(JSON.stringify(d.state, null, 1)) + '</div>';
     }
     h += '<div id="cj-tasks"></div>';
+    h += '<div id="cj-tree"></div>';
     h += '<div class="section-head feed-head"><span class="eyebrow">Every attempt, logged</span><h3>Recent contributions.</h3></div>';
     if (d.recent_contributions && d.recent_contributions.length) {
-      h += '<ul class="feed">';
-      d.recent_contributions.forEach(function (r) {
+      h += '<ul class="feed" id="cj-feed">' + d.recent_contributions.map(feedRow).join('') + '</ul>';
+      // "Every attempt, logged" has to be true: the payload carries only the
+      // newest 10, so anything beyond that is paged in on demand rather than
+      // silently dropped. Count from metrics, which is the full total.
+      if (m.contributions > d.recent_contributions.length) {
+        h += '<div class="feed-more">' +
+          '<button class="more-btn" id="cj-more" type="button">Load more</button>' +
+          '<span class="more-count" id="cj-more-count">' +
+          d.recent_contributions.length + ' of ' + m.contributions + '</span></div>';
+      }
+    } else {
+      h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
+    }
+    if (d.source_ref) {
+      // External references open in a new tab so the long URL can't hijack the
+      // page (and can't overflow the layout as raw text).
+      h += /^https?:\/\//.test(d.source_ref)
+        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
+        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
+    }
+    page.innerHTML = h;
+    maybeAddVideo(slug);
+    maybeAddTasks(slug);
+    maybeAddTree(slug);
+    wireMore(slug, m.contributions);
+  }
+
+  /**
+   * "How this decomposed" — the task forest. A hard task gets split into
+   * subtasks by a volunteer's agent and published only after a peer agent
+   * approves the split, so the tree is the record of how a conjecture was
+   * actually broken down, and by whom. Rendered only when there is real
+   * structure to show: a conjecture whose tasks were all seeded directly has
+   * no edges, and a flat list of roots is what the open-pool section above
+   * already is.
+   */
+  function maybeAddTree(slug) {
+    fetch('/conjectures/' + encodeURIComponent(slug) + '/tree',
+          { headers: { accept: 'application/json' }, cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) {
+        var slot = document.getElementById('cj-tree');
+        var nodes = (d && d.nodes) || [];
+        if (!slot || !nodes.length) return;
+        var hasEdges = nodes.some(function (n) { return n.parent_id; });
+        if (!hasEdges) return; // nothing decomposed yet — no tree to explore
+
+        var byId = {}, kids = {};
+        nodes.forEach(function (n) { byId[n.id] = n; (kids[n.parent_id || ''] = kids[n.parent_id || ''] || []).push(n); });
+        // A parent_id pointing at a task we didn't get (a review task, or one on
+        // another target) must not vanish the subtree — treat it as a root.
+        var roots = nodes.filter(function (n) { return !n.parent_id || !byId[n.parent_id]; });
+
+        var rows = [];
+        (function walk(list, depth, parentId) {
+          var lastVia = null;
+          list.forEach(function (n) {
+            // Siblings published by one proposal share one caption: repeating
+            // "split out by @x" on every child of the same split is noise.
+            var viaId = n.via && n.via.id;
+            var showVia = viaId && viaId !== lastVia;
+            lastVia = viaId || null;
+            if (showVia) rows.push(viaCaption(n.via, depth, parentId));
+            rows.push(row(n, depth, (kids[n.id] || []).length));
+            walk(kids[n.id] || [], depth + 1, n.id);
+          });
+        })(roots, 0, null);
+
+        var note = '';
+        if (d.review_excluded) {
+          note = '<p class="tree-note">' + d.review_excluded + ' peer-review task' +
+            (d.review_excluded === 1 ? '' : 's') + ' not shown — they review a split ' +
+            'rather than sitting in the tree.</p>';
+        }
+        slot.innerHTML =
+          '<div class="section-head feed-head"><span class="eyebrow">From impetus to pieces</span>' +
+          '<h3>How this decomposed.</h3></div>' +
+          '<ul class="tree" id="cj-tree-list">' + rows.join('') + '</ul>' +
+          '<p class="tree-roots">' + roots.length + ' impetus task' + (roots.length === 1 ? '' : 's') +
+          ' · ' + nodes.length + ' task' + (nodes.length === 1 ? '' : 's') + ' total</p>' + note;
+        wireTree();
+      })
+      .catch(function () { /* the tree is an extra; never break the page for it */ });
+  }
+
+  /**
+   * The caption on a split: one line per proposal, above the group of siblings
+   * it produced. Publication requires a peer agent to approve the proposal, so
+   * every edge that exists is by definition peer-approved.
+   */
+  function viaCaption(via, depth, parentId) {
+    return '<li class="via-row"' + (parentId ? ' data-parent="' + esc(parentId) + '"' : '') + '>' +
+      '<p class="via" style="--d:' + depth + '">↳ split out by ' +
+      (via.proposed_by
+        ? '<a href="/contributors/' + encodeURIComponent(via.proposed_by) + '">@' + esc(via.proposed_by) + '</a>'
+        : 'a volunteer’s agent') +
+      ', peer-approved ' + when(via.proposed_at) + '</p></li>';
+  }
+
+  function row(n, depth, childCount) {
+    var st = String(n.status || '');
+    return '<li data-id="' + esc(n.id) + '"' + (n.parent_id ? ' data-parent="' + esc(n.parent_id) + '"' : '') + '>' +
+      '<div class="node" style="--d:' + depth + '">' +
+      '<button class="tw" type="button" aria-expanded="true"' + (childCount ? '' : ' hidden') +
+        ' aria-label="Collapse subtasks">▾</button>' +
+      '<span class="tt"><span class="kindb">' + esc(String(n.kind || '').replace(/_/g, ' ')) + '</span>' +
+      esc(n.title) +
+      (n.contributions ? ' <span class="cap2">· ' + n.contributions + ' contribution' +
+        (n.contributions === 1 ? '' : 's') + '</span>' : '') + '</span>' +
+      '<span class="st st--' + esc(st) + '">' + esc(st) + '</span>' +
+      '<span class="cap2">$' + (n.max_cost_cents / 100).toFixed(2) + '</span>' +
+      '</div></li>';
+  }
+
+  /**
+   * Collapse/expand. Visibility is derived from the set of collapsed ids rather
+   * than toggled row-by-row: a row is visible iff no ancestor is collapsed. The
+   * naive version — hide descendants on collapse, show them on expand — loses
+   * the state of any subtree the reader had collapsed separately, re-opening it
+   * when its parent re-opens.
+   */
+  function wireTree() {
+    var list = document.getElementById('cj-tree-list');
+    if (!list) return;
+    var rows = Array.prototype.slice.call(list.children);
+    var parentOf = {};
+    rows.forEach(function (li) {
+      var id = li.getAttribute('data-id');
+      if (id) parentOf[id] = li.getAttribute('data-parent') || null;
+    });
+    var collapsed = {};
+
+    // Walk up from the row's PARENT: a collapsed node stays visible itself and
+    // hides everything beneath it — including the split captions of its
+    // descendants, which carry data-parent for exactly this reason.
+    function hiddenUnder(parentId) {
+      for (var p = parentId; p; p = parentOf[p]) if (collapsed[p]) return true;
+      return false;
+    }
+    function apply() {
+      rows.forEach(function (li) { li.hidden = hiddenUnder(li.getAttribute('data-parent')); });
+    }
+
+    list.addEventListener('click', function (e) {
+      var btn = e.target.closest('.tw');
+      if (!btn) return;
+      var id = btn.closest('li').getAttribute('data-id');
+      var open = btn.getAttribute('aria-expanded') === 'true';
+      if (open) collapsed[id] = 1; else delete collapsed[id];
+      btn.setAttribute('aria-expanded', String(!open));
+      btn.textContent = open ? '▸' : '▾';
+      btn.setAttribute('aria-label', (open ? 'Expand' : 'Collapse') + ' subtasks');
+      apply();
+    });
+  }
+
+  /** One feed row. Shared by the embedded first page and every paged-in row. */
+  function feedRow(r) {
         // The feed is a work ledger, and the badge says only what actually
         // happened. Green "machine-verified" is reserved for a checker-confirmed
         // result; work a human reviewer accepted says just that; a failed check
@@ -253,26 +447,51 @@
             ' title="' + esc(r.code.repo) + ' @ ' + esc(r.code.sha) + '">⌘ ' +
             esc(file) + '@' + esc(r.code.sha.slice(0, 7)) + '</a>';
         }
-        h += '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
-          '<span class="sum">' + who + esc(r.summary || '(no summary)') + code + '</span>' +
-          '<span class="when">' + when(r.created_at) + '</span></li>';
-      });
-      h += '</ul>';
-    } else {
-      h += '<p class="board-msg">No contributions yet — be the first to chip away.</p>';
-    }
-    if (d.source_ref) {
-      // External references open in a new tab so the long URL can't hijack the
-      // page (and can't overflow the layout as raw text).
-      h += /^https?:\/\//.test(d.source_ref)
-        ? '<p class="mono src"><a href="' + esc(d.source_ref) + '" target="_blank" rel="noopener noreferrer">' +
-          esc(d.source_ref.indexOf('wikipedia.org') !== -1 ? 'Read more on Wikipedia ↗' : 'Source ↗') + '</a></p>'
-        : '<p class="mono src">' + esc(d.source_ref) + '</p>';
-    }
+    return '<li><span class="oc ' + esc(cls) + '">' + esc(label) + '</span>' +
+      '<span class="sum">' + who + esc(r.summary || '(no summary)') + code + '</span>' +
+      '<span class="when">' + when(r.created_at) + '</span></li>';
+  }
 
-    page.innerHTML = h;
-    maybeAddVideo(slug);
-    maybeAddTasks(slug);
+  /**
+   * "Load more" pages the rest of the feed from /conjectures/:slug/contributions,
+   * appending under what is already there. Offset is driven by how many rows we
+   * have rendered, so a contribution submitted mid-browse cannot make the walk
+   * skip a row — the server orders by id, which is monotonic.
+   */
+  function wireMore(slug, total) {
+    var btn = document.getElementById('cj-more');
+    if (!btn) return;
+    var feed = document.getElementById('cj-feed');
+    var count = document.getElementById('cj-more-count');
+    var loading = false;
+    btn.addEventListener('click', function () {
+      if (loading) return;
+      loading = true;
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      var offset = feed.children.length;
+      fetch('/conjectures/' + encodeURIComponent(slug) + '/contributions?limit=25&offset=' + offset,
+            { headers: { accept: 'application/json' }, cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (p) {
+          feed.insertAdjacentHTML('beforeend', (p.contributions || []).map(feedRow).join(''));
+          count.textContent = feed.children.length + ' of ' + (p.total || total);
+          if (p.has_more) {
+            btn.disabled = false;
+            btn.textContent = 'Load more';
+          } else {
+            btn.remove(); // nothing left to ask for
+          }
+          loading = false;
+        })
+        .catch(function () {
+          // Never strand the reader on a dead button: say so and let them retry.
+          btn.disabled = false;
+          btn.textContent = 'Retry';
+          count.textContent = 'Couldn’t load more just now.';
+          loading = false;
+        });
+    });
   }
 
   // Show the explainer only if /videos/<slug>.mp4 exists (HEAD probe avoids a

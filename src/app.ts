@@ -15,10 +15,12 @@ import {
   getLeaderboard,
   getPublicTransparency,
   getTargetProgress,
+  getTargetTaskTree,
   heartbeatTask,
   isDevVerified,
   listAvailableTasks,
   listOpenTasks,
+  listTargetContributions,
   OpError,
   releaseTask,
 } from './operations.js';
@@ -321,6 +323,32 @@ app.get('/conjectures/:slug', (c) => {
     return p;
   })(c);
 });
+
+// Page the contribution feed a conjecture's progress payload only sends the
+// head of. Always JSON — there is no HTML view of a bare page, and the detail
+// page appends these rows under the ten it already rendered. Public, like the
+// progress payload it extends.
+// The decomposition forest for one conjecture: which task each task was split
+// out of, and who proposed the split. Flat nodes with parent_id; the page draws
+// the tree. Public, like everything else about a conjecture.
+app.get('/conjectures/:slug/tree', (c) =>
+  handle(async () => {
+    const tree = await getTargetTaskTree(c.req.param('slug'));
+    if (!tree) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return tree;
+  })(c),
+);
+
+app.get('/conjectures/:slug/contributions', (c) =>
+  handle(async () => {
+    const page = await listTargetContributions(c.req.param('slug'), {
+      limit: c.req.query('limit'),
+      offset: c.req.query('offset'),
+    });
+    if (!page) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
+    return page;
+  })(c),
+);
 
 // Minimal embeddable video player for twitter:player cards — the conjecture's
 // explainer, full-bleed. Only serves when the video exists in R2.
