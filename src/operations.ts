@@ -932,6 +932,81 @@ function boundedProposal(proposed: unknown): unknown {
   };
 }
 
+/** Reserved keys in a state_update — routed, never stored in the blob. */
+const STATE_FACTS_KEY = 'facts';
+const STATE_RETRACT_KEY = '$retract';
+
+export interface ParsedStateUpdate {
+  /** The merged working set to store on targets.state. */
+  state: Record<string, unknown>;
+  /** Claims to append to target_facts. */
+  facts: string[];
+  /** Working-set keys the agent explicitly dropped. */
+  retracted: string[];
+}
+
+/**
+ * Merge a state_update into the existing working set instead of replacing it.
+ *
+ * The old behaviour was `UPDATE targets SET state = $2` — last writer wins over
+ * the whole blob. That forced every agent to reconstruct the entire working set
+ * from scratch just to add one key, so any submit could silently destroy what
+ * earlier work had established, and any key an agent did not recognise got
+ * copied forward forever because dropping it looked exactly like vandalism.
+ *
+ * Now:
+ *   - unknown keys are merged per key, so adding one thing cannot drop another;
+ *   - `facts: [...]` is routed to the append-only target_facts table, out of
+ *     reach of both the blob cap and the next writer;
+ *   - `$retract: ["key", ...]` is the ONLY way to remove a working-set key, so
+ *     dropping stale scaffolding is a deliberate, attributable act rather than
+ *     a side effect of omission. This is what lets an agent clean up after a
+ *     dead end without an admin editing the field by hand.
+ *
+ * A non-object update (scalar, array, null) replaces wholesale, as before —
+ * targets seeded with a bare cursor keep working untouched.
+ */
+export function mergeStateUpdate(existing: unknown, update: unknown): ParsedStateUpdate {
+  const isPlain = (v: unknown): v is Record<string, unknown> =>
+    !!v && typeof v === 'object' && !Array.isArray(v);
+  if (!isPlain(update)) {
+    return { state: update as Record<string, unknown>, facts: [], retracted: [] };
+  }
+
+  // Facts may be given as plain strings or as {claim} objects — an agent
+  // writing structured output shouldn't have to guess which we take.
+  const rawFacts = update[STATE_FACTS_KEY];
+  const facts: string[] = [];
+  if (Array.isArray(rawFacts)) {
+    for (const f of rawFacts) {
+      const claim = typeof f === 'string' ? f : isPlain(f) ? String(f.claim ?? '') : '';
+      const trimmed = claim.trim();
+      if (trimmed) facts.push(trimmed);
+    }
+  }
+
+  const rawRetract = update[STATE_RETRACT_KEY];
+  const retracted = Array.isArray(rawRetract)
+    ? rawRetract.filter((k): k is string => typeof k === 'string' && k.length > 0)
+    : [];
+
+  // A truncation marker is a tombstone the platform wrote, not a working set an
+  // agent built, so the next real update REPLACES it rather than merging into
+  // it. Merging would pin `truncated`/`note`/`tail` in place permanently — a
+  // fresh species of exactly the sticky debris this function exists to end.
+  const isTombstone = isPlain(existing) && existing.truncated === true && 'tail' in existing;
+  const base = isPlain(existing) && !isTombstone ? { ...existing } : {};
+  for (const [k, v] of Object.entries(update)) {
+    if (k === STATE_FACTS_KEY || k === STATE_RETRACT_KEY) continue;
+    base[k] = v;
+  }
+  for (const k of retracted) delete base[k];
+  // Never let a retired reserved key survive in the stored blob.
+  delete base[STATE_FACTS_KEY];
+  delete base[STATE_RETRACT_KEY];
+  return { state: base, facts, retracted };
+}
+
 /**
  * Bound a state_update to MAX_STATE_BYTES by truncating instead of rejecting.
  * By the time a submit carries an oversized state the volunteer's tokens are
@@ -1426,13 +1501,10 @@ export async function submitResult(
   const summary = typeof opts.summary === 'string' ? opts.summary.slice(0, MAX_SUMMARY_CHARS) : '';
   // An oversized state is truncated, never rejected: by submit time the spend
   // is real, and failing the submit would lose both the work and the booking.
-  let stateUpdate = opts.stateUpdate;
-  let stateTruncated = false;
-  if (stateUpdate !== undefined) {
-    const bounded = boundedStateUpdate(stateUpdate);
-    stateUpdate = bounded.state;
-    stateTruncated = bounded.truncated;
-  }
+  // NOT bounded here any more: the update is merged into the existing working
+  // set inside the transaction (which needs the current row), so the size cap
+  // has to apply to the merged result, not to the fragment on its own.
+  const stateUpdate = opts.stateUpdate;
   // A non-terminal contribution returns the task to the pool, so `result` has
   // nowhere to live on the task row. Preserve it as the contribution's inline
   // artifact (unless the agent already supplied one) rather than dropping the
@@ -1719,11 +1791,33 @@ export async function submitResult(
 
     // 6. Refresh the target's compacted working set, if the agent supplied one
     //    (bounded above — an oversized update was truncated, not rejected).
-    if (stateUpdate !== undefined) {
+    //    Merged per key, not replaced: see mergeStateUpdate. The targets row is
+    //    locked FOR UPDATE first so two submits landing on the same conjecture
+    //    can't read-modify-write over each other — without it, merging would
+    //    reintroduce the very lost-update it exists to prevent.
+    let stateTruncated = false;
+    if (stateUpdate !== undefined && targetId) {
+      const cur = await client.query<{ state: unknown }>(
+        `SELECT state FROM targets WHERE id = $1 FOR UPDATE`,
+        [targetId],
+      );
+      const parsed = mergeStateUpdate(cur.rows[0]?.state, stateUpdate);
+      const bounded = boundedStateUpdate(parsed.state);
+      stateTruncated = bounded.truncated;
       await client.query(`UPDATE targets SET state = $2 WHERE id = $1`, [
         targetId,
-        JSON.stringify(stateUpdate),
+        JSON.stringify(bounded.state),
       ]);
+      // Facts are append-only and deduped by claim, so a replayed submit adds
+      // nothing and two agents establishing the same thing collapse to one row.
+      for (const claim of parsed.facts) {
+        await client.query(
+          `INSERT INTO target_facts (target_id, claim, established_by)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (target_id, md5(claim)) DO NOTHING`,
+          [targetId, claim, contrib.rows[0].id],
+        );
+      }
     }
 
     // 7. Funnel: on THIS connection, under a savepoint — see checkoutTask. The
@@ -2446,6 +2540,43 @@ export interface TargetProgress {
   metrics: TargetProgressMetrics;
   /** The newest page of the feed; page the rest via listTargetContributions. */
   recent_contributions: TargetContribution[];
+  /**
+   * What this conjecture has actually established, oldest first. Append-only
+   * and out of `state`, so no later submit can overwrite it.
+   */
+  facts: TargetFact[];
+  /**
+   * What is left to do, DERIVED from the task graph on every read — never
+   * stored, so it cannot go stale. This is what a hand-maintained "NEXT: …"
+   * field in `state` was standing in for.
+   */
+  next_steps: TargetNextSteps;
+}
+
+export interface TargetFact {
+  id: number;
+  claim: string;
+  /** The contribution that established it, or null for an admin-seeded fact. */
+  established_by: number | null;
+  created_at: string;
+  /** Superseded rather than deleted; retracted facts stay on the record. */
+  retracted_at: string | null;
+  retracted_reason: string | null;
+}
+
+export interface TargetNextSteps {
+  /** Open tasks a volunteer could claim right now. */
+  claimable: { id: string; title: string; kind: string; max_cost_cents: number }[];
+  /** Submitted, waiting on verification or review — work in flight, not lost. */
+  awaiting_verification: number;
+  /**
+   * Tasks whose lock expired: claimed, never finished, back in the pool. A
+   * large number here is the signal that something is systematically failing
+   * (the C4 timeout pile), which no prose field would ever have surfaced.
+   */
+  expired: number;
+  /** Nothing claimable and nothing in flight — the target needs decomposition. */
+  stalled: boolean;
 }
 
 /** One row of a conjecture's public contribution feed. */
@@ -2529,6 +2660,7 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
     [t.id],
   );
   const recent = await contributionPage(t.id, PROGRESS_FEED_PAGE, 0);
+  const [facts, nextSteps] = await Promise.all([listTargetFacts(t.id), deriveNextSteps(t.id)]);
   const mr = m.rows[0];
   return {
     slug: t.slug,
@@ -2552,6 +2684,73 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
       last_activity_at: mr.last_activity_at ? new Date(mr.last_activity_at).toISOString() : null,
     },
     recent_contributions: recent,
+    facts,
+    next_steps: nextSteps,
+  };
+}
+
+/** A target's established facts, oldest first — retracted ones included, marked. */
+async function listTargetFacts(targetId: string): Promise<TargetFact[]> {
+  const { rows } = await query<{
+    id: string;
+    claim: string;
+    established_by: string | null;
+    created_at: string | Date;
+    retracted_at: string | Date | null;
+    retracted_reason: string | null;
+  }>(
+    `SELECT id, claim, established_by, created_at, retracted_at, retracted_reason
+       FROM target_facts WHERE target_id = $1 ORDER BY id`,
+    [targetId],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    claim: r.claim,
+    established_by: r.established_by === null ? null : Number(r.established_by),
+    created_at: new Date(r.created_at).toISOString(),
+    retracted_at: r.retracted_at ? new Date(r.retracted_at).toISOString() : null,
+    retracted_reason: r.retracted_reason,
+  }));
+}
+
+/**
+ * What is left to do, computed from the task graph rather than stored.
+ *
+ * The whole reason a target ever carried a hand-written "NEXT: propose a
+ * decomposition of …" was that nothing derived it. A stored directive is stale
+ * the moment the work it describes lands, and then someone has to go and edit
+ * the field — forever, once per conjecture per turn of work. This cannot go
+ * stale, because there is nothing to keep up to date.
+ */
+async function deriveNextSteps(targetId: string): Promise<TargetNextSteps> {
+  const { rows } = await query<{
+    id: string;
+    title: string;
+    kind: string;
+    max_cost_cents: string;
+    status: string;
+  }>(
+    `SELECT id, title, kind::text AS kind, max_cost_cents, status::text AS status
+       FROM tasks
+      WHERE target_id = $1 AND status IN ('open', 'submitted', 'locked', 'expired')
+      ORDER BY max_cost_cents, created_at`,
+    [targetId],
+  );
+  const claimable = rows
+    .filter((r) => r.status === 'open')
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      kind: r.kind,
+      max_cost_cents: Number(r.max_cost_cents),
+    }));
+  const awaiting = rows.filter((r) => r.status === 'submitted').length;
+  const inFlight = rows.filter((r) => r.status === 'locked').length;
+  return {
+    claimable,
+    awaiting_verification: awaiting,
+    expired: rows.filter((r) => r.status === 'expired').length,
+    stalled: claimable.length === 0 && awaiting === 0 && inFlight === 0,
   };
 }
 

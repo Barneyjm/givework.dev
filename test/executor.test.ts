@@ -612,9 +612,13 @@ describe('ClaudeCliExecutor — timeout salvage', () => {
     expect(r.summary).toContain('timed out after 4 minute(s)');
     // partial findings preserved for the next agent…
     expect((r.result as any).partial_output).toContain('no counterexample so far');
-    // …and merged BESIDE the existing state, never clobbering it
-    expect((r.state_update as any).frontier).toBe('n < 10^5 done');
+    // …carried in a state_update that names ONLY this run's own key. Merging is
+    // the server's job (mergeStateUpdate), so the existing frontier is safe
+    // without the executor echoing it back — and echoing it back is precisely
+    // how a stale key outlives the attempt that wrote it.
     expect((r.state_update as any).timeout_salvage.partial).toContain('10^6');
+    expect(Object.keys(r.state_update as any)).toEqual(['timeout_salvage']);
+    expect((r.state_update as any).frontier).toBeUndefined();
     // cost metered from the streamed usage, flagged as an estimate
     expect(r.actual_cost_cents).toBe(
       usageToCents('claude-sonnet-4-6', {
