@@ -85,30 +85,14 @@ describe('mergeStateUpdate (pure)', () => {
   });
 
   it('replaces wholesale for a non-object update, as before', () => {
-    expect(mergeStateUpdate({ a: 1 }, 42).state).toBe(42 as never);
-    expect(mergeStateUpdate({ a: 1 }, [1, 2]).state).toEqual([1, 2] as never);
+    expect(mergeStateUpdate({ a: 1 }, 42).state).toBe(42);
+    expect(mergeStateUpdate({ a: 1 }, [1, 2]).state).toEqual([1, 2]);
     expect(mergeStateUpdate({ a: 1 }, null).state).toBeNull();
   });
 
   it('tolerates a non-object existing state', () => {
     expect(mergeStateUpdate(null, { a: 1 }).state).toEqual({ a: 1 });
     expect(mergeStateUpdate('legacy', { a: 1 }).state).toEqual({ a: 1 });
-  });
-
-  it('replaces a truncation tombstone rather than merging into it', () => {
-    // The platform writes {truncated, note, tail} when a state blows the cap.
-    // Merging over it would pin those three keys forever — the same sticky
-    // debris this whole change exists to stop, reintroduced by the fix.
-    const tomb = { truncated: true, note: 'exceeded 65536 bytes', tail: '…' };
-    expect(mergeStateUpdate(tomb, { frontier: 'small and tidy' }).state).toEqual({
-      frontier: 'small and tidy',
-    });
-    // An agent's own `truncated` key (no tail) is ordinary content and merges.
-    expect(mergeStateUpdate({ truncated: true, cursor: 5 }, { a: 1 }).state).toEqual({
-      truncated: true,
-      cursor: 5,
-      a: 1,
-    });
   });
 });
 
@@ -147,11 +131,13 @@ describe('facts survive submits that used to clobber them', () => {
     const dev = await createDev('bloater');
     await setBudget(dev, 100_000);
     await work(conj.id, dev, { facts: ['this must survive'] });
-    // A working set well past MAX_STATE_BYTES (64 KB).
-    await work(conj.id, dev, { blob: 'x'.repeat(80 * 1024) });
+    // A working set well past MAX_STATE_BYTES (64 KB), alongside a small key.
+    await work(conj.id, dev, { blob: 'x'.repeat(80 * 1024), cursor: 42 });
     const p = (await getTargetProgress('bigstate'))!;
-    // The blob got truncated; the fact did not, because it is not in the blob.
-    expect((p.state as any).truncated).toBe(true);
+    // The oversized key was dropped by name; the small one and the fact both
+    // survive — the fact because it was never in the blob at all.
+    expect((p.state as any)._dropped).toEqual(['blob']);
+    expect((p.state as any).cursor).toBe(42);
     expect(p.facts.map((f) => f.claim)).toEqual(['this must survive']);
   });
 });

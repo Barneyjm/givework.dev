@@ -306,13 +306,6 @@ export function mergeWorkUnitInput(specInput: unknown, targetState: unknown): un
 // contributions rendered "(no summary)" on the public feed because the executed
 // program's JSON carried results but no `summary` string, and the feed needed a
 // manual DB repair. A work unit's submit now always carries a summary.
-/**
- * Back-compat alias. The implementation moved to src/summary.ts so the control
- * plane can share it — operations.ts needs the same fallback for model tasks,
- * and cannot import this file (node:child_process) inside the Worker.
- */
-export const synthesizeWorkUnitSummary = synthesizeSummary;
-
 /** Pull a well-formed work-unit spec out of a task spec, or null. */
 export function extractWorkUnit(spec: unknown): WorkUnitSpec | null {
   const code = (spec as { code?: unknown } | null)?.code as WorkUnitSpec | undefined;
@@ -656,7 +649,7 @@ export class WorkUnitExecutor implements Executor {
         summary:
           typeof interpreted.summary === 'string' && interpreted.summary.trim().length > 0
             ? interpreted.summary
-            : synthesizeWorkUnitSummary(task.title, interpreted.result),
+            : synthesizeSummary(task.title, interpreted.result),
         actual_cost_cents: 0, // CPU donation — no token spend to book
         raw_usage: rawUsage(),
       };

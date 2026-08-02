@@ -224,9 +224,8 @@ describe('contributions / resumable tasks', () => {
     await checkoutTask(dev, task);
 
     // An oversized state_update arrives AFTER the tokens are burned, so
-    // rejecting the submit would lose both the work and the booking. It is
-    // truncated (tail kept — the newest content) with an explicit marker, and
-    // the submit succeeds.
+    // rejecting the submit would lose both the work and the booking. The
+    // oversized KEY is dropped by name and the submit succeeds.
     const sub = await submitResult(dev, task, null, 50, null, {
       outcome: 'progress',
       summary: 'y'.repeat(5000),
@@ -235,12 +234,13 @@ describe('contributions / resumable tasks', () => {
     expect(sub.state_truncated).toBe(true);
     expect(sub.spent_applied).toBe(50); // booked, not rolled back
 
-    // The stored state carries the truncation note and preserves the tail —
-    // where the newest keys land in JSON serialization order.
+    // Whole keys go, largest first, and what remains is still a real working
+    // set: the small readable key survives as a VALUE the next agent can read,
+    // rather than being buried inside a raw byte slice of JSON.
     const { rows: t } = await pool.query(`SELECT state FROM targets WHERE id = $1`, [target]);
-    expect(t[0].state.truncated).toBe(true);
-    expect(t[0].state.note).toContain('exceeded');
-    expect(t[0].state.tail).toContain('the frontier moved to 1e9');
+    expect(t[0].state.newest).toBe('the frontier moved to 1e9');
+    expect(t[0].state._dropped).toEqual(['blob']); // named, never silent
+    expect(t[0].state.blob).toBeUndefined();
     expect(Buffer.byteLength(JSON.stringify(t[0].state))).toBeLessThanOrEqual(64 * 1024);
 
     // A very long summary truncates rather than storing whole (as before).
@@ -256,6 +256,12 @@ describe('contributions / resumable tasks', () => {
     });
     expect(sub2.state_truncated).toBeUndefined();
     const { rows: t2 } = await pool.query(`SELECT state FROM targets WHERE id = $1`, [target]);
-    expect(t2[0].state).toEqual({ frontier: 'small and tidy' });
+    // Merged, so the surviving key from the earlier write is still there — and
+    // `_dropped` is gone, because it describes the value stored now and this
+    // write dropped nothing.
+    expect(t2[0].state).toEqual({
+      newest: 'the frontier moved to 1e9',
+      frontier: 'small and tidy',
+    });
   });
 });

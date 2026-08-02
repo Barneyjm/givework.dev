@@ -1627,21 +1627,19 @@ function salvageCrashedRun(
         ? 'Partial output was captured and is attached for the next agent to continue from.'
         : 'No partial output survived the failure; the burned spend is recorded so the donation is not lost.');
 
-  // Merge-don't-clobber, exactly as the timeout salvage does.
-  const prior = task.target_state;
-  const mergeable = prior == null || (typeof prior === 'object' && !Array.isArray(prior));
-  const state_update =
-    salvage && mergeable
-      ? {
-          ...(prior as Record<string, unknown> | null | undefined),
-          crash_salvage: {
-            task_id: task.task_id,
-            reason: info.reason,
-            source,
-            partial: salvage.slice(0, SALVAGE_STATE_CHARS),
-          },
-        }
-      : undefined;
+  // Only our own key, exactly as the timeout salvage does — the server merges
+  // per key, so echoing the prior state back is both unnecessary and the way a
+  // stale key outlives the attempt that wrote it.
+  const state_update = salvage
+    ? {
+        crash_salvage: {
+          task_id: task.task_id,
+          reason: info.reason,
+          source,
+          partial: salvage.slice(0, SALVAGE_STATE_CHARS),
+        },
+      }
+    : undefined;
 
   return {
     result: {
