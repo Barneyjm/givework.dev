@@ -684,7 +684,13 @@ export const RESULT_JSON_SCHEMA = {
     },
     state_update: {
       type: 'object',
-      description: "Replacement for the target's compacted working set",
+      description:
+        "Updates to the target's working set, MERGED per key — send only the keys you " +
+        'changed, never a copy of the whole thing. Two reserved keys: `facts` is an array ' +
+        'of short claims this run established (appended permanently, never overwritten by ' +
+        'a later run — put durable results here, not in ordinary keys), and `$retract` is ' +
+        'an array of key names to delete when scaffolding from an earlier attempt is no ' +
+        'longer true. Omitting a key leaves it untouched; only $retract removes one.',
     },
     artifact_uri: { type: 'string' },
     code_contribution: {
@@ -1466,11 +1472,13 @@ const SALVAGE_ARTIFACT_CHARS = 16_000;
  *    assistant events when any arrived, else a chars/4 token estimate over the
  *    prompt we sent plus whatever text came back (the prompt was certainly
  *    processed, so the floor is 1 cent — "free" would be a lie).
- *  - The STATE is merged, not replaced. state_update overwrites the target's
- *    compacted working set, and a timeout's fragments must never clobber the
- *    accumulated frontier — so the salvage rides in under a `timeout_salvage`
- *    key beside the existing state. If there is no partial text, or the current
- *    state isn't a mergeable object, no state_update is sent at all.
+ *  - The STATE update carries only `timeout_salvage`. Merging is the server's
+ *    job now (mergeStateUpdate), so a timeout's fragments cannot clobber the
+ *    accumulated frontier no matter what else is on the target. This used to
+ *    spread the prior state back over itself to protect it, which worked but
+ *    re-published every key the run never touched — that is how a stale note
+ *    outlives the attempt that wrote it. If there is no partial text, no
+ *    state_update is sent at all.
  *  - Whatever text was captured is preserved in full (bounded) as the
  *    contribution's inline result/artifact, so the next agent can continue
  *    rather than restart. If truly nothing was captured, the contribution still
@@ -1512,21 +1520,20 @@ function salvageTimedOutRun(
         ? 'Partial output was captured and is attached for the next agent to continue from.'
         : 'No partial output could be captured before the kill; a full window produced nothing visible — consider a smaller chunk or a decomposition.');
 
-  // Merge-don't-clobber: only extend a plain-object state, never replace it.
-  const prior = task.target_state;
-  const mergeable = prior == null || (typeof prior === 'object' && !Array.isArray(prior));
-  const state_update =
-    salvage && mergeable
-      ? {
-          ...(prior as Record<string, unknown> | null | undefined),
-          timeout_salvage: {
-            task_id: task.task_id,
-            elapsed_ms: err.elapsedMs,
-            source,
-            partial: salvage.slice(0, SALVAGE_STATE_CHARS),
-          },
-        }
-      : undefined;
+  // Send ONLY our own key. The server merges per key (mergeStateUpdate), so
+  // re-sending the prior state to avoid clobbering it — which is what this used
+  // to do — is both unnecessary and actively harmful: echoing back keys this
+  // agent never looked at is how stale scaffolding got copied forward forever.
+  const state_update = salvage
+    ? {
+        timeout_salvage: {
+          task_id: task.task_id,
+          elapsed_ms: err.elapsedMs,
+          source,
+          partial: salvage.slice(0, SALVAGE_STATE_CHARS),
+        },
+      }
+    : undefined;
 
   return {
     result: {
