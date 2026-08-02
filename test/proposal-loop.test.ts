@@ -139,6 +139,43 @@ describe('a task awaiting decomposition review is not claimable', () => {
   });
 });
 
+describe('next_steps agrees with the checkout gate', () => {
+  it('stops advertising a task the gate would refuse, and says why', async () => {
+    const target = await conjecture('agree');
+    const dev = await proposer();
+    const task = await createTask(target, { max: 200 });
+    const ops = await import('../src/operations.js');
+
+    let ns = (await ops.getTargetProgress('agree'))!.next_steps;
+    expect(ns.claimable.map((c) => c.id)).toContain(task);
+    expect(ns.awaiting_decomposition_review).toBe(0);
+
+    await checkoutTask(dev, task);
+    await submitResult(dev, task, PROPOSAL, 20, null, { outcome: 'decomposition', summary: 's' });
+
+    ns = (await ops.getTargetProgress('agree'))!.next_steps;
+    // The page must not offer work checkout will reject…
+    expect(ns.claimable.map((c) => c.id)).not.toContain(task);
+    // …and the omission is reported, not silent.
+    expect(ns.awaiting_decomposition_review).toBe(1);
+    // The review task IS claimable — that's the actual next step.
+    expect(ns.claimable.length).toBe(1);
+    expect(ns.claimable[0].title).toMatch(/^Review a proposed decomposition/);
+    expect(ns.stalled).toBe(false);
+  });
+
+  it('is not stalled when the only open work is blocked pending review', async () => {
+    const target = await conjecture('notstalled');
+    const dev = await proposer();
+    const task = await createTask(target, { max: 200 });
+    await checkoutTask(dev, task);
+    await submitResult(dev, task, PROPOSAL, 20, null, { outcome: 'decomposition', summary: 's' });
+    const ops = await import('../src/operations.js');
+    const ns = (await ops.getTargetProgress('notstalled'))!.next_steps;
+    expect(ns.stalled).toBe(false); // there is work — reviewing the split
+  });
+});
+
 describe('a contribution never lands on the feed with a blank summary', () => {
   it('synthesizes from the task title and headline scalars when the agent omits one', async () => {
     const target = await conjecture('blank');

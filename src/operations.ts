@@ -2628,6 +2628,12 @@ export interface TargetNextSteps {
   /** Submitted, waiting on verification or review — work in flight, not lost. */
   awaiting_verification: number;
   /**
+   * Open tasks NOT offered because their own decomposition proposal is out for
+   * peer review. Counted rather than silently omitted — the next step for these
+   * is reviewing the split, and that review task is claimable in its own right.
+   */
+  awaiting_decomposition_review: number;
+  /**
    * Tasks whose lock expired: claimed, never finished, back in the pool. A
    * large number here is the signal that something is systematically failing
    * (the C4 timeout pile), which no prose field would ever have surfaced.
@@ -2787,15 +2793,21 @@ async function deriveNextSteps(targetId: string): Promise<TargetNextSteps> {
     kind: string;
     max_cost_cents: string;
     status: string;
+    blocked: boolean;
   }>(
-    `SELECT id, title, kind::text AS kind, max_cost_cents, status::text AS status
+    // `blocked` uses the same predicate the checkout gate does. Without it this
+    // listing advertised work that checkout then refused — the conjecture page
+    // was still offering firstproof-c4's "Simulate slim(Δ)" after the gate
+    // started rejecting it. One definition, so the two can't drift again.
+    `SELECT id, title, kind::text AS kind, max_cost_cents, status::text AS status,
+            ${pendingDecompositionSql('tasks')} AS blocked
        FROM tasks
       WHERE target_id = $1 AND status IN ('open', 'submitted', 'locked', 'expired')
       ORDER BY max_cost_cents, created_at`,
     [targetId],
   );
   const claimable = rows
-    .filter((r) => r.status === 'open')
+    .filter((r) => r.status === 'open' && !r.blocked)
     .map((r) => ({
       id: r.id,
       title: r.title,
@@ -2804,11 +2816,16 @@ async function deriveNextSteps(targetId: string): Promise<TargetNextSteps> {
     }));
   const awaiting = rows.filter((r) => r.status === 'submitted').length;
   const inFlight = rows.filter((r) => r.status === 'locked').length;
+  // Reported rather than silently dropped: a task missing from `claimable`
+  // because its split is out for review is a fact about the target, not an
+  // absence. Its review task is itself claimable, so the work is still visible.
+  const blockedOnReview = rows.filter((r) => r.status === 'open' && r.blocked).length;
   return {
     claimable,
     awaiting_verification: awaiting,
+    awaiting_decomposition_review: blockedOnReview,
     expired: rows.filter((r) => r.status === 'expired').length,
-    stalled: claimable.length === 0 && awaiting === 0 && inFlight === 0,
+    stalled: claimable.length === 0 && awaiting === 0 && inFlight === 0 && blockedOnReview === 0,
   };
 }
 
