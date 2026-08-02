@@ -1,6 +1,7 @@
 import { type Client, query, withTransaction } from './db.js';
 import { recordEvent } from './funnel.js';
 import { blockAt, ONBOARDING_CANDIDATES, ONBOARDING_MAX_CENTS } from './goldbach.js';
+import { synthesizeSummary } from './summary.js';
 
 /**
  * Domain error carrying the HTTP status the server layer should surface. Lets
@@ -538,6 +539,36 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
         RESERVE_INSUFFICIENT_BUDGET,
         'insufficient_budget',
         `Available ${available} < required ${task.max_cost_cents}`,
+      );
+    }
+
+    // 2b. Refuse a task whose last decomposition proposal is still unreviewed.
+    //
+    //     A `decomposition` submit returns the parent to the pool — the proposal
+    //     is inert until a peer approves it, and the work still needs doing. But
+    //     nothing stopped the parent being claimed and re-proposed immediately,
+    //     so a task could accumulate proposals indefinitely: firstproof-c4's
+    //     "Simulate slim(Δ)" collected EIGHT, the agent's own summaries counting
+    //     them off as "third pass", "fourth pass", "fifth pass". Each one burns a
+    //     volunteer's credit and mints another review task that costs a second
+    //     volunteer to dispose of, so the waste compounds on both sides.
+    //
+    //     This is the checkout gate because that is where the money is committed
+    //     — refusing at submit would be too late, the run has already happened.
+    //     The block lifts the moment the proposal has been REVIEWED — approved
+    //     (subtasks published, parent superseded) or rejected (the next agent
+    //     gets the reviewer's reasons and can propose a better split).
+    const pending = await client.query<{ blocked: boolean }>(
+      `SELECT ${pendingDecompositionSql('t')} AS blocked FROM tasks t WHERE t.id = $1`,
+      [taskId],
+    );
+    if (pending.rows[0]?.blocked) {
+      throw new OpError(
+        CONFLICT,
+        'decomposition_pending_review',
+        'This task already has a decomposition proposal awaiting peer review. ' +
+          'Review that proposal instead — re-proposing spends credit on a split ' +
+          'nobody has ruled on yet.',
       );
     }
 
@@ -1701,12 +1732,18 @@ export async function submitResult(
             ...(submittedCode ? { code_contribution: boundedProposal(submittedCode) } : {}),
           }
         : artifact;
+    // Never write a blank feed row. An agent that omits `summary` used to land
+    // an empty string on the public feed — 8 of firstproof-c4's contributions
+    // read as blank lines, including real analytical results. Work units have
+    // had a synthesized fallback since v0.3.9; model tasks never did. The
+    // synthesized line is the task title plus a few headline scalars, which is
+    // always more use to a reader than nothing.
     const bookedSummary = salvage
       ? `Proposed a decomposition that failed validation: ${salvage.errors.join('; ')}`.slice(
           0,
           MAX_SUMMARY_CHARS,
         )
-      : summary;
+      : summary || synthesizeSummary(upd.rows[0].title, result ?? artifact);
     const contrib = await client.query<{ id: number }>(
       `INSERT INTO contributions
          (task_id, target_id, dev_id, outcome, summary, artifact_uri, artifact, cost_cents, raw_usage)
@@ -2387,12 +2424,33 @@ export async function getDevStats(devId: string): Promise<DevStats> {
   };
 }
 
+/**
+ * SQL predicate: this task has a decomposition proposal still awaiting peer
+ * review. Such a task is not real work for anyone — the next step is reviewing
+ * the proposal, not producing another one — so it is refused at checkout and
+ * hidden from both pool listings. `<T>` is the tasks alias at the call site.
+ */
+function pendingDecompositionSql(alias: string): string {
+  return `EXISTS (
+    SELECT 1 FROM contributions c
+     WHERE c.task_id = ${alias}.id
+       AND c.outcome = 'decomposition'
+       AND EXISTS (
+         SELECT 1 FROM tasks r
+          WHERE r.spec ? 'review_of'
+            AND jsonb_typeof(r.spec->'review_of') = 'number'
+            AND (r.spec->>'review_of')::bigint = c.id
+            AND NOT EXISTS (SELECT 1 FROM contributions rc WHERE rc.task_id = r.id)
+       )
+  )`;
+}
+
 export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRow[]> {
   // A task under a lapsed lock belongs in this listing — reclaim before
   // reading so stranded work is visible to the next poll, not just to the
   // 5-minute cron sweep.
   await reclaimLapsedLocks();
-  const conditions: string[] = [`status = 'open'`];
+  const conditions: string[] = [`status = 'open'`, `NOT ${pendingDecompositionSql('tasks')}`];
   const params: unknown[] = [];
 
   if (filter.maxCostCents !== undefined) {
@@ -3035,6 +3093,7 @@ export async function listAvailableTasks(
        FROM tasks k
        JOIN targets t ON t.id = k.target_id
       WHERE k.status = 'open'
+        AND NOT ${pendingDecompositionSql('k')}
         AND k.sensitivity = 'public'
         -- Onboarding tasks are minted per dev, so they are not "available" to
         -- browse: showing them would advertise work nobody else can claim.
