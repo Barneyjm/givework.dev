@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecTask } from '../src/executor.js';
+import { synthesizeSummary } from '../src/summary.js';
 import {
   CONTAINER_ENGINE_ENV,
   containerEngineStatusLine,
@@ -9,7 +10,6 @@ import {
   LEAN4_IMAGE,
   mergeWorkUnitInput,
   resolveContainerEngine,
-  synthesizeWorkUnitSummary,
   WorkUnitExecutor,
 } from '../src/workunit.js';
 
@@ -381,7 +381,7 @@ describe('work-unit summary synthesis', () => {
       p_slim_gt_delta_n: 1,
       fifth_field: 99, // beyond the 4-field cap — never included
     };
-    expect(synthesizeWorkUnitSummary('slim_sim n=1000 c=2', result)).toBe(
+    expect(synthesizeSummary('slim_sim n=1000 c=2', result)).toBe(
       'slim_sim n=1000 c=2 — giant_fraction: 0.8, slimness_mean: 2.458, delta_n: -21, p_slim_gt_delta_n: 1',
     );
   });
@@ -396,22 +396,20 @@ describe('work-unit summary synthesis', () => {
       status: 'ok',
       count: 7,
     };
-    expect(synthesizeWorkUnitSummary('sweep', result)).toBe('sweep — status: ok, count: 7');
+    expect(synthesizeSummary('sweep', result)).toBe('sweep — status: ok, count: 7');
   });
 
   it('falls back to the bare title when the result has no headline scalars', () => {
-    expect(synthesizeWorkUnitSummary('chunk 3/64', { rows: [[1]], deep: { a: 1 } })).toBe(
-      'chunk 3/64',
-    );
-    expect(synthesizeWorkUnitSummary('chunk 3/64', 'not an object')).toBe('chunk 3/64');
-    expect(synthesizeWorkUnitSummary('chunk 3/64', null)).toBe('chunk 3/64');
+    expect(synthesizeSummary('chunk 3/64', { rows: [[1]], deep: { a: 1 } })).toBe('chunk 3/64');
+    expect(synthesizeSummary('chunk 3/64', 'not an object')).toBe('chunk 3/64');
+    expect(synthesizeSummary('chunk 3/64', null)).toBe('chunk 3/64');
   });
 
   it('truncates cleanly at the cap', () => {
     const result = Object.fromEntries(
       Array.from({ length: 4 }, (_, i) => [`really_long_field_name_number_${i}`, 1e15 + i]),
     );
-    const s = synthesizeWorkUnitSummary(`a long chunk title ${'x'.repeat(120)}`, result);
+    const s = synthesizeSummary(`a long chunk title ${'x'.repeat(120)}`, result);
     expect(s.length).toBeLessThanOrEqual(200);
     expect(s.endsWith('…')).toBe(true);
   });

@@ -480,10 +480,15 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
     // Need the task's cost (budget gate), sensitivity (trust gate) and owner
     // (onboarding gate) up front.
     const taskRes = await client.query<
-      TaskRow & { onboarding_dev_id: string | null; lock_lapsed: boolean }
+      TaskRow & {
+        onboarding_dev_id: string | null;
+        lock_lapsed: boolean;
+        decomposition_pending: boolean;
+      }
     >(
       `SELECT id, max_cost_cents, status, sensitivity, onboarding_dev_id,
-              (status = 'locked' AND lock_expires_at < now()) AS lock_lapsed
+              (status = 'locked' AND lock_expires_at < now()) AS lock_lapsed,
+              ${pendingDecompositionSql('tasks')} AS decomposition_pending
          FROM tasks WHERE id = $1`,
       [taskId],
     );
@@ -558,11 +563,7 @@ async function attemptCheckout(devId: string, taskId: string): Promise<CheckoutR
     //     The block lifts the moment the proposal has been REVIEWED — approved
     //     (subtasks published, parent superseded) or rejected (the next agent
     //     gets the reviewer's reasons and can propose a better split).
-    const pending = await client.query<{ blocked: boolean }>(
-      `SELECT ${pendingDecompositionSql('t')} AS blocked FROM tasks t WHERE t.id = $1`,
-      [taskId],
-    );
-    if (pending.rows[0]?.blocked) {
+    if (task.decomposition_pending) {
       throw new OpError(
         CONFLICT,
         'decomposition_pending_review',
@@ -966,10 +967,21 @@ function boundedProposal(proposed: unknown): unknown {
 /** Reserved keys in a state_update — routed, never stored in the blob. */
 const STATE_FACTS_KEY = 'facts';
 const STATE_RETRACT_KEY = '$retract';
+/**
+ * Platform-written, describing the value stored RIGHT NOW rather than history —
+ * so it is cleared on every merge and re-added by boundedStateUpdate only if
+ * this write actually drops something. Otherwise the first overflow would brand
+ * the working set forever, which is the stickiness this whole change removes.
+ */
+const STATE_DROPPED_KEY = '_dropped';
 
 export interface ParsedStateUpdate {
-  /** The merged working set to store on targets.state. */
-  state: Record<string, unknown>;
+  /**
+   * The merged working set to store on targets.state. `unknown`, not an object
+   * type: a non-object update replaces wholesale, so this really can be a
+   * scalar or an array.
+   */
+  state: unknown;
   /** Claims to append to target_facts. */
   facts: string[];
   /** Working-set keys the agent explicitly dropped. */
@@ -1001,7 +1013,7 @@ export function mergeStateUpdate(existing: unknown, update: unknown): ParsedStat
   const isPlain = (v: unknown): v is Record<string, unknown> =>
     !!v && typeof v === 'object' && !Array.isArray(v);
   if (!isPlain(update)) {
-    return { state: update as Record<string, unknown>, facts: [], retracted: [] };
+    return { state: update, facts: [], retracted: [] };
   }
 
   // Facts may be given as plain strings or as {claim} objects — an agent
@@ -1021,57 +1033,87 @@ export function mergeStateUpdate(existing: unknown, update: unknown): ParsedStat
     ? rawRetract.filter((k): k is string => typeof k === 'string' && k.length > 0)
     : [];
 
-  // A truncation marker is a tombstone the platform wrote, not a working set an
-  // agent built, so the next real update REPLACES it rather than merging into
-  // it. Merging would pin `truncated`/`note`/`tail` in place permanently — a
-  // fresh species of exactly the sticky debris this function exists to end.
-  const isTombstone = isPlain(existing) && existing.truncated === true && 'tail' in existing;
-  const base = isPlain(existing) && !isTombstone ? { ...existing } : {};
+  const base = isPlain(existing) ? { ...existing } : {};
   for (const [k, v] of Object.entries(update)) {
     if (k === STATE_FACTS_KEY || k === STATE_RETRACT_KEY) continue;
     base[k] = v;
   }
   for (const k of retracted) delete base[k];
-  // Never let a retired reserved key survive in the stored blob.
+  // Never let a reserved key survive in the stored blob.
   delete base[STATE_FACTS_KEY];
   delete base[STATE_RETRACT_KEY];
+  delete base[STATE_DROPPED_KEY];
   return { state: base, facts, retracted };
 }
 
 /**
- * Bound a state_update to MAX_STATE_BYTES by truncating instead of rejecting.
- * By the time a submit carries an oversized state the volunteer's tokens are
- * already burned, so failing the whole submit over a size cap would discard
- * real work AND leave the real spend unbooked (the old behaviour). Keep the
- * TAIL of the serialized state — new material (e.g. a salvage merged in beside
- * accumulated state) lands at the end of the object, so the newest content is
- * what survives — under an explicit marker, never silently.
+ * Bound the merged working set to MAX_STATE_BYTES by DROPPING WHOLE KEYS, not
+ * by slicing the serialized bytes.
+ *
+ * Rejecting is not an option: by the time a submit carries an oversized state
+ * the volunteer's tokens are already burned, so failing over a size cap would
+ * discard real work and leave real spend unbooked.
+ *
+ * This used to keep the byte TAIL of the JSON and store it under
+ * {truncated, note, tail}. That produced something no agent could read (a raw
+ * slice is not parseable JSON) and, worse, replaced the working set with an
+ * object of alien keys — which then forced mergeStateUpdate to duck-type the
+ * marker so the next real update wouldn't inherit it. Dropping keys keeps the
+ * stored value a genuine working set at every size, so no special case is
+ * needed anywhere. What was dropped is named in `_dropped`, never silent.
+ *
+ * Byte-preserving mattered when established results lived in this blob. They
+ * live in target_facts now, outside the cap entirely, so what remains here is
+ * scratch — and losing the biggest piece of scratch is the cheapest possible
+ * thing to lose.
  */
 function boundedStateUpdate(proposed: unknown): { state: unknown; truncated: boolean } {
-  let json: string;
+  const fits = (v: unknown) => {
+    try {
+      return Buffer.byteLength(JSON.stringify(v) ?? 'null') <= MAX_STATE_BYTES;
+    } catch {
+      return false;
+    }
+  };
   try {
-    json = JSON.stringify(proposed) ?? 'null';
+    JSON.stringify(proposed);
   } catch {
     return {
-      state: { truncated: true, note: 'state_update was not JSON-serializable' },
+      state: { [STATE_DROPPED_KEY]: ['<state_update was not JSON-serializable>'] },
       truncated: true,
     };
   }
-  if (Buffer.byteLength(json) <= MAX_STATE_BYTES) return { state: proposed, truncated: false };
-  // Slice bytes, not chars, so a multibyte-heavy state can't sneak past the cap;
-  // the wrapper below adds ~200 bytes, so keep comfortable head-room.
-  const buf = Buffer.from(json, 'utf8');
-  const tail = buf.subarray(buf.length - (MAX_STATE_BYTES - 512)).toString('utf8');
-  return {
-    state: {
-      truncated: true,
-      note:
-        `state_update JSON exceeded ${MAX_STATE_BYTES} bytes; the tail (newest content) ` +
-        `was preserved and the rest dropped`,
-      tail,
-    },
-    truncated: true,
-  };
+  if (fits(proposed)) return { state: proposed, truncated: false };
+  // A non-object oversized state has no keys to drop — there is nothing to keep.
+  if (!proposed || typeof proposed !== 'object' || Array.isArray(proposed)) {
+    return { state: { [STATE_DROPPED_KEY]: ['<oversized non-object state>'] }, truncated: true };
+  }
+
+  // Drop the most expensive keys first, so the largest number of small,
+  // readable keys survives.
+  const kept: Record<string, unknown> = { ...(proposed as Record<string, unknown>) };
+  const bySize = Object.keys(kept)
+    .map((k) => {
+      let size: number;
+      try {
+        size = Buffer.byteLength(JSON.stringify(kept[k]) ?? 'null');
+      } catch {
+        size = Number.POSITIVE_INFINITY;
+      }
+      return { k, size };
+    })
+    .sort((a, b) => b.size - a.size);
+  const dropped: string[] = [];
+  for (const { k } of bySize) {
+    if (fits({ ...kept, [STATE_DROPPED_KEY]: [...dropped, k] })) break;
+    delete kept[k];
+    dropped.push(k);
+  }
+  // Everything was too big even alone — keep the marker rather than nothing.
+  if (!fits({ ...kept, [STATE_DROPPED_KEY]: dropped })) {
+    return { state: { [STATE_DROPPED_KEY]: dropped }, truncated: true };
+  }
+  return { state: { ...kept, [STATE_DROPPED_KEY]: dropped }, truncated: true };
 }
 
 /** Per-file cap on code embedded into a review task's prompt. */
@@ -1845,14 +1887,18 @@ export async function submitResult(
         targetId,
         JSON.stringify(bounded.state),
       ]);
-      // Facts are append-only and deduped by claim, so a replayed submit adds
-      // nothing and two agents establishing the same thing collapse to one row.
-      for (const claim of parsed.facts) {
+      // Append-only and deduped by claim, so a replayed submit adds nothing and
+      // two agents establishing the same thing collapse to one row. ONE
+      // statement, not one per claim: this runs while holding FOR UPDATE on the
+      // targets row, and nothing caps how many claims an agent may send — a
+      // per-claim round trip would block every concurrent submit on the
+      // conjecture for as long as the agent cared to make it.
+      if (parsed.facts.length > 0) {
         await client.query(
           `INSERT INTO target_facts (target_id, claim, established_by)
-           VALUES ($1, $2, $3)
+           SELECT $1, c, $3 FROM unnest($2::text[]) AS c
            ON CONFLICT (target_id, md5(claim)) DO NOTHING`,
-          [targetId, claim, contrib.rows[0].id],
+          [targetId, parsed.facts, contrib.rows[0].id],
         );
       }
     }
@@ -2628,6 +2674,12 @@ export interface TargetNextSteps {
   /** Submitted, waiting on verification or review — work in flight, not lost. */
   awaiting_verification: number;
   /**
+   * Open tasks NOT offered because their own decomposition proposal is out for
+   * peer review. Counted rather than silently omitted — the next step for these
+   * is reviewing the split, and that review task is claimable in its own right.
+   */
+  awaiting_decomposition_review: number;
+  /**
    * Tasks whose lock expired: claimed, never finished, back in the pool. A
    * large number here is the signal that something is systematically failing
    * (the C4 timeout pile), which no prose field would ever have surfaced.
@@ -2717,8 +2769,11 @@ export async function getTargetProgress(slug: string): Promise<TargetProgress | 
         (SELECT max(created_at) FROM contributions WHERE target_id = $1) AS last_activity_at`,
     [t.id],
   );
-  const recent = await contributionPage(t.id, PROGRESS_FEED_PAGE, 0);
-  const [facts, nextSteps] = await Promise.all([listTargetFacts(t.id), deriveNextSteps(t.id)]);
+  const [recent, facts, nextSteps] = await Promise.all([
+    contributionPage(t.id, PROGRESS_FEED_PAGE, 0),
+    listTargetFacts(t.id),
+    deriveNextSteps(t.id),
+  ]);
   const mr = m.rows[0];
   return {
     slug: t.slug,
@@ -2787,28 +2842,58 @@ async function deriveNextSteps(targetId: string): Promise<TargetNextSteps> {
     kind: string;
     max_cost_cents: string;
     status: string;
+    blocked: boolean;
+    listable: boolean;
   }>(
-    `SELECT id, title, kind::text AS kind, max_cost_cents, status::text AS status
+    // `blocked` uses the same predicate the checkout gate does. Without it this
+    // listing advertised work that checkout then refused — the conjecture page
+    // was still offering firstproof-c4's "Simulate slim(Δ)" after the gate
+    // started rejecting it. One definition, so the two can't drift again.
+    //
+    // `listable` carries the SAME two exclusions listAvailableTasks applies,
+    // and for the same reason: this rides an UNAUTHENTICATED page, so a
+    // per-dev onboarding task (claimable by nobody else) or a non-public task
+    // on a public conjecture must not be advertised. They stay in the status
+    // counts — they are real work in flight — but never in `claimable`.
+    `SELECT id, title, kind::text AS kind, max_cost_cents, status::text AS status,
+            ${pendingDecompositionSql('tasks')} AS blocked,
+            (onboarding_dev_id IS NULL AND sensitivity = 'public') AS listable
        FROM tasks
       WHERE target_id = $1 AND status IN ('open', 'submitted', 'locked', 'expired')
       ORDER BY max_cost_cents, created_at`,
     [targetId],
   );
-  const claimable = rows
-    .filter((r) => r.status === 'open')
-    .map((r) => ({
-      id: r.id,
-      title: r.title,
-      kind: r.kind,
-      max_cost_cents: Number(r.max_cost_cents),
-    }));
-  const awaiting = rows.filter((r) => r.status === 'submitted').length;
-  const inFlight = rows.filter((r) => r.status === 'locked').length;
+  // One pass rather than five filters over the same rows.
+  const claimable: TargetNextSteps['claimable'] = [];
+  let awaiting = 0;
+  let inFlight = 0;
+  let expired = 0;
+  // Reported rather than silently dropped: a task missing from `claimable`
+  // because its split is out for review is a fact about the target, not an
+  // absence. Its review task is itself claimable, so the work is still visible.
+  let blockedOnReview = 0;
+  for (const r of rows) {
+    if (r.status === 'submitted') awaiting++;
+    else if (r.status === 'locked') inFlight++;
+    else if (r.status === 'expired') expired++;
+    else if (r.status === 'open') {
+      if (r.blocked) blockedOnReview++;
+      else if (r.listable) {
+        claimable.push({
+          id: r.id,
+          title: r.title,
+          kind: r.kind,
+          max_cost_cents: Number(r.max_cost_cents),
+        });
+      }
+    }
+  }
   return {
     claimable,
     awaiting_verification: awaiting,
-    expired: rows.filter((r) => r.status === 'expired').length,
-    stalled: claimable.length === 0 && awaiting === 0 && inFlight === 0,
+    awaiting_decomposition_review: blockedOnReview,
+    expired,
+    stalled: claimable.length === 0 && awaiting === 0 && inFlight === 0 && blockedOnReview === 0,
   };
 }
 
