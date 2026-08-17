@@ -411,9 +411,10 @@ const PRIOR_CONTRIBUTIONS_LIMIT = 5;
  * lock_expires_at has passed is reclaimable by design, but the claim queries
  * guard on status='open', so until expire() runs the task is invisible and its
  * reservation blocks the volunteer's budget. The cron trigger runs expire()
- * every 5 minutes; this makes the pool-facing reads self-healing too, so a
- * lapsed lock never gates on the next cron tick. Best-effort: a failure here
- * must never fail the read/checkout it piggybacks on.
+ * hourly (a low-frequency backstop so Neon's compute can autosuspend when idle
+ * — see wrangler.toml); this lazy path makes the pool-facing reads self-healing
+ * too, so an active pool never waits on the cron tick to reclaim a lapsed lock.
+ * Best-effort: a failure here must never fail the read/checkout it piggybacks on.
  */
 async function reclaimLapsedLocks(): Promise<void> {
   try {
@@ -2494,7 +2495,7 @@ function pendingDecompositionSql(alias: string): string {
 export async function listOpenTasks(filter: OpenTaskFilter = {}): Promise<TaskRow[]> {
   // A task under a lapsed lock belongs in this listing — reclaim before
   // reading so stranded work is visible to the next poll, not just to the
-  // 5-minute cron sweep.
+  // hourly cron sweep.
   await reclaimLapsedLocks();
   const conditions: string[] = [`status = 'open'`, `NOT ${pendingDecompositionSql('tasks')}`];
   const params: unknown[] = [];

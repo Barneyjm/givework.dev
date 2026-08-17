@@ -90,13 +90,24 @@ enabled = true
 
 # The lease-expiry sweep must run on its own: a crashed or stranded runner never
 # calls /release, and without this sweep its task stays invisible to the pool
-# and its reservation blocks the volunteer's budget INDEFINITELY. Every 5
-# minutes the Worker's `scheduled` handler (src/worker.ts) runs expire(), which
-# returns lapsed-locked tasks to the pool and refunds their reservations.
-# Checkout/listing also reclaim lazily (see operations.ts), so the cron is the
-# backstop, not the only line of defense.
+# and its reservation blocks the volunteer's budget INDEFINITELY. The Worker's
+# `scheduled` handler (src/worker.ts) runs expire(), which returns lapsed-locked
+# tasks to the pool and refunds their reservations.
+#
+# Cadence is HOURLY, not every-5-minutes, and that's deliberate: checkout and
+# listing already reclaim lapsed locks lazily on the hot path (see
+# reclaimLapsedLocks in operations.ts), so any active use of the pool self-heals
+# a stranded reservation within one request. The cron only matters when the
+# system is otherwise idle — and a query every 5 minutes is exactly what defeats
+# Neon's autosuspend (default 300s idle), pinning the serverless compute on 24/7
+# and burning through the monthly CU-hour allowance for no work. An hourly tick
+# lets the compute scale to zero between bursts while still capping how long a
+# crashed runner's reservation can linger in a fully idle system at ~1h (the
+# lease itself is 10 min; the delay is only the budget-refund backstop). If you
+# ever need faster idle reclaim, lower this AND raise the Neon autosuspend
+# window so the two don't fight.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["0 * * * *"]
 
 # Outbound transactional email via Cloudflare Email Sending (the domain
 # givework.dev is onboarded there, so SPF/DKIM are aligned). The Worker sends the

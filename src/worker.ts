@@ -30,11 +30,13 @@ export default {
     return app.fetch(req, env as any, ctx as any);
   },
   email: emailHandler,
-  // Cron trigger (wrangler.toml [triggers]): the lease-expiry sweep. A crashed
-  // runner never calls /release; without this, its task is stranded out of the
-  // pool and its reservation blocks the volunteer's budget until someone
-  // remembers to POST /admin/expire. Thin shim by design — all the logic (and
-  // its tests) live in operations.expire().
+  // Cron trigger (wrangler.toml [triggers]): the hourly lease-expiry sweep. A
+  // crashed runner never calls /release; without this, its task is stranded out
+  // of the pool and its reservation blocks the volunteer's budget until someone
+  // remembers to POST /admin/expire. Runs hourly, not every few minutes: the
+  // hot path (checkout/listing) already reclaims lazily, so a frequent tick
+  // would buy nothing but keep Neon's compute from ever autosuspending. Thin
+  // shim by design — all the logic (and its tests) live in operations.expire().
   scheduled: async (_controller: unknown, _env: unknown, _ctx: unknown) => {
     const r = await expire();
     if (r.expired_count > 0) {
