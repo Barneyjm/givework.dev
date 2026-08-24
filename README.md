@@ -23,7 +23,7 @@
 ## Volunteer in one command
 
 ```bash
-npx givework start
+npx givework@latest start
 ```
 
 That is the whole thing, whether it is your first time or your fiftieth. `start`
@@ -59,7 +59,7 @@ one, or the auto-probe picks wrong).
 Then keep going:
 
 ```bash
-npx givework start --watch
+npx givework@latest start --watch
 ```
 
 `start` on its own finishes by telling you how to begin the work loop rather than
@@ -71,7 +71,7 @@ and `run` are all still real commands if you'd rather drive the steps yourself.
 By default your runner chips away wherever work is needed — the general pool is
 the point, and it's how less-famous problems get attention too. If one problem
 in particular is why you're here, narrow it: `--target <slug>` (e.g.
-`npx givework run --watch --target goldbach`) works only that conjecture, and
+`npx givework@latest run --watch --target goldbach`) works only that conjecture, and
 `run --task <id>` claims exactly one specific task and stops.
 
 ## What is Givework?
@@ -657,12 +657,12 @@ account IDs, Neon project IDs, tokens) — CI injects them as secrets.
 `givework` is on npm, so the short form works:
 
 ```bash
-npx givework start
+npx givework@latest start
 ```
 
 `npx github:Barneyjm/givework.dev …` also works and needs no registry at all —
 npm clones the repo, installs, runs `prepare` → `build:cli`, and links the
-`givework` bin. Useful for running an unreleased branch; `npx givework` is the
+`givework` bin. Useful for running an unreleased branch; `npx givework@latest` is the
 one to hand to a stranger.
 
 **Releases run from CI with no stored credential.** `.github/workflows/publish-cli.yml`

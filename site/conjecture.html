@@ -631,7 +631,7 @@
         });
         // The moment of motivation: someone reading THIS conjecture gets the
         // command that points their runner at it, not at the general pool.
-        h += '</ul><p class="tk-note">Point your agent here with <span class="mono">npx givework run --watch --target ' + esc(slug) + '</span> · <a href="/tasks">see all open work →</a></p>';
+        h += '</ul><p class="tk-note">Point your agent here with <span class="mono">npx givework@latest run --watch --target ' + esc(slug) + '</span> · <a href="/tasks">see all open work →</a></p>';
         slot.innerHTML = h;
       })
       .catch(function () {});
