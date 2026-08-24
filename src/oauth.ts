@@ -378,9 +378,9 @@ Internal/sensitive work unlocks once an admin verifies your account.</p>
 signed in, so it's one click), asks what you'll donate this month, then hands you a
 <strong>real task on a live open problem</strong> and runs it. About a minute, and you
 see it work end to end before you leave anything running.</p>
-<pre>npx givework start</pre>
+<pre>npx givework@latest start</pre>
 <p class="note">Same command every time: it does only what's missing, so it's always safe
-to re-run. When you're ready to keep a runner going, <code>npx givework start --watch</code>
+to re-run. When you're ready to keep a runner going, <code>npx givework@latest start --watch</code>
 claims tasks continuously on your own <code>claude -p</code> until you stop it — <code>start</code>
 never begins that loop on its own.</p>
 <p><strong>Prerequisite:</strong> the <code>claude</code> CLI installed and logged in — that

@@ -190,8 +190,10 @@ describe('site: conjecture page claim command', () => {
   it('renders the per-slug command at the moment of motivation', () => {
     const html = readFileSync(new URL('../site/conjecture.html', import.meta.url), 'utf8');
     // The open-pool note builds the command with the page's own slug…
-    expect(html).toContain("npx givework run --watch --target ' + esc(slug)");
+    expect(html).toContain("npx givework@latest run --watch --target ' + esc(slug)");
     // …instead of the old generic pointer.
-    expect(html).not.toContain('Claim one with <span class="mono">npx givework start</span>');
+    expect(html).not.toContain(
+      'Claim one with <span class="mono">npx givework@latest start</span>',
+    );
   });
 });
