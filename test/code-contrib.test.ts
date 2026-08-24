@@ -71,8 +71,10 @@ describe('publishCodeContribution', () => {
 
   it('falls back to the fork flow when direct push is refused', async () => {
     const calls: string[] = [];
+    const argv: string[][] = [];
     const run = async (cmd: string, args: string[]) => {
       calls.push(`${cmd} ${args.slice(0, 2).join(' ')}`);
+      argv.push([cmd, ...args]);
       if (cmd === 'git' && args[0] === 'push' && args.includes('origin'))
         throw new Error('permission denied');
       if (cmd === 'gh' && args[0] === 'api') return 'volunteer-login\n';
@@ -83,5 +85,34 @@ describe('publishCodeContribution', () => {
     expect(pub.branch.startsWith('volunteer-login:contrib/ffff0000-')).toBe(true);
     expect(calls).toContain('gh repo fork');
     expect(pub.pr_url).toBe('https://github.com/o/r/pull/9');
+
+    // gh refuses --remote/--remote-name alongside a repository argument.
+    const fork = argv.find((a) => a[0] === 'gh' && a[1] === 'repo' && a[2] === 'fork');
+    expect(fork).toBeDefined();
+    expect(fork).toContain('o/r');
+    expect(fork?.some((a) => a.startsWith('--remote'))).toBe(false);
+    // The fork remote is wired up with plain git instead.
+    const remote = argv.find((a) => a[0] === 'git' && a[1] === 'remote');
+    expect(remote).toEqual([
+      'git',
+      'remote',
+      'add',
+      'contribfork',
+      'https://github.com/volunteer-login/r.git',
+    ]);
+    expect(argv.some((a) => a[0] === 'git' && a[1] === 'push' && a.includes('contribfork'))).toBe(
+      true,
+    );
+  });
+
+  it('reports both causes when the fork fallback also fails', async () => {
+    const run = async (cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'push') throw new Error('could not read Username');
+      if (cmd === 'gh' && args[0] === 'repo') throw new Error('gh repo exited 1: HTTP 404');
+      return '';
+    };
+    await expect(
+      publishCodeContribution(cc, { taskId: 'ffff0000-x', repo: 'o/r', run }),
+    ).rejects.toThrow(/direct push refused .*could not read Username.*fork fallback failed .*404/s);
   });
 });

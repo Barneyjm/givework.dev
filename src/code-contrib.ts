@@ -112,15 +112,33 @@ export async function publishCodeContribution(
     await run('git', ['commit', '-s', '-m', message], dir);
 
     // Direct push if this volunteer has rights on the contrib repo; fall back
-    // to the fork flow (gh handles creating/reusing the fork) otherwise.
+    // to the fork flow otherwise.
     let head = branch;
     try {
       await run('git', ['push', '-u', 'origin', branch], dir);
-    } catch {
-      await run('gh', ['repo', 'fork', repo, '--remote', '--remote-name', 'contribfork'], dir);
-      await run('git', ['push', '-u', 'contribfork', branch], dir);
-      const login = (await run('gh', ['api', 'user', '--jq', '.login'], dir)).trim();
-      head = `${login}:${branch}`;
+    } catch (pushErr) {
+      try {
+        // `gh repo fork <repo> --remote` is rejected by gh ("the --remote flag
+        // is unsupported when a repository argument is provided"), so fork
+        // without touching remotes and wire the fork up with plain git.
+        await run('gh', ['repo', 'fork', repo, '--clone=false'], dir);
+        const login = (await run('gh', ['api', 'user', '--jq', '.login'], dir)).trim();
+        const name = repo.split('/')[1] ?? repo;
+        await run(
+          'git',
+          ['remote', 'add', 'contribfork', `https://github.com/${login}/${name}.git`],
+          dir,
+        );
+        await run('git', ['push', '-u', 'contribfork', branch], dir);
+        head = `${login}:${branch}`;
+      } catch (forkErr) {
+        // Both causes, or the runner only ever sees the fork error and the
+        // reason the direct push was refused stays invisible.
+        throw new Error(
+          `direct push refused (${(pushErr as Error).message}); ` +
+            `fork fallback failed (${(forkErr as Error).message})`,
+        );
+      }
     }
 
     const body =
