@@ -5,8 +5,16 @@ import { app } from '../src/server.js';
 afterAll(closePool);
 
 describe('GET /health', () => {
-  it('returns 200 + ok when the database is reachable (no auth required)', async () => {
+  // Liveness by default: no DB round-trip, so an uptime monitor cannot hold
+  // Neon's compute awake (and bill for it) just by checking we are up.
+  it('answers without touching the database (no auth required)', async () => {
     const res = await app.fetch(new Request('http://test/health'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'ok', db: 'unchecked' });
+  });
+
+  it('probes the database only when asked for it with ?db=1', async () => {
+    const res = await app.fetch(new Request('http://test/health?db=1'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'ok', db: 'up' });
   });

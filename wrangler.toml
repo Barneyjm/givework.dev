@@ -100,14 +100,22 @@ enabled = true
 # a stranded reservation within one request. The cron only matters when the
 # system is otherwise idle — and a query every 5 minutes is exactly what defeats
 # Neon's autosuspend (default 300s idle), pinning the serverless compute on 24/7
-# and burning through the monthly CU-hour allowance for no work. An hourly tick
-# lets the compute scale to zero between bursts while still capping how long a
-# crashed runner's reservation can linger in a fully idle system at ~1h (the
-# lease itself is 10 min; the delay is only the budget-refund backstop). If you
-# ever need faster idle reclaim, lower this AND raise the Neon autosuspend
-# window so the two don't fight.
+# and burning through the monthly CU-hour allowance for no work.
+#
+# Hourly was the first cut of that reasoning, and it was still 24 wake-ups a day:
+# each tick bills a full autosuspend window (~5 min) whether or not there was
+# anything to reclaim, which is most of a near-idle month's compute spend for
+# work the lazy path had almost always already done.
+#
+# So: DAILY. The lazy path is the real mechanism — a stranded reservation is
+# reclaimed by the next pool read, and the only thing a pool read can be waiting
+# on is a volunteer who wants work, which is exactly when it matters. This tick
+# is the floor under the case where nobody touches the system at all — where a
+# blocked budget also harms nobody until someone shows up. If you ever need
+# faster idle reclaim, raise the cadence AND shorten the Neon autosuspend window
+# so the two don't fight.
 [triggers]
-crons = ["0 * * * *"]
+crons = ["17 4 * * *"]
 
 # Outbound transactional email via Cloudflare Email Sending (the domain
 # givework.dev is onboarded there, so SPF/DKIM are aligned). The Worker sends the
