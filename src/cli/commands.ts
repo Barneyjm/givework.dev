@@ -391,7 +391,12 @@ export async function run(
     process.exit(1);
   }
   const intervalArg = arg(args, '--interval');
-  const intervalSec = intervalArg ? Number(intervalArg) : 15;
+  // 60s, not 15s: an idle poll is a Neon compute wake-up, and four of them a
+  // minute hold the serverless compute awake for the whole watch session. A
+  // volunteer waiting up to a minute longer to pick up a task costs nothing --
+  // the tasks themselves run for minutes. Override with --interval when you are
+  // deliberately racing a specific task into the pool.
+  const intervalSec = intervalArg ? Number(intervalArg) : 60;
   if (!Number.isFinite(intervalSec) || intervalSec <= 0) {
     console.error('--interval must be a positive number of seconds');
     process.exit(1);

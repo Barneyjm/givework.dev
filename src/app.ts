@@ -124,10 +124,28 @@ app.onError((err, c) => {
 });
 
 /** Wrap a handler so OpError -> its HTTP status, anything else -> 500. */
-function handle<T>(fn: () => Promise<T>) {
+/**
+ * Shared-cache policy for public, non-personalized reads. Neon bills compute by
+ * the hour it is awake, and an idle compute suspends — so every uncached page
+ * view is not just a query, it is a wake-up that bills for the whole autosuspend
+ * window. `s-maxage` lets Cloudflare's edge answer site traffic without touching
+ * Postgres at all; `stale-while-revalidate` keeps the edge serving while one
+ * request refreshes behind it. The short browser `max-age` means a contributor
+ * reloading their own numbers still sees them move.
+ *
+ * Only ever put this on responses that are identical for every caller. Anything
+ * behind requireDev/requireAdmin must stay uncached.
+ */
+const PUBLIC_CACHE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=600';
+
+function handle<T>(fn: () => Promise<T>, cacheControl?: string) {
   return async (c: any) => {
     try {
-      return c.json((await fn()) as any);
+      const body = (await fn()) as any;
+      // Successes only: an error response must never be cached at the edge, or
+      // a transient 500 would be served to everyone for the full s-maxage.
+      if (cacheControl) c.header('Cache-Control', cacheControl);
+      return c.json(body);
     } catch (err) {
       if (err instanceof OpError) {
         return c.json({ error: err.code, message: err.message }, err.status as any);
@@ -219,7 +237,13 @@ app.get('/analytics-config.json', (c) => {
 // host root (api.givework.dev/health) and what uptime checks / load balancers
 // hit. Pings the database so a 200 means "control plane can actually serve", not
 // just "the Worker booted". DB unreachable -> 503 with status 'degraded'.
+// Liveness by default, readiness on request. `SELECT 1` looks free, but it wakes
+// Neon's compute and restarts its autosuspend countdown -- an uptime monitor on a
+// 1-minute interval would hold compute awake permanently and cost more than all
+// real traffic combined. So the default answers from the Worker alone, and the DB
+// probe is opt-in via ?db=1 for the times you actually want to assert the DB.
 app.get('/health', async (c) => {
+  if (c.req.query('db') !== '1') return c.json({ status: 'ok', db: 'unchecked' });
   try {
     await query('SELECT 1');
     return c.json({ status: 'ok', db: 'up' });
@@ -232,7 +256,7 @@ app.get('/health', async (c) => {
 // and opt-in: only nonprofits an admin marked `listed` appear, and only their
 // name + counts (no contact info or task content). The marketing site can fetch
 // this to render a "who we work with" section.
-app.get('/transparency', (c) => handle(() => getPublicTransparency())(c));
+app.get('/transparency', (c) => handle(() => getPublicTransparency(), PUBLIC_CACHE)(c));
 
 // Media (conjecture explainer videos) streamed from R2 — stored there, never in
 // the repo. Range requests are honored so browsers can seek within a video. The
@@ -336,7 +360,7 @@ app.get('/conjectures/:slug/tree', (c) =>
     const tree = await getTargetTaskTree(c.req.param('slug'));
     if (!tree) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
     return tree;
-  })(c),
+  }, PUBLIC_CACHE)(c),
 );
 
 app.get('/conjectures/:slug/contributions', (c) =>
@@ -347,7 +371,7 @@ app.get('/conjectures/:slug/contributions', (c) =>
     });
     if (!page) throw new OpError(404, 'target_not_found', 'Unknown conjecture');
     return page;
-  })(c),
+  }, PUBLIC_CACHE)(c),
 );
 
 // Minimal embeddable video player for twitter:player cards — the conjecture's
@@ -378,7 +402,7 @@ app.get('/embed/:slug', async (c) => {
 
 // Public leaderboard — curated conjectures with progress + top contributors by
 // donated compute. Drives the marketing site's "what's being worked on" surface.
-app.get('/leaderboard', (c) => handle(() => getLeaderboard())(c));
+app.get('/leaderboard', (c) => handle(() => getLeaderboard(), PUBLIC_CACHE)(c));
 
 // Public work board — the open tasks anyone can browse before signing up. Scoped
 // in listAvailableTasks to public-sensitivity tasks on public slugged targets, so
@@ -388,12 +412,14 @@ app.get('/tasks/available', (c) => {
   const slug = c.req.query('slug');
   const deliverable = c.req.query('deliverable');
   const limit = c.req.query('limit');
-  return handle(() =>
-    listAvailableTasks({
-      slug: slug ?? undefined,
-      deliverable: deliverable ?? undefined,
-      limit: limit !== undefined ? Number(limit) : undefined,
-    }),
+  return handle(
+    () =>
+      listAvailableTasks({
+        slug: slug ?? undefined,
+        deliverable: deliverable ?? undefined,
+        limit: limit !== undefined ? Number(limit) : undefined,
+      }),
+    PUBLIC_CACHE,
   )(c);
 });
 
